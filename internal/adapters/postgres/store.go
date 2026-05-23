@@ -2785,9 +2785,9 @@ func (s *Store) ClaimDueDeliveries(ctx context.Context, workerID string, limit i
 
 func (s *Store) populateDeliveryItem(ctx context.Context, tx pgx.Tx, item *worker.DeliveryItem) error {
 	var encrypted []byte
-	var payloadID, payloadStatus string
+	var payloadID, payloadRowID, payloadStatus string
 	err := tx.QueryRow(ctx, `
-		SELECT e.url, es.id, es.version, es.encrypted_secret, COALESCE(d.delivery_payload_id,''), COALESCE(p.body,''::bytea), COALESCE(p.storage_status,'')
+		SELECT e.url, es.id, es.version, es.encrypted_secret, COALESCE(d.delivery_payload_id,''), COALESCE(p.id,''), COALESCE(p.body,''::bytea), COALESCE(p.storage_status,'')
 		FROM deliveries d
 		JOIN endpoints e ON e.tenant_id=d.tenant_id AND e.id=d.endpoint_id
 		JOIN endpoint_secrets es ON es.tenant_id=e.tenant_id AND es.endpoint_id=e.id AND es.state='active'
@@ -2796,11 +2796,11 @@ func (s *Store) populateDeliveryItem(ctx context.Context, tx pgx.Tx, item *worke
 		ORDER BY es.version DESC
 		LIMIT 1`,
 		item.TenantID, item.ID,
-	).Scan(&item.EndpointURL, &item.SigningKeyID, &item.SigningKeyVersion, &encrypted, &payloadID, &item.Body, &payloadStatus)
+	).Scan(&item.EndpointURL, &item.SigningKeyID, &item.SigningKeyVersion, &encrypted, &payloadID, &payloadRowID, &item.Body, &payloadStatus)
 	if err != nil {
 		return err
 	}
-	if payloadID != "" && payloadStatus == domain.StorageStatusDeleted {
+	if payloadID != "" && (payloadRowID == "" || payloadStatus == domain.StorageStatusDeleted) {
 		return app.ErrGone
 	}
 	secret, err := s.box.Decrypt(encrypted)

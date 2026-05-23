@@ -87,6 +87,33 @@ func TestIngestInvalidSignatureCapturesEvidenceButDoesNotAccept(t *testing.T) {
 	}
 }
 
+func TestIngestInternalProducerCreatesNormalizedEnvelope(t *testing.T) {
+	store := &fakeStore{source: domain.Source{
+		ID:       "src_internal",
+		TenantID: "ten_123",
+		Provider: "internal",
+		Adapter:  "internal",
+		State:    domain.StateActive,
+	}}
+	svc := NewIngestService(store, fixedClock(time.Unix(1_700_000_000, 0)))
+
+	res, err := svc.Ingest(context.Background(), IngestRequest{
+		TenantID: "ten_123",
+		SourceID: "src_internal",
+		Provider: "internal",
+		RawBody:  []byte(`{"id":"evt_internal","type":"invoice.paid","source_id":"src_internal","data":{"amount":42}}`),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !res.Accepted {
+		t.Fatal("internal producer event should be accepted after durable capture")
+	}
+	if len(store.last.Normalized.Envelope) == 0 || store.last.Normalized.Provider != "internal" {
+		t.Fatalf("expected internal normalized envelope, got %+v", store.last.Normalized)
+	}
+}
+
 func TestIngestStorageFailureDoesNotAccept(t *testing.T) {
 	store := &fakeStore{
 		source: domain.Source{ID: "src_123", TenantID: "ten_123", Provider: "github", Adapter: "github", State: domain.StateActive, VerificationSecret: []byte("secret")},
