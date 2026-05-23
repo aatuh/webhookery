@@ -47,3 +47,31 @@ func TestChainHashDependsOnPreviousHash(t *testing.T) {
 		t.Fatalf("sequence >1 previous hash mismatch: %q", got)
 	}
 }
+
+func TestComputeEntryUsesEventAndPreviousHash(t *testing.T) {
+	event := domain.AuditEvent{
+		ID:         "aud_1",
+		TenantID:   "ten_1",
+		ActorID:    "usr_1",
+		Action:     "audit_export.created",
+		Resource:   "audit_export",
+		ResourceID: "exp_1",
+		Reason:     "evidence",
+		OccurredAt: time.Date(2026, 5, 25, 12, 1, 0, 0, time.UTC),
+	}
+	createdAt := time.Date(2026, 5, 25, 12, 2, 0, 0, time.UTC)
+
+	entry, err := ComputeEntry("ace_1", event, 2, "sha256:previous", domain.AuditChainEntrySourceBackfill, createdAt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if entry.ID != "ace_1" || entry.Sequence != 2 || entry.AuditEventID != event.ID {
+		t.Fatalf("unexpected entry identifiers: %+v", entry)
+	}
+	if entry.EventHash == "" || entry.ChainHash == "" || entry.PreviousChainHash != "sha256:previous" {
+		t.Fatalf("unexpected hashes: %+v", entry)
+	}
+	if entry.Source != domain.AuditChainEntrySourceBackfill || entry.State != domain.AuditChainEntryStateActive {
+		t.Fatalf("unexpected state/source: %+v", entry)
+	}
+}

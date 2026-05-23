@@ -15,6 +15,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"webhookery/internal/app"
+	"webhookery/internal/auditchain"
 	"webhookery/internal/authz"
 	"webhookery/internal/blobstore"
 	"webhookery/internal/domain"
@@ -73,13 +74,18 @@ func NewWithOptions(ctx context.Context, databaseURL string, box SecretBox, opts
 		pool.Close()
 		return nil, err
 	}
-	return &Store{
+	store := &Store{
 		pool:           pool,
 		box:            box,
 		rawStorageMode: opts.RawStorageMode,
 		objectStore:    opts.ObjectStore,
 		objectBucket:   strings.TrimSpace(opts.ObjectBucket),
-	}, nil
+	}
+	if err := store.BackfillAuditChain(ctx); err != nil {
+		pool.Close()
+		return nil, err
+	}
+	return store, nil
 }
 
 func (s *Store) Close() {
@@ -88,6 +94,106 @@ func (s *Store) Close() {
 
 func (s *Store) Health(ctx context.Context) error {
 	return s.pool.Ping(ctx)
+}
+
+func (s *Store) BackfillAuditChain(ctx context.Context) error {
+	var exists bool
+	if err := s.pool.QueryRow(ctx, "SELECT to_regclass('audit_chain_entries') IS NOT NULL").Scan(&exists); err != nil {
+		return err
+	}
+	if !exists {
+		return nil
+	}
+	rows, err := s.pool.Query(ctx, `SELECT DISTINCT tenant_id FROM audit_events ORDER BY tenant_id`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var tenantID string
+		if err := rows.Scan(&tenantID); err != nil {
+			return err
+		}
+		if err := s.backfillTenantAuditChain(ctx, tenantID); err != nil {
+			return err
+		}
+	}
+	return rows.Err()
+}
+
+func (s *Store) backfillTenantAuditChain(ctx context.Context, tenantID string) error {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer rollback(ctx, tx)
+	sequence, previousHash, err := ensureAuditChainHead(ctx, tx, tenantID)
+	if err != nil {
+		return err
+	}
+	rows, err := tx.Query(ctx, `
+		SELECT a.id, a.tenant_id, a.actor_id, a.action, a.resource, a.resource_id, a.reason, a.occurred_at
+		FROM audit_events a
+		WHERE a.tenant_id=$1
+		  AND NOT EXISTS (
+		      SELECT 1 FROM audit_chain_entries c
+		      WHERE c.tenant_id=a.tenant_id AND c.audit_event_id=a.id
+		  )
+		ORDER BY a.occurred_at ASC, a.id ASC`, tenantID)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	now := time.Now().UTC()
+	lastAuditEventID := ""
+	for rows.Next() {
+		var event domain.AuditEvent
+		if err := rows.Scan(&event.ID, &event.TenantID, &event.ActorID, &event.Action, &event.Resource, &event.ResourceID, &event.Reason, &event.OccurredAt); err != nil {
+			return err
+		}
+		sequence++
+		entry, err := auditchain.ComputeEntry(mustID("ace"), event, sequence, previousHash, domain.AuditChainEntrySourceBackfill, now)
+		if err != nil {
+			return err
+		}
+		if err := insertAuditChainEntry(ctx, tx, entry); err != nil {
+			return err
+		}
+		previousHash = entry.ChainHash
+		lastAuditEventID = event.ID
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	if lastAuditEventID != "" {
+		if _, err := tx.Exec(ctx, `UPDATE audit_chain_heads SET sequence=$2, chain_hash=$3, last_audit_event_id=$4, updated_at=now() WHERE tenant_id=$1`, tenantID, sequence, previousHash, lastAuditEventID); err != nil {
+			return err
+		}
+	}
+	return tx.Commit(ctx)
+}
+
+func ensureAuditChainHead(ctx context.Context, tx pgx.Tx, tenantID string) (int64, string, error) {
+	if _, err := tx.Exec(ctx, `INSERT INTO audit_chain_heads(tenant_id, sequence, chain_hash) VALUES($1,0,'') ON CONFLICT (tenant_id) DO NOTHING`, tenantID); err != nil {
+		return 0, "", err
+	}
+	var sequence int64
+	var chainHash string
+	if err := tx.QueryRow(ctx, `SELECT sequence, chain_hash FROM audit_chain_heads WHERE tenant_id=$1 FOR UPDATE`, tenantID).Scan(&sequence, &chainHash); err != nil {
+		return 0, "", err
+	}
+	return sequence, chainHash, nil
+}
+
+func insertAuditChainEntry(ctx context.Context, tx pgx.Tx, entry domain.AuditChainEntry) error {
+	_, err := tx.Exec(ctx, `
+		INSERT INTO audit_chain_entries(id, tenant_id, sequence, audit_event_id, event_hash, previous_chain_hash, chain_hash,
+			canonicalization_version, source, state, created_at)
+		VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+		ON CONFLICT (tenant_id, audit_event_id) DO NOTHING`,
+		entry.ID, entry.TenantID, entry.Sequence, entry.AuditEventID, entry.EventHash, entry.PreviousChainHash, entry.ChainHash,
+		entry.CanonicalizationVersion, entry.Source, entry.State, entry.CreatedAt)
+	return err
 }
 
 func (s *Store) AuthenticateAPIKey(ctx context.Context, keyHash string) (authz.Actor, error) {

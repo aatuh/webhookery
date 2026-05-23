@@ -48,6 +48,27 @@ func ChainHash(previousChainHash, eventHash string) string {
 	return hash(raw)
 }
 
+func ComputeEntry(id string, event domain.AuditEvent, sequence int64, previousChainHash, source string, createdAt time.Time) (domain.AuditChainEntry, error) {
+	eventHash, err := EventHash(event)
+	if err != nil {
+		return domain.AuditChainEntry{}, err
+	}
+	previous := PreviousHashForSequence(sequence, previousChainHash)
+	return domain.AuditChainEntry{
+		ID:                      id,
+		TenantID:                event.TenantID,
+		Sequence:                sequence,
+		AuditEventID:            event.ID,
+		EventHash:               eventHash,
+		PreviousChainHash:       previous,
+		ChainHash:               ChainHash(previous, eventHash),
+		CanonicalizationVersion: CanonicalizationVersion,
+		Source:                  source,
+		State:                   domain.AuditChainEntryStateActive,
+		CreatedAt:               createdAt.UTC(),
+	}, nil
+}
+
 func PreviousHashForSequence(sequence int64, previous string) string {
 	if sequence <= 1 {
 		return ""
