@@ -13,7 +13,11 @@ type Config struct {
 	EnableUI               bool
 	LogLevel               string
 	Environment            string
+	SecretBoxMode          string
 	MasterKeyBase64        string
+	VaultAddr              string
+	VaultToken             string
+	VaultTransitKey        string
 	RawStorageMode         string
 	ObjectStorageEndpoint  string
 	ObjectStorageBucket    string
@@ -32,7 +36,11 @@ func Load() (Config, error) {
 		HTTPAddr:               envDefault("WEBHOOKERY_HTTP_ADDR", ":8080"),
 		LogLevel:               envDefault("WEBHOOKERY_LOG_LEVEL", "info"),
 		Environment:            envDefault("WEBHOOKERY_ENVIRONMENT", "development"),
+		SecretBoxMode:          envDefault("WEBHOOKERY_SECRET_BOX_MODE", "local"),
 		MasterKeyBase64:        os.Getenv("WEBHOOKERY_MASTER_KEY_BASE64"),
+		VaultAddr:              os.Getenv("WEBHOOKERY_VAULT_ADDR"),
+		VaultToken:             os.Getenv("WEBHOOKERY_VAULT_TOKEN"),
+		VaultTransitKey:        os.Getenv("WEBHOOKERY_VAULT_TRANSIT_KEY"),
 		RawStorageMode:         envDefault("WEBHOOKERY_RAW_STORAGE_MODE", "postgres"),
 		ObjectStorageEndpoint:  os.Getenv("WEBHOOKERY_OBJECT_STORAGE_ENDPOINT"),
 		ObjectStorageBucket:    os.Getenv("WEBHOOKERY_OBJECT_STORAGE_BUCKET"),
@@ -55,6 +63,14 @@ func Load() (Config, error) {
 	cfg.ObjectStorageUseSSL = objectSSL
 	if cfg.DatabaseURL == "" {
 		return Config{}, fmt.Errorf("WEBHOOKERY_DATABASE_URL is required")
+	}
+	if cfg.SecretBoxMode != "local" && cfg.SecretBoxMode != "vault-transit" {
+		return Config{}, fmt.Errorf("WEBHOOKERY_SECRET_BOX_MODE must be local or vault-transit")
+	}
+	if cfg.SecretBoxMode == "vault-transit" {
+		if cfg.VaultAddr == "" || cfg.VaultToken == "" || cfg.VaultTransitKey == "" {
+			return Config{}, fmt.Errorf("vault-transit secret box requires WEBHOOKERY_VAULT_ADDR, WEBHOOKERY_VAULT_TOKEN, and WEBHOOKERY_VAULT_TRANSIT_KEY")
+		}
 	}
 	if cfg.RawStorageMode != "postgres" && cfg.RawStorageMode != "s3" {
 		return Config{}, fmt.Errorf("WEBHOOKERY_RAW_STORAGE_MODE must be postgres or s3")

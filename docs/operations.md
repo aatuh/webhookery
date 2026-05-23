@@ -88,9 +88,18 @@ grace-period signing secret. `Webhook-Signature-Key-Id` and
 receiver-side secret version; they are not a substitute for HMAC verification.
 
 Webhook/source secrets and endpoint signing secrets are stored through an
-envelope encryption interface. Example env files contain placeholders only.
-Logs, errors, metrics, and UI surfaces must not print raw API keys, webhook
-secrets, signatures, bearer tokens, or raw payloads by default.
+envelope encryption interface. `WEBHOOKERY_SECRET_BOX_MODE=local` is the
+default and requires `WEBHOOKERY_MASTER_KEY_BASE64` to be a base64-encoded
+32-byte key at runtime. `WEBHOOKERY_SECRET_BOX_MODE=vault-transit` uses a
+Vault Transit-compatible HTTP API configured with `WEBHOOKERY_VAULT_ADDR`,
+`WEBHOOKERY_VAULT_TOKEN`, and `WEBHOOKERY_VAULT_TRANSIT_KEY`; Vault encrypts
+and decrypts secret material while PostgreSQL stores only wrapped
+`vault-transit:` ciphertext. Switching modes does not re-encrypt existing
+rows automatically, so plan a controlled migration if moving live tenants
+between local and Vault-backed envelopes. Example env files contain
+placeholders only. Logs, errors, metrics, and UI surfaces must not print raw
+API keys, webhook secrets, Vault tokens, signatures, bearer tokens, or raw
+payloads by default.
 
 Source verification secrets and endpoint signing secrets are versioned.
 Rotation creates a new active version and moves the prior active version to

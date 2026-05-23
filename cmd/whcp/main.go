@@ -950,7 +950,7 @@ func runSignatures(args []string) error {
 }
 
 func openStore(ctx context.Context, cfg config.Config) (*postgres.Store, error) {
-	box, err := crypto.NewEnvelope(cfg.MasterKeyBase64)
+	box, err := secretBoxFromConfig(cfg)
 	if err != nil {
 		return nil, err
 	}
@@ -971,6 +971,21 @@ func openStore(ctx context.Context, cfg config.Config) (*postgres.Store, error) 
 		opts.ObjectBucket = store.Bucket()
 	}
 	return postgres.NewWithOptions(ctx, cfg.DatabaseURL, box, opts)
+}
+
+func secretBoxFromConfig(cfg config.Config) (postgres.SecretBox, error) {
+	switch cfg.SecretBoxMode {
+	case "", "local":
+		return crypto.NewEnvelope(cfg.MasterKeyBase64)
+	case "vault-transit":
+		return crypto.NewVaultTransitEnvelope(crypto.VaultTransitConfig{
+			Address: cfg.VaultAddr,
+			Token:   cfg.VaultToken,
+			KeyName: cfg.VaultTransitKey,
+		})
+	default:
+		return nil, fmt.Errorf("unsupported secret box mode %q", cfg.SecretBoxMode)
+	}
 }
 
 func runtimeAuth(cfg config.Config, lookup apppkg.APIKeyLookup) apppkg.Authenticator {

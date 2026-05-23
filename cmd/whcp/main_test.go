@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"webhookery/internal/config"
 	"webhookery/internal/evidence"
 )
 
@@ -101,5 +102,20 @@ func TestReadSmallFileRejectsSymlink(t *testing.T) {
 	}
 	if _, err := readSmallFile(link, 64); err == nil {
 		t.Fatal("expected symlink rejection")
+	}
+}
+
+func TestSecretBoxFromConfigAcceptsVaultTransit(t *testing.T) {
+	box, err := secretBoxFromConfig(config.Config{
+		SecretBoxMode:   "vault-transit",
+		VaultAddr:       "https://vault.example",
+		VaultToken:      "vault-token",
+		VaultTransitKey: "webhookery",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if box == nil {
+		t.Fatal("expected vault transit secret box")
 	}
 }

@@ -81,6 +81,15 @@ storage, set `WEBHOOKERY_RAW_STORAGE_MODE=s3` plus the
 `WEBHOOKERY_OBJECT_STORAGE_*` variables. In S3 mode, inbound success requires
 the object write and PostgreSQL metadata commit to both succeed.
 
+Webhook/source secrets, endpoint signing secrets, provider credentials, and
+outbound mTLS private keys use local AES envelope encryption by default via
+`WEBHOOKERY_SECRET_BOX_MODE=local` and `WEBHOOKERY_MASTER_KEY_BASE64`.
+Operators that already run Vault Transit can set
+`WEBHOOKERY_SECRET_BOX_MODE=vault-transit` with `WEBHOOKERY_VAULT_ADDR`,
+`WEBHOOKERY_VAULT_TOKEN`, and `WEBHOOKERY_VAULT_TRANSIT_KEY`; PostgreSQL then
+stores wrapped Vault ciphertext instead of locally encrypted ciphertext for
+new secret writes.
+
 Verified events also get canonical normalized envelope records. Routes and
 subscriptions can reference deterministic JSON Pointer transformations; new
 deliveries snapshot the exact outbound payload bytes and sign those stored
