@@ -66,6 +66,11 @@ const (
 	ProviderAPIEvidenceStorageStatusStored   = "stored"
 	ProviderAPIEvidenceStorageStatusDeleted  = "deleted"
 	ProviderAPIEvidenceStorageStatusMetadata = "metadata_only"
+
+	AuditChainEntryStateActive    = "active"
+	AuditChainEntryStateRetained  = "retained"
+	AuditChainEntrySourceLive     = "live"
+	AuditChainEntrySourceBackfill = "backfill"
 )
 
 type HeaderPair struct {
@@ -460,6 +465,69 @@ type AuditEvent struct {
 	ResourceID string    `json:"resource_id"`
 	Reason     string    `json:"reason,omitempty"`
 	OccurredAt time.Time `json:"occurred_at"`
+}
+
+type AuditChainHead struct {
+	TenantID           string    `json:"tenant_id"`
+	Sequence           int64     `json:"sequence"`
+	ChainHash          string    `json:"chain_hash"`
+	LastAuditEventID   string    `json:"last_audit_event_id,omitempty"`
+	UnchainedEvents    int64     `json:"unchained_events"`
+	LastAnchoredAt     time.Time `json:"last_anchored_at,omitempty"`
+	LastAnchorID       string    `json:"last_anchor_id,omitempty"`
+	LastAnchorSequence int64     `json:"last_anchor_sequence,omitempty"`
+	UpdatedAt          time.Time `json:"updated_at,omitempty"`
+}
+
+type AuditChainEntry struct {
+	ID                      string    `json:"id"`
+	TenantID                string    `json:"tenant_id"`
+	Sequence                int64     `json:"sequence"`
+	AuditEventID            string    `json:"audit_event_id"`
+	EventHash               string    `json:"event_hash"`
+	PreviousChainHash       string    `json:"previous_chain_hash"`
+	ChainHash               string    `json:"chain_hash"`
+	CanonicalizationVersion string    `json:"canonicalization_version"`
+	Source                  string    `json:"source"`
+	State                   string    `json:"state"`
+	AuditEventDeletedAt     time.Time `json:"audit_event_deleted_at,omitempty"`
+	TombstoneReason         string    `json:"tombstone_reason,omitempty"`
+	CreatedAt               time.Time `json:"created_at"`
+}
+
+type AuditChainVerification struct {
+	TenantID        string              `json:"tenant_id"`
+	Valid           bool                `json:"valid"`
+	FromSequence    int64               `json:"from_sequence"`
+	ToSequence      int64               `json:"to_sequence"`
+	CheckedEntries  int                 `json:"checked_entries"`
+	RetainedEntries int                 `json:"retained_entries"`
+	StartChainHash  string              `json:"start_chain_hash,omitempty"`
+	EndChainHash    string              `json:"end_chain_hash,omitempty"`
+	Failures        []AuditChainFailure `json:"failures"`
+	VerifiedAt      time.Time           `json:"verified_at"`
+}
+
+type AuditChainFailure struct {
+	Sequence     int64  `json:"sequence"`
+	AuditEventID string `json:"audit_event_id,omitempty"`
+	Kind         string `json:"kind"`
+	Detail       string `json:"detail,omitempty"`
+}
+
+type AuditChainAnchor struct {
+	ID             string    `json:"id"`
+	TenantID       string    `json:"tenant_id"`
+	FromSequence   int64     `json:"from_sequence"`
+	ToSequence     int64     `json:"to_sequence"`
+	ChainHash      string    `json:"chain_hash"`
+	ManifestSHA256 string    `json:"manifest_sha256"`
+	StorageBackend string    `json:"storage_backend"`
+	ObjectBucket   string    `json:"object_bucket,omitempty"`
+	ObjectKey      string    `json:"object_key,omitempty"`
+	CreatedBy      string    `json:"created_by"`
+	Reason         string    `json:"reason"`
+	CreatedAt      time.Time `json:"created_at"`
 }
 
 type RetentionPolicy struct {
