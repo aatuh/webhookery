@@ -93,6 +93,9 @@ sdk-check: ## Validate committed SDK artifacts are present and aligned
 	@$(GO) test ./pkg/client
 	@test -f sdk/python/webhookery/__init__.py
 	@PYTHONPATH=sdk/python python3 -m unittest discover -s sdk/python/tests
+	@test -f sdk/typescript/src/index.ts
+	@tsc -p sdk/typescript/tsconfig.json
+	@node --test sdk/typescript/test/client.test.mjs
 
 docs-check: ## Run non-mutating documentation-adjacent checks
 	@$(MAKE) openapi-check

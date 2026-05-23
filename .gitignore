@@ -13,3 +13,4 @@ tmp/
 release-evidence/
 backups/
 __pycache__/
+sdk/typescript/.build/
