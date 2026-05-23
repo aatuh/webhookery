@@ -67,6 +67,7 @@ go run ./cmd/whcp ops metrics --api-key "$WEBHOOKERY_API_KEY"
 scripts/backup_postgres.sh backups
 WEBHOOKERY_RESTORE_CONFIRM=restore scripts/restore_postgres.sh backups/webhookery-20260525T000000Z.dump
 helm lint deploy/helm/webhookery
+terraform fmt -check -recursive deploy/terraform
 make release-acceptance
 make collections-check
 ```

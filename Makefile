@@ -59,10 +59,15 @@ deployment-profile-check: ## Check deployment profile evidence and non-claims
 	@test -f deploy/kubernetes/secret.example.yaml
 	@test -f deploy/helm/webhookery/Chart.yaml
 	@test -f deploy/helm/webhookery/values.yaml
+	@test -f deploy/terraform/webhookery-helm/main.tf
+	@test -f deploy/terraform/webhookery-helm/README.md
+	@terraform fmt -check -recursive deploy/terraform
 	@grep -q "runAsNonRoot: true" deploy/kubernetes/api-deployment.yaml
 	@grep -q "runAsNonRoot: true" deploy/helm/webhookery/values.yaml
 	@grep -q "WEBHOOKERY_DATABASE_URL" deploy/kubernetes/secret.example.yaml
 	@grep -q "WEBHOOKERY_DATABASE_URL" deploy/helm/webhookery/values.yaml
+	@grep -q "helm_release" deploy/terraform/webhookery-helm/main.tf
+	@grep -q "not accepted as module variables" deploy/terraform/webhookery-helm/README.md
 	@test -x scripts/release_acceptance.sh
 	@test -x scripts/backup_postgres.sh
 	@test -x scripts/restore_postgres.sh

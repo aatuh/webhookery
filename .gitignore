@@ -14,3 +14,5 @@ release-evidence/
 backups/
 __pycache__/
 sdk/typescript/.build/
+.terraform/
+.terraform.lock.hcl

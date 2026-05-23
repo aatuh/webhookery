@@ -32,6 +32,12 @@ PostgreSQL and optional object storage. By default it references an existing
 Kubernetes Secret for sensitive values; `secret.create=true` is intended for
 operator-supplied values files, not committed secrets.
 
+The Terraform module under `deploy/terraform/webhookery-helm` installs that
+Helm chart into an existing Kubernetes cluster. It intentionally accepts only an
+existing Secret name, not database URLs, master keys, object-store access keys,
+or bootstrap key hashes, because Terraform state is not an appropriate secret
+store.
+
 The project makes no FIPS/NIST/CMVP certification claim.
 
 ## Backup And Restore
