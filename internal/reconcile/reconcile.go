@@ -282,6 +282,13 @@ func (a StripeAdapter) Scan(ctx context.Context, req ScanRequest) (ScanResult, e
 	if err := enforceStripeWindow(req.WindowStart, req.WindowEnd); err != nil {
 		return ScanResult{}, err
 	}
+	if req.ScopeObjectID != "" {
+		object, evidence, err := a.Lookup(ctx, req.Connection, req.ScopeObjectID)
+		if err != nil {
+			return ScanResult{Evidence: evidence}, err
+		}
+		return ScanResult{Objects: []ProviderObject{object}, Evidence: evidence}, nil
+	}
 	values := url.Values{"limit": {"100"}}
 	if !req.WindowStart.IsZero() {
 		values.Set("created[gte]", strconv.FormatInt(req.WindowStart.Unix(), 10))
@@ -291,9 +298,6 @@ func (a StripeAdapter) Scan(ctx context.Context, req ScanRequest) (ScanResult, e
 	}
 	if req.Cursor != "" {
 		values.Set("starting_after", req.Cursor)
-	}
-	if req.ScopeObjectID != "" {
-		values.Set("type", req.ScopeObjectID)
 	}
 	body, evidence, err := a.stripeGET(ctx, req.Connection, "/v1/events", values)
 	if err != nil {
@@ -416,6 +420,13 @@ func (a GitHubAdapter) ValidateConnection(ctx context.Context, conn Connection) 
 func (a GitHubAdapter) Scan(ctx context.Context, req ScanRequest) (ScanResult, error) {
 	if err := requiredConfig(req.Connection.Config, "owner", "repo", "hook_id"); err != nil {
 		return ScanResult{}, err
+	}
+	if req.ScopeObjectID != "" {
+		object, evidence, err := a.Lookup(ctx, req.Connection, req.ScopeObjectID)
+		if err != nil {
+			return ScanResult{Evidence: evidence}, err
+		}
+		return ScanResult{Objects: []ProviderObject{object}, Evidence: evidence}, nil
 	}
 	values := url.Values{"per_page": {"100"}}
 	if req.Cursor != "" {

@@ -58,6 +58,51 @@ func TestStripeRejectsTooOldWindow(t *testing.T) {
 	}
 }
 
+func TestStripeScopeObjectIDRetrievesSingleEvent(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/events/evt_scoped" {
+			t.Fatalf("expected retrieve path, got %s", r.URL.Path)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"id": "evt_scoped", "type": "charge.succeeded", "created": time.Now().Unix()})
+	}))
+	defer server.Close()
+
+	adapter := StripeAdapter{Client: server.Client()}
+	res, err := adapter.Scan(context.Background(), ScanRequest{
+		Connection:    Connection{Credential: "sk_test_secret", Config: map[string]string{"base_url": server.URL, "allow_test_base_url": "true"}},
+		ScopeObjectID: "evt_scoped",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Objects) != 1 || res.Objects[0].ID != "evt_scoped" {
+		t.Fatalf("unexpected scoped result: %+v", res.Objects)
+	}
+}
+
+func TestGitHubScopeObjectIDRetrievesSingleDelivery(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/repos/o/r/hooks/42/deliveries/100" {
+			t.Fatalf("expected delivery detail path, got %s", r.URL.Path)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"id": 100, "guid": "guid-scoped", "event": "push", "status_code": 200,
+			"request": map[string]any{"payload": map[string]any{"zen": "ok"}},
+		})
+	}))
+	defer server.Close()
+
+	conn := Connection{Credential: "ghp_secret", Config: map[string]string{"base_url": server.URL, "allow_test_base_url": "true", "owner": "o", "repo": "r", "hook_id": "42"}}
+	adapter := GitHubAdapter{Client: server.Client()}
+	res, err := adapter.Scan(context.Background(), ScanRequest{Connection: conn, ScopeObjectID: "100"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Objects) != 1 || res.Objects[0].ID != "guid-scoped" || len(res.Objects[0].RawBody) == 0 {
+		t.Fatalf("unexpected scoped result: %+v", res.Objects)
+	}
+}
+
 func TestGitHubScanAndRedeliveryUseRepositoryWebhookAPI(t *testing.T) {
 	var redelivered bool
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
