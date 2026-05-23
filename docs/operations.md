@@ -18,6 +18,14 @@ both the object write and the PostgreSQL metadata transaction to succeed. The
 database still stores the raw payload hash, size, storage backend, bucket, key,
 write status, receipts, events, deliveries, and audit rows.
 
+Kubernetes manifests live under `deploy/kubernetes`. They define separate API,
+worker, scheduler, and migration-job workloads plus a service for the API. The
+profile expects external PostgreSQL and optional external object storage; it
+does not install ingress, TLS certificates, network policies, service monitors,
+or PostgreSQL. Use `deploy/kubernetes/secret.example.yaml` only as a template,
+then create the real `webhookery-secrets` Secret through the cluster's normal
+secret-management workflow.
+
 The project makes no FIPS/NIST/CMVP certification claim.
 
 ## Backup And Restore

@@ -8,6 +8,8 @@ make fast-check
 
 test -f Dockerfile
 test -f docker-compose.yml
+test -f deploy/kubernetes/kustomization.yaml
+grep -q "runAsNonRoot: true" deploy/kubernetes/api-deployment.yaml
 test -f .env.example
 test -f .api.env.example
 test -x scripts/backup_postgres.sh

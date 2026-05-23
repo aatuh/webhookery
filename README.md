@@ -106,6 +106,10 @@ For local MinIO testing:
 docker compose --profile object-storage up --build
 ```
 
+For Kubernetes, start from `deploy/kubernetes/README.md`. The manifests expect
+external PostgreSQL and a separately managed `webhookery-secrets` Secret; they
+do not install ingress, TLS, PostgreSQL, or object storage.
+
 ## Security Promise
 
 Webhookery does not promise exactly-once delivery. Inbound success means the

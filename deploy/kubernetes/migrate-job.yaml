@@ -1,0 +1,36 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: webhookery-migrate
+  namespace: webhookery
+  labels:
+    app.kubernetes.io/name: webhookery
+    app.kubernetes.io/component: migrate
+spec:
+  backoffLimit: 3
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: webhookery
+        app.kubernetes.io/component: migrate
+    spec:
+      restartPolicy: OnFailure
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: migrate
+          image: webhookery:latest
+          imagePullPolicy: IfNotPresent
+          args: ["migrate", "up"]
+          envFrom:
+            - configMapRef:
+                name: webhookery-config
+            - secretRef:
+                name: webhookery-secrets
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
