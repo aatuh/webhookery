@@ -80,6 +80,9 @@ type ControlStore interface {
 	CancelDelivery(ctx context.Context, tenantID, deliveryID, actorID, reason string) (domain.Delivery, error)
 	ListEndpointHealth(ctx context.Context, tenantID string, limit int) ([]domain.EndpointHealth, error)
 	OpsMetrics(ctx context.Context, tenantID string) (domain.OpsMetrics, error)
+	ListWorkers(ctx context.Context, tenantID string, limit int) ([]domain.WorkerStatus, error)
+	GetWorker(ctx context.Context, tenantID, workerID string) (domain.WorkerStatus, error)
+	ListQueues(ctx context.Context, tenantID string) ([]domain.QueueStats, error)
 	ListAuditEvents(ctx context.Context, tenantID string, limit int) ([]domain.AuditEvent, error)
 	GetAuditChainHead(ctx context.Context, tenantID string) (domain.AuditChainHead, error)
 	VerifyAuditChain(ctx context.Context, tenantID string, req AuditChainVerifyRequest) (domain.AuditChainVerification, error)
@@ -1322,6 +1325,30 @@ func (s *ControlService) OpsMetrics(ctx context.Context, actor authz.Actor) (dom
 
 func (s *ControlService) PublicOpsMetrics(ctx context.Context) (domain.OpsMetrics, error) {
 	return s.store.OpsMetrics(ctx, "")
+}
+
+func (s *ControlService) ListWorkers(ctx context.Context, actor authz.Actor, limit int) ([]domain.WorkerStatus, error) {
+	if !authz.Can(actor, "ops:read", actor.TenantID) {
+		return nil, ErrForbidden
+	}
+	return s.store.ListWorkers(ctx, actor.TenantID, normalizeLimit(limit))
+}
+
+func (s *ControlService) GetWorker(ctx context.Context, actor authz.Actor, workerID string) (domain.WorkerStatus, error) {
+	if !authz.Can(actor, "ops:read", actor.TenantID) {
+		return domain.WorkerStatus{}, ErrForbidden
+	}
+	if strings.TrimSpace(workerID) == "" {
+		return domain.WorkerStatus{}, fmt.Errorf("%w: worker_id is required", ErrInvalidInput)
+	}
+	return s.store.GetWorker(ctx, actor.TenantID, workerID)
+}
+
+func (s *ControlService) ListQueues(ctx context.Context, actor authz.Actor) ([]domain.QueueStats, error) {
+	if !authz.Can(actor, "ops:read", actor.TenantID) {
+		return nil, ErrForbidden
+	}
+	return s.store.ListQueues(ctx, actor.TenantID)
 }
 
 func (s *ControlService) DryRunReplay(ctx context.Context, actor authz.Actor, req ReplayRequest) (ReplayDryRun, error) {

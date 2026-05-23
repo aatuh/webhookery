@@ -447,6 +447,25 @@ type EndpointHealth struct {
 	Failures24h   int64     `json:"failures_24h"`
 }
 
+type WorkerStatus struct {
+	WorkerID   string    `json:"worker_id"`
+	State      string    `json:"state"`
+	LastSeenAt time.Time `json:"last_seen_at"`
+	ExpiresAt  time.Time `json:"expires_at"`
+}
+
+type QueueStats struct {
+	Name                string    `json:"name"`
+	TenantID            string    `json:"tenant_id,omitempty"`
+	Pending             int64     `json:"pending"`
+	InProgress          int64     `json:"in_progress"`
+	Completed           int64     `json:"completed"`
+	Terminal            int64     `json:"terminal"`
+	DueNow              int64     `json:"due_now"`
+	OldestPendingAgeSec int64     `json:"oldest_pending_age_seconds"`
+	NextAvailableAt     time.Time `json:"next_available_at,omitempty"`
+}
+
 type DeliveryAttempt struct {
 	ID                    string    `json:"id"`
 	TenantID              string    `json:"tenant_id"`

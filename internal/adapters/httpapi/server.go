@@ -162,6 +162,9 @@ func (s *Server) Routes() http.Handler {
 			r.Patch("/admin/retention-policies/{policy_id}", s.updateRetentionPolicy)
 			r.Get("/endpoint-health", s.listEndpointHealth)
 			r.Get("/ops/metrics", s.opsMetrics)
+			r.Get("/ops/workers", s.listWorkers)
+			r.Get("/ops/workers/{worker_id}", s.getWorker)
+			r.Get("/ops/queues", s.listQueues)
 		})
 	})
 
@@ -1462,6 +1465,33 @@ func (s *Server) opsMetrics(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, item)
+}
+
+func (s *Server) listWorkers(w http.ResponseWriter, r *http.Request) {
+	items, err := s.cfg.Control.ListWorkers(r.Context(), actorFrom(r), queryLimit(r))
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, page(items))
+}
+
+func (s *Server) getWorker(w http.ResponseWriter, r *http.Request) {
+	item, err := s.cfg.Control.GetWorker(r.Context(), actorFrom(r), chi.URLParam(r, "worker_id"))
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, item)
+}
+
+func (s *Server) listQueues(w http.ResponseWriter, r *http.Request) {
+	items, err := s.cfg.Control.ListQueues(r.Context(), actorFrom(r))
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, page(items))
 }
 
 func (s *Server) writeError(w http.ResponseWriter, r *http.Request, err error) {

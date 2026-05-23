@@ -2015,6 +2015,54 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/OpsMetrics"
+  /v1/ops/workers:
+    get:
+      summary: List worker leases
+      description: Lists runtime worker lease metadata only; no tenant payload data is exposed.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: Paginated worker status list.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WorkerStatusPage"
+  /v1/ops/workers/{worker_id}:
+    get:
+      summary: Get worker lease
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: worker_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Worker lease metadata.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WorkerStatus"
+        "404":
+          description: Worker lease not found.
+  /v1/ops/queues:
+    get:
+      summary: List tenant queue stats
+      description: Returns tenant-scoped durable outbox and delivery queue counts.
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Paginated queue statistics.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/QueueStatsPage"
 components:
   securitySchemes:
     bearerAuth:
@@ -3608,6 +3656,68 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/EndpointHealth"
+        next_cursor:
+          type: string
+          nullable: true
+        has_more:
+          type: boolean
+    WorkerStatus:
+      type: object
+      required: [worker_id, state, last_seen_at, expires_at]
+      properties:
+        worker_id:
+          type: string
+        state:
+          type: string
+          enum: [active, expired]
+        last_seen_at:
+          type: string
+          format: date-time
+        expires_at:
+          type: string
+          format: date-time
+    WorkerStatusPage:
+      type: object
+      properties:
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/WorkerStatus"
+        next_cursor:
+          type: string
+          nullable: true
+        has_more:
+          type: boolean
+    QueueStats:
+      type: object
+      required: [name, pending, in_progress, completed, terminal, due_now, oldest_pending_age_seconds]
+      properties:
+        name:
+          type: string
+        tenant_id:
+          type: string
+        pending:
+          type: integer
+        in_progress:
+          type: integer
+        completed:
+          type: integer
+        terminal:
+          type: integer
+        due_now:
+          type: integer
+        oldest_pending_age_seconds:
+          type: integer
+        next_available_at:
+          type: string
+          format: date-time
+    QueueStatsPage:
+      type: object
+      properties:
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/QueueStats"
         next_cursor:
           type: string
           nullable: true

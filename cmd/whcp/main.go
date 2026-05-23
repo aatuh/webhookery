@@ -882,11 +882,12 @@ func runReconciliationJobs(args []string) error {
 
 func runOps(args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: whcp ops <metrics|endpoint-health>")
+		return fmt.Errorf("usage: whcp ops <metrics|endpoint-health|workers|worker|queues>")
 	}
 	fs := flag.NewFlagSet("ops "+args[0], flag.ContinueOnError)
 	baseURL := fs.String("base-url", "http://localhost:8080", "API base URL")
 	apiKey := fs.String("api-key", os.Getenv("WEBHOOKERY_API_KEY"), "API key")
+	workerID := fs.String("worker-id", "", "worker id")
 	if err := fs.Parse(args[1:]); err != nil {
 		return err
 	}
@@ -895,8 +896,17 @@ func runOps(args []string) error {
 		return getJSON(*baseURL, *apiKey, "/v1/ops/metrics")
 	case "endpoint-health":
 		return getJSON(*baseURL, *apiKey, "/v1/endpoint-health")
+	case "workers":
+		return getJSON(*baseURL, *apiKey, "/v1/ops/workers")
+	case "worker":
+		if strings.TrimSpace(*workerID) == "" {
+			return fmt.Errorf("worker-id is required")
+		}
+		return getJSON(*baseURL, *apiKey, "/v1/ops/workers/"+url.PathEscape(*workerID))
+	case "queues":
+		return getJSON(*baseURL, *apiKey, "/v1/ops/queues")
 	default:
-		return fmt.Errorf("usage: whcp ops <metrics|endpoint-health>")
+		return fmt.Errorf("usage: whcp ops <metrics|endpoint-health|workers|worker|queues>")
 	}
 }
 

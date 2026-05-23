@@ -2412,6 +2412,91 @@ func (s *Store) OpsMetrics(ctx context.Context, tenantID string) (domain.OpsMetr
 	return metrics, nil
 }
 
+func (s *Store) ListWorkers(ctx context.Context, tenantID string, limit int) ([]domain.WorkerStatus, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT worker_id,
+		       CASE WHEN expires_at > now() THEN 'active' ELSE 'expired' END AS state,
+		       updated_at,
+		       expires_at
+		FROM worker_leases
+		ORDER BY updated_at DESC
+		LIMIT $1`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []domain.WorkerStatus
+	for rows.Next() {
+		item, err := scanWorkerStatus(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, item)
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) GetWorker(ctx context.Context, tenantID, workerID string) (domain.WorkerStatus, error) {
+	item, err := scanWorkerStatus(s.pool.QueryRow(ctx, `
+		SELECT worker_id,
+		       CASE WHEN expires_at > now() THEN 'active' ELSE 'expired' END AS state,
+		       updated_at,
+		       expires_at
+		FROM worker_leases
+		WHERE worker_id=$1`, workerID))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return domain.WorkerStatus{}, app.ErrNotFound
+	}
+	return item, err
+}
+
+func (s *Store) ListQueues(ctx context.Context, tenantID string) ([]domain.QueueStats, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT kind,
+		       count(*) FILTER (WHERE state='pending')::bigint,
+		       count(*) FILTER (WHERE state='in_progress')::bigint,
+		       count(*) FILTER (WHERE state='completed')::bigint,
+		       0::bigint,
+		       count(*) FILTER (WHERE state='pending' AND available_at <= now())::bigint,
+		       COALESCE(EXTRACT(EPOCH FROM now() - min(available_at) FILTER (WHERE state='pending')),0),
+		       COALESCE(min(available_at) FILTER (WHERE state='pending' AND available_at > now()), 'epoch'::timestamptz)
+		FROM outbox
+		WHERE tenant_id=$1
+		GROUP BY kind
+		ORDER BY kind`, tenantID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []domain.QueueStats{}
+	for rows.Next() {
+		item, err := scanQueueStats(rows, tenantID)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	item, err := scanQueueStats(s.pool.QueryRow(ctx, `
+		SELECT 'deliveries',
+		       count(*) FILTER (WHERE state='scheduled')::bigint,
+		       count(*) FILTER (WHERE state='in_progress')::bigint,
+		       0::bigint,
+		       count(*) FILTER (WHERE state IN ('succeeded','dead_lettered','canceled'))::bigint,
+		       count(*) FILTER (WHERE state='scheduled' AND COALESCE(next_attempt_at, now()) <= now())::bigint,
+		       COALESCE(EXTRACT(EPOCH FROM now() - min(next_attempt_at) FILTER (WHERE state='scheduled')),0),
+		       COALESCE(min(next_attempt_at) FILTER (WHERE state='scheduled' AND next_attempt_at > now()), 'epoch'::timestamptz)
+		FROM deliveries
+		WHERE tenant_id=$1`, tenantID), tenantID)
+	if err != nil {
+		return nil, err
+	}
+	out = append(out, item)
+	return out, nil
+}
+
 func (s *Store) ListAuditEvents(ctx context.Context, tenantID string, limit int) ([]domain.AuditEvent, error) {
 	rows, err := s.pool.Query(ctx, `SELECT id, tenant_id, actor_id, action, resource, resource_id, reason, occurred_at FROM audit_events WHERE tenant_id=$1 ORDER BY occurred_at DESC LIMIT $2`, tenantID, limit)
 	if err != nil {
@@ -5870,6 +5955,21 @@ func scanEventType(row rowScanner) (domain.EventType, error) {
 func scanEventSchema(row rowScanner) (domain.EventSchema, error) {
 	var item domain.EventSchema
 	err := row.Scan(&item.ID, &item.TenantID, &item.EventType, &item.Version, &item.Schema, &item.State, &item.CreatedAt)
+	return item, err
+}
+
+func scanWorkerStatus(row rowScanner) (domain.WorkerStatus, error) {
+	var item domain.WorkerStatus
+	err := row.Scan(&item.WorkerID, &item.State, &item.LastSeenAt, &item.ExpiresAt)
+	return item, err
+}
+
+func scanQueueStats(row rowScanner, tenantID string) (domain.QueueStats, error) {
+	var item domain.QueueStats
+	var oldest float64
+	err := row.Scan(&item.Name, &item.Pending, &item.InProgress, &item.Completed, &item.Terminal, &item.DueNow, &oldest, &item.NextAvailableAt)
+	item.TenantID = tenantID
+	item.OldestPendingAgeSec = int64(oldest)
 	return item, err
 }
 

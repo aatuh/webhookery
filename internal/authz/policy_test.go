@@ -29,6 +29,13 @@ func TestPolicyLimitsOwnerAPIKeysByScope(t *testing.T) {
 	}
 }
 
+func TestPolicyAllowsOperatorOpsReadWithScope(t *testing.T) {
+	actor := Actor{TenantID: "ten_a", Role: RoleOperator, Scopes: []string{"ops:read"}}
+	if !Can(actor, "ops:read", "ten_a") {
+		t.Fatal("operator with ops scope should read operational status")
+	}
+}
+
 func TestPolicyRoleStillRestrictsScopedKeys(t *testing.T) {
 	actor := Actor{TenantID: "ten_a", Role: RoleAuditor, Scopes: []string{"*"}}
 	if !Can(actor, "audit:read", "ten_a") {

@@ -73,7 +73,9 @@ var indexTemplate = template.Must(template.New("index").Parse(`<!doctype html>
       ["audit exports", "/v1/audit-exports"],
       ["retention", "/v1/admin/retention-policies"],
       ["endpoint health", "/v1/endpoint-health"],
-      ["ops", "/v1/ops/metrics"]
+      ["ops", "/v1/ops/metrics"],
+      ["workers", "/v1/ops/workers"],
+      ["queues", "/v1/ops/queues"]
     ];
     let current = resources[0];
     const token = document.querySelector("#token");

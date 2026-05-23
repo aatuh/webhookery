@@ -361,6 +361,19 @@ func TestAuditChainAnchorRequiresSecurityWrite(t *testing.T) {
 	}
 }
 
+func TestOpsWorkersRequireOpsRead(t *testing.T) {
+	server := testServerWithActor(authz.Actor{ID: "usr_1", TenantID: "ten_1", Role: authz.RoleSupport, Scopes: []string{"events:read"}})
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/v1/ops/workers", nil)
+	req.Header.Set("Authorization", "Bearer token")
+
+	server.Routes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("expected 403, got %d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
 type fakeIngestStore struct{}
 
 func (fakeIngestStore) FindSource(context.Context, string, string) (domain.Source, error) {
@@ -572,6 +585,15 @@ func (noopControlStore) ListEndpointHealth(context.Context, string, int) ([]doma
 }
 func (noopControlStore) OpsMetrics(context.Context, string) (domain.OpsMetrics, error) {
 	return domain.OpsMetrics{DeliveriesByState: map[string]int64{}, ReplayJobsByState: map[string]int64{}}, nil
+}
+func (noopControlStore) ListWorkers(context.Context, string, int) ([]domain.WorkerStatus, error) {
+	return nil, nil
+}
+func (noopControlStore) GetWorker(context.Context, string, string) (domain.WorkerStatus, error) {
+	return domain.WorkerStatus{}, nil
+}
+func (noopControlStore) ListQueues(context.Context, string) ([]domain.QueueStats, error) {
+	return nil, nil
 }
 func (noopControlStore) ListAuditEvents(context.Context, string, int) ([]domain.AuditEvent, error) {
 	return nil, nil

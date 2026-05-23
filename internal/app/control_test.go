@@ -899,6 +899,29 @@ func TestControlServiceAuditChainAnchorRequiresSecurityWriteAndReason(t *testing
 	}
 }
 
+func TestControlServiceOpsVisibilityRequiresOpsRead(t *testing.T) {
+	store := &fakeControlStore{}
+	svc := NewControlService(store, ssrf.Validator{Resolver: ssrf.StaticResolver{}})
+	support := authz.Actor{ID: "usr_1", TenantID: "ten_a", Role: authz.RoleSupport, Scopes: []string{"events:read"}}
+	operator := authz.Actor{ID: "usr_2", TenantID: "ten_a", Role: authz.RoleOperator, Scopes: []string{"ops:read"}}
+
+	_, err := svc.ListWorkers(context.Background(), support, 10)
+	if err != ErrForbidden {
+		t.Fatalf("expected forbidden worker list, got %v", err)
+	}
+	_, err = svc.ListQueues(context.Background(), support)
+	if err != ErrForbidden {
+		t.Fatalf("expected forbidden queue list, got %v", err)
+	}
+	_, err = svc.ListQueues(context.Background(), operator)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if store.opsTenantID != "ten_a" {
+		t.Fatalf("expected tenant-scoped queue stats, got %q", store.opsTenantID)
+	}
+}
+
 func testClientCertificatePEM(t *testing.T, commonName string) (string, string) {
 	t.Helper()
 	key, err := rsa.GenerateKey(rand.Reader, 2048)
@@ -960,6 +983,7 @@ type fakeControlStore struct {
 	providerConnectionTenantID string
 	providerConnectionReq      CreateProviderConnectionRequest
 	reconciliationTenantID     string
+	opsTenantID                string
 	replayReq                  ReplayRequest
 	approveReplayTenantID      string
 	approveReplayActorID       string
@@ -1281,6 +1305,16 @@ func (f *fakeControlStore) ListEndpointHealth(context.Context, string, int) ([]d
 }
 func (f *fakeControlStore) OpsMetrics(context.Context, string) (domain.OpsMetrics, error) {
 	return domain.OpsMetrics{}, nil
+}
+func (f *fakeControlStore) ListWorkers(context.Context, string, int) ([]domain.WorkerStatus, error) {
+	return nil, nil
+}
+func (f *fakeControlStore) GetWorker(context.Context, string, string) (domain.WorkerStatus, error) {
+	return domain.WorkerStatus{}, nil
+}
+func (f *fakeControlStore) ListQueues(_ context.Context, tenantID string) ([]domain.QueueStats, error) {
+	f.opsTenantID = tenantID
+	return nil, nil
 }
 func (f *fakeControlStore) ListAuditEvents(context.Context, string, int) ([]domain.AuditEvent, error) {
 	return nil, nil
