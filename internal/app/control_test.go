@@ -256,6 +256,39 @@ func TestControlServiceReplayValidatesConfigModeAndRate(t *testing.T) {
 	}
 }
 
+func TestControlServiceReplayApprovalValidationAndTenantScope(t *testing.T) {
+	store := &fakeControlStore{}
+	svc := NewControlService(store, ssrf.Validator{Resolver: ssrf.StaticResolver{}})
+	actor := authz.Actor{ID: "usr_1", TenantID: "ten_a", Role: authz.RoleDeveloper, Scopes: []string{"replay:write", "replay:read"}}
+
+	job, err := svc.CreateReplay(context.Background(), actor, ReplayRequest{EventID: "evt_1", Reason: "repair", RequireApproval: true})
+	if err != nil {
+		t.Fatalf("expected replay creation to succeed, got %v", err)
+	}
+	if !store.replayReq.RequireApproval || !job.ApprovalRequired {
+		t.Fatalf("expected approval requirement to propagate, req=%+v job=%+v", store.replayReq, job)
+	}
+
+	_, err = svc.ApproveReplayJob(context.Background(), actor, "rpl_1", StateChangeRequest{})
+	if !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("expected approval reason validation, got %v", err)
+	}
+
+	readOnly := authz.Actor{ID: "usr_2", TenantID: "ten_a", Role: authz.RoleSupport, Scopes: []string{"replay:read"}}
+	_, err = svc.ApproveReplayJob(context.Background(), readOnly, "rpl_1", StateChangeRequest{Reason: "approved"})
+	if err != ErrForbidden {
+		t.Fatalf("expected replay write permission requirement, got %v", err)
+	}
+
+	_, err = svc.ApproveReplayJob(context.Background(), actor, "rpl_1", StateChangeRequest{Reason: "approved"})
+	if err != nil {
+		t.Fatalf("expected approval to succeed, got %v", err)
+	}
+	if store.approveReplayTenantID != "ten_a" || store.approveReplayActorID != "usr_1" || store.approveReplayReason != "approved" {
+		t.Fatalf("approval was not tenant-scoped with reason: tenant=%q actor=%q reason=%q", store.approveReplayTenantID, store.approveReplayActorID, store.approveReplayReason)
+	}
+}
+
 func TestControlServiceSecretRotationRequiresSecurityWrite(t *testing.T) {
 	store := &fakeControlStore{}
 	svc := NewControlService(store, ssrf.Validator{Resolver: ssrf.StaticResolver{}})
@@ -434,6 +467,10 @@ type fakeControlStore struct {
 	providerConnectionTenantID string
 	providerConnectionReq      CreateProviderConnectionRequest
 	reconciliationTenantID     string
+	replayReq                  ReplayRequest
+	approveReplayTenantID      string
+	approveReplayActorID       string
+	approveReplayReason        string
 }
 
 func (f *fakeControlStore) CreateAPIKey(_ context.Context, input APIKeyCreateInput) (domain.APIKey, error) {
@@ -671,11 +708,18 @@ func (f *fakeControlStore) RejectQuarantine(context.Context, string, string, str
 func (f *fakeControlStore) DryRunReplay(context.Context, string, ReplayRequest) (ReplayDryRun, error) {
 	return ReplayDryRun{}, nil
 }
-func (f *fakeControlStore) CreateReplay(context.Context, string, string, ReplayRequest) (ReplayJob, error) {
-	return ReplayJob{}, nil
+func (f *fakeControlStore) CreateReplay(_ context.Context, tenantID, actorID string, req ReplayRequest) (ReplayJob, error) {
+	f.replayReq = req
+	return ReplayJob{ID: "rpl_1", State: "pending_approval", ScopeHash: "sha256:abc", TotalItems: 1, ApprovalRequired: req.RequireApproval}, nil
 }
 func (f *fakeControlStore) ListReplayJobs(context.Context, string, int) ([]ReplayJob, error) {
 	return nil, nil
+}
+func (f *fakeControlStore) ApproveReplayJob(_ context.Context, tenantID, replayJobID, actorID, reason string) (ReplayJob, error) {
+	f.approveReplayTenantID = tenantID
+	f.approveReplayActorID = actorID
+	f.approveReplayReason = reason
+	return ReplayJob{ID: replayJobID, State: "scheduled", ApprovalRequired: true, ApprovedBy: actorID}, nil
 }
 func (f *fakeControlStore) PauseReplayJob(context.Context, string, string, string, string) (ReplayJob, error) {
 	return ReplayJob{}, nil

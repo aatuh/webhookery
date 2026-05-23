@@ -560,7 +560,7 @@ func runDeliveries(args []string) error {
 
 func runReplayJobs(args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: whcp replay-jobs <list|dry-run|create|pause|resume|cancel>")
+		return fmt.Errorf("usage: whcp replay-jobs <list|dry-run|create|approve|pause|resume|cancel>")
 	}
 	fs := flag.NewFlagSet("replay-jobs "+args[0], flag.ContinueOnError)
 	baseURL := fs.String("base-url", "http://localhost:8080", "API base URL")
@@ -572,6 +572,7 @@ func runReplayJobs(args []string) error {
 	reason := fs.String("reason", "", "operator reason")
 	configMode := fs.String("config-mode", apppkg.ReplayConfigCurrent, "current or original")
 	rateLimitPerMinute := fs.Int("rate-limit-per-minute", 0, "optional replay rate limit")
+	requireApproval := fs.Bool("require-approval", false, "create job in pending approval state")
 	if err := fs.Parse(args[1:]); err != nil {
 		return err
 	}
@@ -581,7 +582,9 @@ func runReplayJobs(args []string) error {
 	case "dry-run":
 		return postJSON(*baseURL, *apiKey, "/v1/replay-jobs:dry-run", map[string]any{"event_id": *eventID, "delivery_id": *deliveryID, "endpoint_id": *endpointID, "reason": *reason, "config_mode": *configMode, "rate_limit_per_minute": *rateLimitPerMinute})
 	case "create":
-		return postJSON(*baseURL, *apiKey, "/v1/replay-jobs", map[string]any{"event_id": *eventID, "delivery_id": *deliveryID, "endpoint_id": *endpointID, "reason": *reason, "config_mode": *configMode, "rate_limit_per_minute": *rateLimitPerMinute})
+		return postJSON(*baseURL, *apiKey, "/v1/replay-jobs", map[string]any{"event_id": *eventID, "delivery_id": *deliveryID, "endpoint_id": *endpointID, "reason": *reason, "config_mode": *configMode, "rate_limit_per_minute": *rateLimitPerMinute, "require_approval": *requireApproval})
+	case "approve":
+		return postJSON(*baseURL, *apiKey, "/v1/replay-jobs/"+url.PathEscape(*replayJobID)+":approve", map[string]string{"reason": *reason})
 	case "pause":
 		return postJSON(*baseURL, *apiKey, "/v1/replay-jobs/"+url.PathEscape(*replayJobID)+":pause", map[string]string{"reason": *reason})
 	case "resume":
@@ -589,7 +592,7 @@ func runReplayJobs(args []string) error {
 	case "cancel":
 		return postJSON(*baseURL, *apiKey, "/v1/replay-jobs/"+url.PathEscape(*replayJobID)+":cancel", map[string]string{"reason": *reason})
 	default:
-		return fmt.Errorf("usage: whcp replay-jobs <list|dry-run|create|pause|resume|cancel>")
+		return fmt.Errorf("usage: whcp replay-jobs <list|dry-run|create|approve|pause|resume|cancel>")
 	}
 }
 

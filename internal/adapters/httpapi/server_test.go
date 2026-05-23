@@ -455,6 +455,9 @@ func (noopControlStore) CreateReplay(context.Context, string, string, app.Replay
 func (noopControlStore) ListReplayJobs(context.Context, string, int) ([]app.ReplayJob, error) {
 	return nil, nil
 }
+func (noopControlStore) ApproveReplayJob(context.Context, string, string, string, string) (app.ReplayJob, error) {
+	return app.ReplayJob{}, nil
+}
 func (noopControlStore) PauseReplayJob(context.Context, string, string, string, string) (app.ReplayJob, error) {
 	return app.ReplayJob{}, nil
 }

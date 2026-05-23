@@ -2,6 +2,7 @@ package postgres
 
 import (
 	"context"
+	"database/sql"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -2877,6 +2878,25 @@ func (s *Store) DryRunReplay(ctx context.Context, tenantID string, req app.Repla
 	return app.ReplayDryRun{WouldReplayEvents: total, WouldCreateDeliveries: total, Warnings: warnings}, nil
 }
 
+const replayJobSelectSQL = `SELECT id, state, scope_hash, config_mode, rate_limit_per_minute, total_items, processed_items, failed_items, approval_required, COALESCE(approved_by,''), approved_at FROM replay_jobs`
+
+type replayJobScanner interface {
+	Scan(dest ...any) error
+}
+
+func scanReplayJob(scanner replayJobScanner) (app.ReplayJob, error) {
+	var item app.ReplayJob
+	var approvedAt sql.NullTime
+	if err := scanner.Scan(&item.ID, &item.State, &item.ScopeHash, &item.ConfigMode, &item.RateLimitPerMinute, &item.TotalItems, &item.ProcessedItems, &item.FailedItems, &item.ApprovalRequired, &item.ApprovedBy, &approvedAt); err != nil {
+		return app.ReplayJob{}, err
+	}
+	if approvedAt.Valid {
+		t := approvedAt.Time.UTC()
+		item.ApprovedAt = &t
+	}
+	return item, nil
+}
+
 func (s *Store) CreateReplay(ctx context.Context, tenantID, actorID string, req app.ReplayRequest) (app.ReplayJob, error) {
 	if req.ConfigMode == "" {
 		req.ConfigMode = app.ReplayConfigCurrent
@@ -2893,11 +2913,17 @@ func (s *Store) CreateReplay(ctx context.Context, tenantID, actorID string, req 
 		return app.ReplayJob{}, err
 	}
 	defer rollback(ctx, tx)
-	if _, err := tx.Exec(ctx, `INSERT INTO replay_jobs(id, tenant_id, state, scope_hash, scope_json, reason, created_by, total_items, config_mode, rate_limit_per_minute) VALUES($1,$2,'scheduled',$3,$4,$5,$6,$7,$8,$9)`, id, tenantID, scopeHash, scopeBytes, req.Reason, actorID, dryRun.WouldCreateDeliveries, req.ConfigMode, req.RateLimitPerMinute); err != nil {
+	state := "scheduled"
+	if req.RequireApproval {
+		state = "pending_approval"
+	}
+	if _, err := tx.Exec(ctx, `INSERT INTO replay_jobs(id, tenant_id, state, scope_hash, scope_json, reason, created_by, total_items, config_mode, rate_limit_per_minute, approval_required) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`, id, tenantID, state, scopeHash, scopeBytes, req.Reason, actorID, dryRun.WouldCreateDeliveries, req.ConfigMode, req.RateLimitPerMinute, req.RequireApproval); err != nil {
 		return app.ReplayJob{}, err
 	}
-	if _, err := tx.Exec(ctx, `INSERT INTO outbox(id, tenant_id, kind, resource_id, payload) VALUES($1,$2,'replay_job',$3,$4)`, mustID("out"), tenantID, id, scopeBytes); err != nil {
-		return app.ReplayJob{}, err
+	if !req.RequireApproval {
+		if _, err := tx.Exec(ctx, `INSERT INTO outbox(id, tenant_id, kind, resource_id, payload) VALUES($1,$2,'replay_job',$3,$4)`, mustID("out"), tenantID, id, scopeBytes); err != nil {
+			return app.ReplayJob{}, err
+		}
 	}
 	if _, err := recordAuditEventTx(ctx, tx, auditEventInput{TenantID: tenantID, ActorID: actorID, Action: "replay.created", Resource: "replay_job", ResourceID: id, Reason: req.Reason}); err != nil {
 		return app.ReplayJob{}, err
@@ -2905,24 +2931,61 @@ func (s *Store) CreateReplay(ctx context.Context, tenantID, actorID string, req 
 	if err := tx.Commit(ctx); err != nil {
 		return app.ReplayJob{}, err
 	}
-	return app.ReplayJob{ID: id, State: "scheduled", ScopeHash: scopeHash, ConfigMode: req.ConfigMode, RateLimitPerMinute: req.RateLimitPerMinute, TotalItems: dryRun.WouldCreateDeliveries}, nil
+	return app.ReplayJob{ID: id, State: state, ScopeHash: scopeHash, ConfigMode: req.ConfigMode, RateLimitPerMinute: req.RateLimitPerMinute, TotalItems: dryRun.WouldCreateDeliveries, ApprovalRequired: req.RequireApproval}, nil
 }
 
 func (s *Store) ListReplayJobs(ctx context.Context, tenantID string, limit int) ([]app.ReplayJob, error) {
-	rows, err := s.pool.Query(ctx, `SELECT id, state, scope_hash, config_mode, rate_limit_per_minute, total_items, processed_items, failed_items FROM replay_jobs WHERE tenant_id=$1 ORDER BY created_at DESC LIMIT $2`, tenantID, limit)
+	rows, err := s.pool.Query(ctx, replayJobSelectSQL+` WHERE tenant_id=$1 ORDER BY created_at DESC LIMIT $2`, tenantID, limit)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 	var out []app.ReplayJob
 	for rows.Next() {
-		var item app.ReplayJob
-		if err := rows.Scan(&item.ID, &item.State, &item.ScopeHash, &item.ConfigMode, &item.RateLimitPerMinute, &item.TotalItems, &item.ProcessedItems, &item.FailedItems); err != nil {
+		item, err := scanReplayJob(rows)
+		if err != nil {
 			return nil, err
 		}
 		out = append(out, item)
 	}
 	return out, rows.Err()
+}
+
+func (s *Store) ApproveReplayJob(ctx context.Context, tenantID, replayJobID, actorID, reason string) (app.ReplayJob, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return app.ReplayJob{}, err
+	}
+	defer rollback(ctx, tx)
+
+	var scopeBytes []byte
+	err = tx.QueryRow(ctx, `SELECT scope_json FROM replay_jobs WHERE tenant_id=$1 AND id=$2 AND state='pending_approval' AND approval_required=true FOR UPDATE`, tenantID, replayJobID).Scan(&scopeBytes)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return app.ReplayJob{}, app.ErrNotFound
+	}
+	if err != nil {
+		return app.ReplayJob{}, err
+	}
+	item, err := scanReplayJob(tx.QueryRow(ctx, `
+		UPDATE replay_jobs
+		SET state='scheduled', approved_by=$1, approved_at=now(), approval_reason=$2
+		WHERE tenant_id=$3 AND id=$4 AND state='pending_approval' AND approval_required=true
+		RETURNING id, state, scope_hash, config_mode, rate_limit_per_minute, total_items, processed_items, failed_items, approval_required, COALESCE(approved_by,''), approved_at`,
+		actorID, reason, tenantID, replayJobID,
+	))
+	if err != nil {
+		return app.ReplayJob{}, err
+	}
+	if _, err := tx.Exec(ctx, `INSERT INTO outbox(id, tenant_id, kind, resource_id, payload) VALUES($1,$2,'replay_job',$3,$4)`, mustID("out"), tenantID, replayJobID, scopeBytes); err != nil {
+		return app.ReplayJob{}, err
+	}
+	if _, err := recordAuditEventTx(ctx, tx, auditEventInput{TenantID: tenantID, ActorID: actorID, Action: "replay.approved", Resource: "replay_job", ResourceID: replayJobID, Reason: reason}); err != nil {
+		return app.ReplayJob{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return app.ReplayJob{}, err
+	}
+	return item, nil
 }
 
 func (s *Store) PauseReplayJob(ctx context.Context, tenantID, replayJobID, actorID, reason string) (app.ReplayJob, error) {
@@ -2938,7 +3001,6 @@ func (s *Store) CancelReplayJob(ctx context.Context, tenantID, replayJobID, acto
 }
 
 func (s *Store) updateReplayState(ctx context.Context, tenantID, replayJobID, actorID, reason, state, action string) (app.ReplayJob, error) {
-	var item app.ReplayJob
 	extra := ""
 	if state == "paused" {
 		extra = ", paused_at=now()"
@@ -2946,8 +3008,11 @@ func (s *Store) updateReplayState(ctx context.Context, tenantID, replayJobID, ac
 	if state == "canceled" {
 		extra = ", canceled_at=now()"
 	}
-	err := s.pool.QueryRow(ctx, `UPDATE replay_jobs SET state=$1`+extra+` WHERE tenant_id=$2 AND id=$3 AND state NOT IN ('completed','canceled') RETURNING id, state, scope_hash, config_mode, rate_limit_per_minute, total_items, processed_items, failed_items`, state, tenantID, replayJobID).
-		Scan(&item.ID, &item.State, &item.ScopeHash, &item.ConfigMode, &item.RateLimitPerMinute, &item.TotalItems, &item.ProcessedItems, &item.FailedItems)
+	stateGuard := "state NOT IN ('completed','canceled')"
+	if state == "scheduled" {
+		stateGuard = "state NOT IN ('completed','canceled','pending_approval')"
+	}
+	item, err := scanReplayJob(s.pool.QueryRow(ctx, `UPDATE replay_jobs SET state=$1`+extra+` WHERE tenant_id=$2 AND id=$3 AND `+stateGuard+` RETURNING id, state, scope_hash, config_mode, rate_limit_per_minute, total_items, processed_items, failed_items, approval_required, COALESCE(approved_by,''), approved_at`, state, tenantID, replayJobID))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return app.ReplayJob{}, app.ErrNotFound
 	}
@@ -3573,14 +3638,18 @@ func (s *Store) createReplayDeliveries(ctx context.Context, tenantID, replayJobI
 	if err != nil {
 		return err
 	}
-	if state == "paused" {
+	if state == "paused" || state == "pending_approval" {
 		return worker.ErrDeferred
 	}
-	if state == "canceled" || state == "completed" {
+	if state != "scheduled" {
 		return nil
 	}
-	if _, err := s.pool.Exec(ctx, `UPDATE replay_jobs SET state='running' WHERE tenant_id=$1 AND id=$2 AND state='scheduled'`, tenantID, replayJobID); err != nil {
+	tag, err := s.pool.Exec(ctx, `UPDATE replay_jobs SET state='running' WHERE tenant_id=$1 AND id=$2 AND state='scheduled'`, tenantID, replayJobID)
+	if err != nil {
 		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return worker.ErrDeferred
 	}
 	var req app.ReplayRequest
 	if err := json.Unmarshal(scopeBytes, &req); err != nil {

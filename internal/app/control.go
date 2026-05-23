@@ -91,6 +91,7 @@ type ControlStore interface {
 	DryRunReplay(ctx context.Context, tenantID string, req ReplayRequest) (ReplayDryRun, error)
 	CreateReplay(ctx context.Context, tenantID, actorID string, req ReplayRequest) (ReplayJob, error)
 	ListReplayJobs(ctx context.Context, tenantID string, limit int) ([]ReplayJob, error)
+	ApproveReplayJob(ctx context.Context, tenantID, replayJobID, actorID, reason string) (ReplayJob, error)
 	PauseReplayJob(ctx context.Context, tenantID, replayJobID, actorID, reason string) (ReplayJob, error)
 	ResumeReplayJob(ctx context.Context, tenantID, replayJobID, actorID, reason string) (ReplayJob, error)
 	CancelReplayJob(ctx context.Context, tenantID, replayJobID, actorID, reason string) (ReplayJob, error)
@@ -242,6 +243,7 @@ type ReplayRequest struct {
 	DryRun             bool   `json:"dry_run"`
 	ConfigMode         string `json:"config_mode,omitempty"`
 	RateLimitPerMinute int    `json:"rate_limit_per_minute,omitempty"`
+	RequireApproval    bool   `json:"require_approval,omitempty"`
 }
 
 type DeadLetterReleaseRequest struct {
@@ -265,14 +267,17 @@ type ReplayDryRun struct {
 }
 
 type ReplayJob struct {
-	ID                 string `json:"id"`
-	State              string `json:"state"`
-	ScopeHash          string `json:"scope_hash"`
-	ConfigMode         string `json:"config_mode,omitempty"`
-	RateLimitPerMinute int    `json:"rate_limit_per_minute,omitempty"`
-	TotalItems         int    `json:"total_items"`
-	ProcessedItems     int    `json:"processed_items"`
-	FailedItems        int    `json:"failed_items"`
+	ID                 string     `json:"id"`
+	State              string     `json:"state"`
+	ScopeHash          string     `json:"scope_hash"`
+	ConfigMode         string     `json:"config_mode,omitempty"`
+	RateLimitPerMinute int        `json:"rate_limit_per_minute,omitempty"`
+	TotalItems         int        `json:"total_items"`
+	ProcessedItems     int        `json:"processed_items"`
+	FailedItems        int        `json:"failed_items"`
+	ApprovalRequired   bool       `json:"approval_required"`
+	ApprovedBy         string     `json:"approved_by,omitempty"`
+	ApprovedAt         *time.Time `json:"approved_at,omitempty"`
 }
 
 type StateChangeRequest struct {
@@ -830,6 +835,7 @@ func (s *ControlService) CreateReplay(ctx context.Context, actor authz.Actor, re
 	if !authz.Can(actor, "replay:write", actor.TenantID) {
 		return ReplayJob{}, ErrForbidden
 	}
+	req.Reason = strings.TrimSpace(req.Reason)
 	if req.Reason == "" {
 		return ReplayJob{}, fmt.Errorf("%w: reason is required", ErrInvalidInput)
 	}
@@ -844,6 +850,10 @@ func (s *ControlService) ListReplayJobs(ctx context.Context, actor authz.Actor, 
 		return nil, ErrForbidden
 	}
 	return s.store.ListReplayJobs(ctx, actor.TenantID, normalizeLimit(limit))
+}
+
+func (s *ControlService) ApproveReplayJob(ctx context.Context, actor authz.Actor, replayJobID string, req StateChangeRequest) (ReplayJob, error) {
+	return s.changeReplayState(ctx, actor, replayJobID, req, s.store.ApproveReplayJob)
 }
 
 func (s *ControlService) PauseReplayJob(ctx context.Context, actor authz.Actor, replayJobID string, req StateChangeRequest) (ReplayJob, error) {

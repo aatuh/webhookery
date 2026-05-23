@@ -144,6 +144,12 @@ deliveries are marked with `replay_job_id`, scheduled according to the replay
 rate limit, and ordered behind live due deliveries when workers claim delivery
 work. Replay jobs can be paused, resumed, or canceled through the API/CLI.
 Paused jobs keep durable outbox work uncompleted until they are resumed.
+Replay jobs can also be created with `require_approval=true`; those jobs stay
+in `pending_approval`, do not enqueue replay delivery work, and require
+`POST /v1/replay-jobs/{replay_job_id}:approve` or
+`whcp replay-jobs approve` with replay write permission and a reason before
+workers can process them. The approval records approver metadata and a chained
+audit event. This is a single approval gate, not a two-person approval workflow.
 Dead-letter entries can be released one at a time or in bounded bulk batches.
 
 ## Provider Reconciliation

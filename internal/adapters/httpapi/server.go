@@ -104,6 +104,7 @@ func (s *Server) Routes() http.Handler {
 			r.Post("/replay-jobs:dry-run", s.dryRunReplay)
 			r.Get("/replay-jobs", s.listReplayJobs)
 			r.Post("/replay-jobs", s.createReplay)
+			r.Post("/replay-jobs/{replay_job_id}:approve", s.approveReplayJob)
 			r.Post("/replay-jobs/{replay_job_id}:pause", s.pauseReplayJob)
 			r.Post("/replay-jobs/{replay_job_id}:resume", s.resumeReplayJob)
 			r.Post("/replay-jobs/{replay_job_id}:cancel", s.cancelReplayJob)
@@ -861,6 +862,10 @@ func (s *Server) listReplayJobs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, page(items))
+}
+
+func (s *Server) approveReplayJob(w http.ResponseWriter, r *http.Request) {
+	s.changeReplayJobState(w, r, s.cfg.Control.ApproveReplayJob)
 }
 
 func (s *Server) pauseReplayJob(w http.ResponseWriter, r *http.Request) {

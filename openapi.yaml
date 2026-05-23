@@ -894,7 +894,28 @@ paths:
               $ref: "#/components/schemas/ReplayRequest"
       responses:
         "202":
-          description: Replay job scheduled.
+          description: Replay job scheduled or pending approval when require_approval is true.
+  /v1/replay-jobs/{replay_job_id}:approve:
+    post:
+      summary: Approve pending replay job
+      description: Moves a tenant-scoped pending replay job into scheduled state and enqueues durable replay work.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: replay_job_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ReasonRequest"
+      responses:
+        "200":
+          description: Replay job approved and scheduled.
   /v1/replay-jobs/{replay_job_id}:pause:
     post:
       summary: Pause replay job
@@ -2069,6 +2090,10 @@ components:
           type: integer
           minimum: 0
           maximum: 60000
+        require_approval:
+          type: boolean
+          default: false
+          description: Create the replay job in pending_approval state. Delivery work is not enqueued until the job is approved.
         state:
           type: string
           enum: [active, disabled]
