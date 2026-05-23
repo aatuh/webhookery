@@ -20,6 +20,36 @@ write status, receipts, events, deliveries, and audit rows.
 
 The project makes no FIPS/NIST/CMVP certification claim.
 
+## Backup And Restore
+
+PostgreSQL is the authoritative metadata store for accepted events, receipts,
+deliveries, audit rows, reconciliation evidence, retention state, and outbox
+work. Back up PostgreSQL before upgrading, changing retention policies,
+rotating master-key material, or enabling object storage.
+
+Create a custom-format PostgreSQL dump with:
+
+```bash
+WEBHOOKERY_DATABASE_URL=postgres://... scripts/backup_postgres.sh backups
+```
+
+The script writes a timestamped `webhookery-*.dump` file with owner/group
+permissions restricted by `umask 077`. It requires `pg_dump` on the operator
+machine and does not include S3-compatible object bodies; object storage must be
+backed up through the bucket provider.
+
+Restore into an already provisioned PostgreSQL database with:
+
+```bash
+WEBHOOKERY_DATABASE_URL=postgres://... WEBHOOKERY_RESTORE_CONFIRM=restore scripts/restore_postgres.sh backups/webhookery-20260525T000000Z.dump
+```
+
+The restore script requires an explicit confirmation environment variable and
+uses `pg_restore --clean --if-exists`. Stop API and worker processes before
+restoring so no process writes new evidence into a partially restored database.
+After restore, run `whcp migrate up`, start the API and workers, then check
+`/readyz`, `/v1/ops/metrics`, and a recent event timeline.
+
 ## Cryptography And Secrets
 
 Inbound provider adapters use HMAC-SHA256 where provider semantics require it:

@@ -55,6 +55,11 @@ crypto-inventory: ## Check crypto inventory evidence exists
 deployment-profile-check: ## Check deployment profile evidence and non-claims
 	@grep -q "/readyz" openapi.yaml
 	@grep -q "no FIPS/NIST/CMVP certification" docs/operations.md
+	@test -x scripts/release_acceptance.sh
+	@test -x scripts/backup_postgres.sh
+	@test -x scripts/restore_postgres.sh
+	@grep -q "backup_postgres.sh" docs/operations.md
+	@grep -q "restore_postgres.sh" docs/operations.md
 
 fuzz-smoke: ## Run short CI-safe fuzz/property smoke tests
 	@$(GO) test ./internal/canonicaljson -run '^$$' -fuzz=Fuzz -fuzztime=$(FUZZTIME)

@@ -11,3 +11,4 @@ bin/
 dist/
 tmp/
 release-evidence/
+backups/

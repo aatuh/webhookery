@@ -61,6 +61,9 @@ go run ./cmd/whcp endpoints test --endpoint-id end_... --reason "verify receiver
 go run ./cmd/whcp deliveries retry --delivery-id del_... --reason "operator retry"
 go run ./cmd/whcp replay-jobs create --event-id evt_... --config-mode original --rate-limit-per-minute 60 --reason "customer replay request"
 go run ./cmd/whcp ops metrics --api-key "$WEBHOOKERY_API_KEY"
+scripts/backup_postgres.sh backups
+WEBHOOKERY_RESTORE_CONFIRM=restore scripts/restore_postgres.sh backups/webhookery-20260525T000000Z.dump
+make release-acceptance
 ```
 
 Set `WEBHOOKERY_ENABLE_UI=true` to expose the minimal operator console at `/`.
