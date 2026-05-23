@@ -2,6 +2,8 @@ package app
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -144,9 +146,11 @@ type RevokeAPIKeyRequest struct {
 }
 
 type CreateEndpointRequest struct {
-	Name          string `json:"name"`
-	URL           string `json:"url"`
-	RetryPolicyID string `json:"retry_policy_id,omitempty"`
+	Name              string `json:"name"`
+	URL               string `json:"url"`
+	RetryPolicyID     string `json:"retry_policy_id,omitempty"`
+	MTLSClientCertPEM string `json:"mtls_client_cert_pem,omitempty"`
+	MTLSClientKeyPEM  string `json:"mtls_client_key_pem,omitempty"`
 }
 
 type TestEndpointRequest struct {
@@ -478,12 +482,20 @@ func (s *ControlService) CreateEndpoint(ctx context.Context, actor authz.Actor, 
 	if !result.Allowed {
 		return domain.Endpoint{}, result, fmt.Errorf("%w: endpoint_url_blocked", ErrInvalidInput)
 	}
+	mtlsEnabled, mtlsSubject, mtlsCertPEM, mtlsKeyPEM, err := validateEndpointMTLS(req.MTLSClientCertPEM, req.MTLSClientKeyPEM)
+	if err != nil {
+		return domain.Endpoint{}, result, err
+	}
 	endpoint, err := s.store.CreateEndpoint(ctx, domain.Endpoint{
-		TenantID:      actor.TenantID,
-		Name:          req.Name,
-		URL:           result.NormalizedURL,
-		State:         domain.StateActive,
-		RetryPolicyID: strings.TrimSpace(req.RetryPolicyID),
+		TenantID:          actor.TenantID,
+		Name:              req.Name,
+		URL:               result.NormalizedURL,
+		State:             domain.StateActive,
+		RetryPolicyID:     strings.TrimSpace(req.RetryPolicyID),
+		MTLSEnabled:       mtlsEnabled,
+		MTLSCertSubject:   mtlsSubject,
+		MTLSClientCertPEM: mtlsCertPEM,
+		MTLSClientKeyPEM:  mtlsKeyPEM,
 	})
 	return endpoint, result, err
 }
@@ -1387,6 +1399,30 @@ func normalizeReplayRequest(req *ReplayRequest, requireScope bool) error {
 		return fmt.Errorf("%w: event_id or delivery_id is required", ErrInvalidInput)
 	}
 	return nil
+}
+
+func validateEndpointMTLS(certPEM, keyPEM string) (bool, string, []byte, []byte, error) {
+	certPEM = strings.TrimSpace(certPEM)
+	keyPEM = strings.TrimSpace(keyPEM)
+	if certPEM == "" && keyPEM == "" {
+		return false, "", nil, nil, nil
+	}
+	if certPEM == "" || keyPEM == "" {
+		return false, "", nil, nil, fmt.Errorf("%w: mtls_client_cert_pem and mtls_client_key_pem are required together", ErrInvalidInput)
+	}
+	pair, err := tls.X509KeyPair([]byte(certPEM), []byte(keyPEM))
+	if err != nil {
+		return false, "", nil, nil, fmt.Errorf("%w: invalid mTLS client certificate pair", ErrInvalidInput)
+	}
+	subject := ""
+	if len(pair.Certificate) > 0 {
+		cert, err := x509.ParseCertificate(pair.Certificate[0])
+		if err != nil {
+			return false, "", nil, nil, fmt.Errorf("%w: invalid mTLS client certificate", ErrInvalidInput)
+		}
+		subject = cert.Subject.String()
+	}
+	return true, subject, []byte(certPEM), []byte(keyPEM), nil
 }
 
 func normalizeState(state string) string {

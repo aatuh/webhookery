@@ -68,3 +68,38 @@ func TestVerifyEvidenceBundleFileAcceptsValidBundle(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestReadMTLSFilesRequiresBothFiles(t *testing.T) {
+	if _, _, err := readMTLSFiles("client.crt", ""); err == nil {
+		t.Fatal("expected mTLS file pair validation")
+	}
+}
+
+func TestReadSmallFileRejectsDirectoryAndLargeFile(t *testing.T) {
+	dir := t.TempDir()
+	if _, err := readSmallFile(dir, 64); err == nil {
+		t.Fatal("expected directory rejection")
+	}
+	path := filepath.Join(dir, "large.pem")
+	if err := os.WriteFile(path, []byte("abcdef"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := readSmallFile(path, 3); err == nil {
+		t.Fatal("expected oversized file rejection")
+	}
+}
+
+func TestReadSmallFileRejectsSymlink(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "client.key")
+	link := filepath.Join(dir, "client-link.key")
+	if err := os.WriteFile(target, []byte("key"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, link); err != nil {
+		t.Skipf("symlink not supported: %v", err)
+	}
+	if _, err := readSmallFile(link, 64); err == nil {
+		t.Fatal("expected symlink rejection")
+	}
+}

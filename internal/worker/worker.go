@@ -35,6 +35,8 @@ type DeliveryItem struct {
 	SigningSecret     []byte
 	SigningKeyID      string
 	SigningKeyVersion int
+	MTLSClientCertPEM []byte
+	MTLSClientKeyPEM  []byte
 	Body              []byte
 }
 
@@ -46,7 +48,7 @@ type DeliveryResult struct {
 }
 
 type DeliveryClient interface {
-	Deliver(ctx context.Context, rawURL string, body []byte, secret []byte, keyID string, keyVersion int) (DeliveryResult, error)
+	Deliver(ctx context.Context, rawURL string, body []byte, secret []byte, keyID string, keyVersion int, mtlsCertPEM, mtlsKeyPEM []byte) (DeliveryResult, error)
 }
 
 type DeliveryStore interface {
@@ -96,7 +98,7 @@ func (w Worker) RunOnce(ctx context.Context) error {
 			return err
 		}
 		for _, item := range deliveries {
-			result, deliverErr := w.DeliveryClient.Deliver(ctx, item.EndpointURL, item.Body, item.SigningSecret, item.SigningKeyID, item.SigningKeyVersion)
+			result, deliverErr := w.DeliveryClient.Deliver(ctx, item.EndpointURL, item.Body, item.SigningSecret, item.SigningKeyID, item.SigningKeyVersion, item.MTLSClientCertPEM, item.MTLSClientKeyPEM)
 			if err := w.DeliveryStore.RecordDeliveryAttempt(ctx, item, result, deliverErr); err != nil {
 				return err
 			}

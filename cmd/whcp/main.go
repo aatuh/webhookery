@@ -359,6 +359,8 @@ func runEndpoints(args []string) error {
 	endpointID := fs.String("endpoint-id", "", "endpoint id")
 	reason := fs.String("reason", "", "operator reason")
 	retryPolicyID := fs.String("retry-policy-id", "", "retry policy id")
+	mtlsClientCertFile := fs.String("mtls-client-cert-file", "", "PEM client certificate for endpoint mTLS")
+	mtlsClientKeyFile := fs.String("mtls-client-key-file", "", "PEM client private key for endpoint mTLS")
 	graceHours := fs.Int("grace-hours", 72, "old signing secret grace period in hours")
 	if err := fs.Parse(args[1:]); err != nil {
 		return err
@@ -367,7 +369,16 @@ func runEndpoints(args []string) error {
 	case "validate-url":
 		return postJSON(*baseURL, *apiKey, "/v1/endpoints:validate-url", map[string]string{"url": *rawURL})
 	case "create":
-		return postJSON(*baseURL, *apiKey, "/v1/endpoints", map[string]string{"name": *name, "url": *rawURL, "retry_policy_id": *retryPolicyID})
+		body := map[string]string{"name": *name, "url": *rawURL, "retry_policy_id": *retryPolicyID}
+		if *mtlsClientCertFile != "" || *mtlsClientKeyFile != "" {
+			cert, key, err := readMTLSFiles(*mtlsClientCertFile, *mtlsClientKeyFile)
+			if err != nil {
+				return err
+			}
+			body["mtls_client_cert_pem"] = cert
+			body["mtls_client_key_pem"] = key
+		}
+		return postJSON(*baseURL, *apiKey, "/v1/endpoints", body)
 	case "test":
 		return postJSON(*baseURL, *apiKey, "/v1/endpoints/"+url.PathEscape(*endpointID)+":test", map[string]string{"reason": *reason})
 	case "rotate-secret":
@@ -978,15 +989,60 @@ func runtimeAuth(cfg config.Config, lookup apppkg.APIKeyLookup) apppkg.Authentic
 	return apppkg.MultiAuthenticator{Authenticators: authenticators}
 }
 
+func readMTLSFiles(certPath, keyPath string) (string, string, error) {
+	if strings.TrimSpace(certPath) == "" || strings.TrimSpace(keyPath) == "" {
+		return "", "", fmt.Errorf("mtls-client-cert-file and mtls-client-key-file are required together")
+	}
+	cert, err := readSmallFile(certPath, 64<<10)
+	if err != nil {
+		return "", "", fmt.Errorf("read mTLS client certificate: %w", err)
+	}
+	key, err := readSmallFile(keyPath, 64<<10)
+	if err != nil {
+		return "", "", fmt.Errorf("read mTLS client key: %w", err)
+	}
+	return string(cert), string(key), nil
+}
+
+func readSmallFile(path string, max int64) ([]byte, error) {
+	path = strings.TrimSpace(path)
+	if path == "" || strings.ContainsRune(path, 0) {
+		return nil, fmt.Errorf("invalid file path")
+	}
+	info, err := os.Lstat(path) // #nosec G703 -- explicit local operator PEM path; symlinks, directories, and size are checked before use.
+	if err != nil {
+		return nil, err
+	}
+	if info.IsDir() {
+		return nil, fmt.Errorf("path is a directory")
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return nil, fmt.Errorf("path must not be a symlink")
+	}
+	if info.Size() > max {
+		return nil, fmt.Errorf("file exceeds %d bytes", max)
+	}
+	body, err := os.ReadFile(path) // #nosec G304,G703 -- explicit local operator PEM path; no shell execution and bounded to small PEM files.
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(body)) > max {
+		return nil, fmt.Errorf("file exceeds %d bytes", max)
+	}
+	return body, nil
+}
+
 type deliveryAdapter struct {
 	client deliveryhttp.Client
 }
 
-func (d deliveryAdapter) Deliver(ctx context.Context, rawURL string, body []byte, secret []byte, keyID string, keyVersion int) (worker.DeliveryResult, error) {
+func (d deliveryAdapter) Deliver(ctx context.Context, rawURL string, body []byte, secret []byte, keyID string, keyVersion int, mtlsCertPEM, mtlsKeyPEM []byte) (worker.DeliveryResult, error) {
 	client := d.client
 	client.Secret = secret
 	client.SigningKeyID = keyID
 	client.SigningKeyVersion = keyVersion
+	client.MTLSClientCertPEM = mtlsCertPEM
+	client.MTLSClientKeyPEM = mtlsKeyPEM
 	result, err := client.Deliver(ctx, rawURL, body)
 	return worker.DeliveryResult{
 		StatusCode:        result.StatusCode,

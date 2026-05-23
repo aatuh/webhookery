@@ -1,6 +1,7 @@
 package deliveryhttp
 
 import (
+	"context"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -46,6 +47,24 @@ func TestClientDoesNotFollowRedirects(t *testing.T) {
 	err := client.CheckRedirect(nil, []*http.Request{{}})
 	if err == nil {
 		t.Fatal("redirects must be disabled by default")
+	}
+}
+
+func TestClientRejectsInvalidMTLSCertificatePair(t *testing.T) {
+	client := Client{
+		Secret:            []byte("secret"),
+		MTLSClientCertPEM: []byte("not a certificate"),
+		MTLSClientKeyPEM:  []byte("not a key"),
+		SSRF: ssrf.Validator{Resolver: ssrf.StaticResolver{
+			"example.com": {netip.MustParseAddr("93.184.216.34")},
+		}},
+	}
+	result, err := client.Deliver(context.Background(), "https://example.com/webhook", []byte("{}"))
+	if err == nil {
+		t.Fatal("expected invalid mTLS certificate pair to fail closed")
+	}
+	if result.FailureClass != "client_certificate_error" {
+		t.Fatalf("expected client_certificate_error, got %+v", result)
 	}
 }
 

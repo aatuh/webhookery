@@ -3,6 +3,7 @@ package deliveryhttp
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"io"
@@ -19,6 +20,8 @@ type Client struct {
 	Secret            []byte
 	SigningKeyID      string
 	SigningKeyVersion int
+	MTLSClientCertPEM []byte
+	MTLSClientKeyPEM  []byte
 	Now               func() time.Time
 }
 
@@ -73,9 +76,9 @@ func (c Client) Deliver(ctx context.Context, rawURL string, body []byte) (Result
 		return Result{FailureClass: "policy_blocked"}, err
 	}
 	req = req.WithContext(ctx)
-	httpClient := c.HTTP
-	if httpClient == nil {
-		httpClient = HTTPClient(10 * time.Second)
+	httpClient, err := c.httpClient()
+	if err != nil {
+		return Result{FailureClass: "client_certificate_error"}, err
 	}
 	resp, err := httpClient.Do(req)
 	if err != nil {
@@ -91,6 +94,49 @@ func (c Client) Deliver(ctx context.Context, rawURL string, body []byte) (Result
 		ResponseTruncated: len(bodyBytes) == 16<<10,
 		FailureClass:      classify(resp.StatusCode),
 	}, nil
+}
+
+func (c Client) httpClient() (*http.Client, error) {
+	if len(c.MTLSClientCertPEM) == 0 && len(c.MTLSClientKeyPEM) == 0 {
+		if c.HTTP != nil {
+			return c.HTTP, nil
+		}
+		return HTTPClient(10 * time.Second), nil
+	}
+	if len(c.MTLSClientCertPEM) == 0 || len(c.MTLSClientKeyPEM) == 0 {
+		return nil, errors.New("mTLS client certificate and key are required together")
+	}
+	cert, err := tls.X509KeyPair(c.MTLSClientCertPEM, c.MTLSClientKeyPEM)
+	if err != nil {
+		return nil, err
+	}
+	base := HTTPClient(10 * time.Second)
+	if c.HTTP != nil {
+		copy := *c.HTTP
+		base = &copy
+		if base.CheckRedirect == nil {
+			base.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+				return http.ErrUseLastResponse
+			}
+		}
+	}
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	if base.Transport != nil {
+		if typed, ok := base.Transport.(*http.Transport); ok {
+			transport = typed.Clone()
+		}
+	}
+	tlsConfig := &tls.Config{MinVersion: tls.VersionTLS12}
+	if transport.TLSClientConfig != nil {
+		tlsConfig = transport.TLSClientConfig.Clone()
+		if tlsConfig.MinVersion == 0 {
+			tlsConfig.MinVersion = tls.VersionTLS12
+		}
+	}
+	tlsConfig.Certificates = append([]tls.Certificate{cert}, tlsConfig.Certificates...)
+	transport.TLSClientConfig = tlsConfig
+	base.Transport = transport
+	return base, nil
 }
 
 func readTruncated(body io.ReadCloser, max int64) ([]byte, error) {

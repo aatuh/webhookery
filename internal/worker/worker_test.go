@@ -31,14 +31,17 @@ func TestRunOnceDoesNotCompleteDeferredOutboxItems(t *testing.T) {
 }
 
 func TestRunOnceDeliversClaimedDelivery(t *testing.T) {
-	store := &fakeWorkerStore{deliveries: []DeliveryItem{{ID: "del_1", EndpointURL: "https://example.com/webhook", Body: []byte("{}")}}}
-	client := fakeDeliveryClient{}
+	store := &fakeWorkerStore{deliveries: []DeliveryItem{{ID: "del_1", EndpointURL: "https://example.com/webhook", Body: []byte("{}"), MTLSClientCertPEM: []byte("cert"), MTLSClientKeyPEM: []byte("key")}}}
+	client := &fakeDeliveryClient{}
 	w := Worker{Store: store, DeliveryStore: store, DeliveryClient: client, WorkerID: "worker_1", Limit: 10}
 	if err := w.RunOnce(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	if store.recorded != "del_1" {
 		t.Fatalf("expected recorded delivery attempt, got %q", store.recorded)
+	}
+	if string(client.certPEM) != "cert" || string(client.keyPEM) != "key" {
+		t.Fatalf("expected mTLS material to reach delivery client, got cert=%q key=%q", client.certPEM, client.keyPEM)
 	}
 }
 
@@ -88,8 +91,13 @@ func (f *fakeWorkerStore) ApplyRetentionPolicies(_ context.Context, workerID str
 	return nil
 }
 
-type fakeDeliveryClient struct{}
+type fakeDeliveryClient struct {
+	certPEM []byte
+	keyPEM  []byte
+}
 
-func (fakeDeliveryClient) Deliver(context.Context, string, []byte, []byte, string, int) (DeliveryResult, error) {
+func (f *fakeDeliveryClient) Deliver(_ context.Context, _ string, _ []byte, _ []byte, _ string, _ int, certPEM, keyPEM []byte) (DeliveryResult, error) {
+	f.certPEM = certPEM
+	f.keyPEM = keyPEM
 	return DeliveryResult{StatusCode: 200, FailureClass: "success"}, nil
 }

@@ -56,6 +56,7 @@ go run ./cmd/whcp routes create --source-id src_... --endpoint-id end_... --even
 go run ./cmd/whcp routes versions --route-id rte_... --api-key "$WEBHOOKERY_API_KEY"
 go run ./cmd/whcp sources rotate-secret --source-id src_... --secret whsec_next --reason "scheduled rotation" --api-key "$WEBHOOKERY_API_KEY"
 go run ./cmd/whcp endpoints rotate-secret --endpoint-id end_... --reason "scheduled rotation" --api-key "$WEBHOOKERY_API_KEY"
+go run ./cmd/whcp endpoints create --name mtls-receiver --url https://receiver.example/webhook --mtls-client-cert-file client.crt --mtls-client-key-file client.key --api-key "$WEBHOOKERY_API_KEY"
 go run ./cmd/whcp schemas validate --name invoice.paid --version 2026-05-01 --payload-file payload.json --api-key "$WEBHOOKERY_API_KEY"
 go run ./cmd/whcp schemas check-compat --name invoice.paid --version 2026-05-01 --new-schema-file schema-next.json --api-key "$WEBHOOKERY_API_KEY"
 go run ./cmd/whcp endpoints test --endpoint-id end_... --reason "verify receiver" --api-key "$WEBHOOKERY_API_KEY"

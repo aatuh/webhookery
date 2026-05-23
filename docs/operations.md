@@ -89,6 +89,14 @@ include `Webhook-Signature-Key-Id` plus `Webhook-Signature-Key-Version` headers
 so receivers can audit which key version signed a request. Plaintext secret
 values are not returned by API, CLI, or UI responses.
 
+Endpoints may also be created with a PEM client certificate and private key for
+outbound mTLS. The API accepts `mtls_client_cert_pem` and
+`mtls_client_key_pem` together, validates that they form a client certificate
+pair, stores both through envelope encryption, and returns only
+`mtls_enabled` plus certificate subject metadata. Delivery workers decrypt the
+material at claim time and fail closed with `client_certificate_error` if the
+stored pair is invalid. Redirects remain disabled.
+
 ## Authentication And Authorization
 
 Normal operation uses database-backed API keys. API key rows store only

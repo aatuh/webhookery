@@ -243,9 +243,19 @@ paths:
       summary: Create outbound endpoint
       security:
         - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateEndpointRequest"
       responses:
         "201":
           description: Endpoint created after SSRF validation.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Endpoint"
   /v1/endpoints:validate-url:
     post:
       summary: Validate endpoint URL against SSRF policy
@@ -1579,6 +1589,49 @@ components:
         reason:
           type: string
           minLength: 1
+    CreateEndpointRequest:
+      type: object
+      required: [url]
+      additionalProperties: false
+      properties:
+        name:
+          type: string
+        url:
+          type: string
+          format: uri
+        retry_policy_id:
+          type: string
+        mtls_client_cert_pem:
+          type: string
+          description: PEM client certificate. Required with mtls_client_key_pem and never returned by the API.
+        mtls_client_key_pem:
+          type: string
+          description: PEM client private key. Required with mtls_client_cert_pem, encrypted at rest, and never returned by the API.
+    Endpoint:
+      type: object
+      required: [id, tenant_id, name, url, state, mtls_enabled, created_at]
+      properties:
+        id:
+          type: string
+        tenant_id:
+          type: string
+        name:
+          type: string
+        url:
+          type: string
+          format: uri
+        state:
+          type: string
+        retry_policy_id:
+          type: string
+        mtls_enabled:
+          type: boolean
+        mtls_cert_subject:
+          type: string
+          description: Subject metadata from the configured client certificate. Private key material is never returned.
+        created_at:
+          type: string
+          format: date-time
     SourceSecretVersion:
       type: object
       properties:

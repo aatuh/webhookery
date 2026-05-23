@@ -531,11 +531,22 @@ func (s *Store) CreateEndpoint(ctx context.Context, endpoint domain.Endpoint) (d
 	if _, err := tx.Exec(ctx, "INSERT INTO tenants(id, name) VALUES($1, $1) ON CONFLICT (id) DO NOTHING", endpoint.TenantID); err != nil {
 		return domain.Endpoint{}, err
 	}
+	var encryptedMTLSCert, encryptedMTLSKey []byte
+	if endpoint.MTLSEnabled {
+		encryptedMTLSCert, err = s.box.Encrypt(endpoint.MTLSClientCertPEM)
+		if err != nil {
+			return domain.Endpoint{}, err
+		}
+		encryptedMTLSKey, err = s.box.Encrypt(endpoint.MTLSClientKeyPEM)
+		if err != nil {
+			return domain.Endpoint{}, err
+		}
+	}
 	err = tx.QueryRow(ctx, `
-		INSERT INTO endpoints(id, tenant_id, name, url, state, retry_policy_id)
-		VALUES ($1,$2,$3,$4,$5,$6)
+		INSERT INTO endpoints(id, tenant_id, name, url, state, retry_policy_id, mtls_enabled, mtls_cert_subject, encrypted_mtls_client_cert, encrypted_mtls_client_key)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
 		RETURNING created_at`,
-		endpoint.ID, endpoint.TenantID, endpoint.Name, endpoint.URL, endpoint.State, endpoint.RetryPolicyID,
+		endpoint.ID, endpoint.TenantID, endpoint.Name, endpoint.URL, endpoint.State, endpoint.RetryPolicyID, endpoint.MTLSEnabled, endpoint.MTLSCertSubject, encryptedMTLSCert, encryptedMTLSKey,
 	).Scan(&endpoint.CreatedAt)
 	if err != nil {
 		return domain.Endpoint{}, err
@@ -560,6 +571,8 @@ func (s *Store) CreateEndpoint(ctx context.Context, endpoint domain.Endpoint) (d
 		"retry_policy_id": endpoint.RetryPolicyID,
 		"signing_key_id":  secretID,
 		"signing_version": 1,
+		"mtls_enabled":    endpoint.MTLSEnabled,
+		"mtls_subject":    endpoint.MTLSCertSubject,
 	}, ""); err != nil {
 		return domain.Endpoint{}, err
 	}
@@ -570,7 +583,7 @@ func (s *Store) CreateEndpoint(ctx context.Context, endpoint domain.Endpoint) (d
 }
 
 func (s *Store) ListEndpoints(ctx context.Context, tenantID string, limit int) ([]domain.Endpoint, error) {
-	rows, err := s.pool.Query(ctx, `SELECT id, tenant_id, name, url, state, retry_policy_id, circuit_state, failure_count, COALESCE(disabled_until, 'epoch'::timestamptz), created_at FROM endpoints WHERE tenant_id=$1 ORDER BY created_at DESC LIMIT $2`, tenantID, limit)
+	rows, err := s.pool.Query(ctx, `SELECT id, tenant_id, name, url, state, retry_policy_id, mtls_enabled, mtls_cert_subject, circuit_state, failure_count, COALESCE(disabled_until, 'epoch'::timestamptz), created_at FROM endpoints WHERE tenant_id=$1 ORDER BY created_at DESC LIMIT $2`, tenantID, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -578,7 +591,7 @@ func (s *Store) ListEndpoints(ctx context.Context, tenantID string, limit int) (
 	var out []domain.Endpoint
 	for rows.Next() {
 		var item domain.Endpoint
-		if err := rows.Scan(&item.ID, &item.TenantID, &item.Name, &item.URL, &item.State, &item.RetryPolicyID, &item.CircuitState, &item.FailureCount, &item.DisabledUntil, &item.CreatedAt); err != nil {
+		if err := rows.Scan(&item.ID, &item.TenantID, &item.Name, &item.URL, &item.State, &item.RetryPolicyID, &item.MTLSEnabled, &item.MTLSCertSubject, &item.CircuitState, &item.FailureCount, &item.DisabledUntil, &item.CreatedAt); err != nil {
 			return nil, err
 		}
 		out = append(out, item)
@@ -3994,10 +4007,13 @@ func (s *Store) ClaimDueDeliveries(ctx context.Context, workerID string, limit i
 }
 
 func (s *Store) populateDeliveryItem(ctx context.Context, tx pgx.Tx, item *worker.DeliveryItem) error {
-	var encrypted []byte
+	var encrypted, encryptedMTLSCert, encryptedMTLSKey []byte
+	var mtlsEnabled bool
 	var payloadID, payloadRowID, payloadStatus string
 	err := tx.QueryRow(ctx, `
-		SELECT e.url, es.id, es.version, es.encrypted_secret, COALESCE(d.delivery_payload_id,''), COALESCE(p.id,''), COALESCE(p.body,''::bytea), COALESCE(p.storage_status,'')
+		SELECT e.url, es.id, es.version, es.encrypted_secret, e.mtls_enabled,
+		       COALESCE(e.encrypted_mtls_client_cert,''::bytea), COALESCE(e.encrypted_mtls_client_key,''::bytea),
+		       COALESCE(d.delivery_payload_id,''), COALESCE(p.id,''), COALESCE(p.body,''::bytea), COALESCE(p.storage_status,'')
 		FROM deliveries d
 		JOIN endpoints e ON e.tenant_id=d.tenant_id AND e.id=d.endpoint_id
 		JOIN endpoint_secrets es ON es.tenant_id=e.tenant_id AND es.endpoint_id=e.id AND es.state='active'
@@ -4006,7 +4022,7 @@ func (s *Store) populateDeliveryItem(ctx context.Context, tx pgx.Tx, item *worke
 		ORDER BY es.version DESC
 		LIMIT 1`,
 		item.TenantID, item.ID,
-	).Scan(&item.EndpointURL, &item.SigningKeyID, &item.SigningKeyVersion, &encrypted, &payloadID, &payloadRowID, &item.Body, &payloadStatus)
+	).Scan(&item.EndpointURL, &item.SigningKeyID, &item.SigningKeyVersion, &encrypted, &mtlsEnabled, &encryptedMTLSCert, &encryptedMTLSKey, &payloadID, &payloadRowID, &item.Body, &payloadStatus)
 	if err != nil {
 		return err
 	}
@@ -4018,6 +4034,19 @@ func (s *Store) populateDeliveryItem(ctx context.Context, tx pgx.Tx, item *worke
 		return err
 	}
 	item.SigningSecret = secret
+	if mtlsEnabled {
+		if len(encryptedMTLSCert) == 0 || len(encryptedMTLSKey) == 0 {
+			return fmt.Errorf("endpoint mTLS is enabled without encrypted client material")
+		}
+		item.MTLSClientCertPEM, err = s.box.Decrypt(encryptedMTLSCert)
+		if err != nil {
+			return err
+		}
+		item.MTLSClientKeyPEM, err = s.box.Decrypt(encryptedMTLSKey)
+		if err != nil {
+			return err
+		}
+	}
 	if payloadID == "" {
 		body, err := s.legacyDeliveryEnvelope(ctx, tx, item.TenantID, item.EventID)
 		if err != nil {

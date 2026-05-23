@@ -100,16 +100,20 @@ type Source struct {
 }
 
 type Endpoint struct {
-	ID            string    `json:"id"`
-	TenantID      string    `json:"tenant_id"`
-	Name          string    `json:"name"`
-	URL           string    `json:"url"`
-	State         string    `json:"state"`
-	RetryPolicyID string    `json:"retry_policy_id,omitempty"`
-	CircuitState  string    `json:"circuit_state,omitempty"`
-	FailureCount  int       `json:"failure_count,omitempty"`
-	DisabledUntil time.Time `json:"disabled_until,omitempty"`
-	CreatedAt     time.Time `json:"created_at"`
+	ID                string    `json:"id"`
+	TenantID          string    `json:"tenant_id"`
+	Name              string    `json:"name"`
+	URL               string    `json:"url"`
+	State             string    `json:"state"`
+	RetryPolicyID     string    `json:"retry_policy_id,omitempty"`
+	MTLSEnabled       bool      `json:"mtls_enabled"`
+	MTLSCertSubject   string    `json:"mtls_cert_subject,omitempty"`
+	MTLSClientCertPEM []byte    `json:"-"`
+	MTLSClientKeyPEM  []byte    `json:"-"`
+	CircuitState      string    `json:"circuit_state,omitempty"`
+	FailureCount      int       `json:"failure_count,omitempty"`
+	DisabledUntil     time.Time `json:"disabled_until,omitempty"`
+	CreatedAt         time.Time `json:"created_at"`
 }
 
 type User struct {

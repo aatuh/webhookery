@@ -2,9 +2,18 @@ package app
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/json"
+	"encoding/pem"
 	"errors"
+	"math/big"
+	"net/netip"
+	"strings"
 	"testing"
+	"time"
 
 	"webhookery/internal/authz"
 	"webhookery/internal/domain"
@@ -183,6 +192,40 @@ func TestControlServiceTestEndpointRequiresReason(t *testing.T) {
 	_, err := svc.TestEndpoint(context.Background(), actor, "end_123", TestEndpointRequest{})
 	if !errors.Is(err, ErrInvalidInput) {
 		t.Fatalf("expected invalid input, got %v", err)
+	}
+}
+
+func TestControlServiceEndpointMTLSValidation(t *testing.T) {
+	store := &fakeControlStore{}
+	svc := NewControlService(store, ssrf.Validator{Resolver: ssrf.StaticResolver{
+		"receiver.example": {netip.MustParseAddr("93.184.216.34")},
+	}})
+	actor := authz.Actor{ID: "usr_1", TenantID: "ten_a", Role: authz.RoleDeveloper, Scopes: []string{"endpoints:write"}}
+
+	_, _, err := svc.CreateEndpoint(context.Background(), actor, CreateEndpointRequest{
+		Name:              "receiver",
+		URL:               "https://receiver.example/webhook",
+		MTLSClientCertPEM: "not a cert",
+	})
+	if !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("expected client key requirement, got %v", err)
+	}
+
+	certPEM, keyPEM := testClientCertificatePEM(t, "Webhookery Test Client")
+	endpoint, _, err := svc.CreateEndpoint(context.Background(), actor, CreateEndpointRequest{
+		Name:              "receiver",
+		URL:               "https://receiver.example/webhook",
+		MTLSClientCertPEM: certPEM,
+		MTLSClientKeyPEM:  keyPEM,
+	})
+	if err != nil {
+		t.Fatalf("expected valid mTLS endpoint config, got %v", err)
+	}
+	if !store.endpoint.MTLSEnabled || len(store.endpoint.MTLSClientKeyPEM) == 0 || !endpoint.MTLSEnabled {
+		t.Fatalf("expected mTLS endpoint material to use the store path, stored=%+v returned=%+v", store.endpoint, endpoint)
+	}
+	if !strings.Contains(endpoint.MTLSCertSubject, "Webhookery Test Client") {
+		t.Fatalf("expected certificate subject metadata, got %q", endpoint.MTLSCertSubject)
 	}
 }
 
@@ -451,6 +494,34 @@ func TestControlServiceAuditChainAnchorRequiresSecurityWriteAndReason(t *testing
 	}
 }
 
+func testClientCertificatePEM(t *testing.T, commonName string) (string, string) {
+	t.Helper()
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	template := &x509.Certificate{
+		SerialNumber: big.NewInt(1),
+		Subject:      pkix.Name{CommonName: commonName},
+		NotBefore:    now.Add(-time.Hour),
+		NotAfter:     now.Add(time.Hour),
+		KeyUsage:     x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
+	}
+	der, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	keyDER, err := x509.MarshalPKCS8PrivateKey(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
+	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER})
+	return string(certPEM), string(keyPEM)
+}
+
 type fakeControlStore struct {
 	eventTenantID              string
 	auditExportTenantID        string
@@ -471,6 +542,7 @@ type fakeControlStore struct {
 	approveReplayTenantID      string
 	approveReplayActorID       string
 	approveReplayReason        string
+	endpoint                   domain.Endpoint
 }
 
 func (f *fakeControlStore) CreateAPIKey(_ context.Context, input APIKeyCreateInput) (domain.APIKey, error) {
@@ -490,8 +562,10 @@ func (f *fakeControlStore) CreateSource(context.Context, domain.Source) (domain.
 func (f *fakeControlStore) ListSources(context.Context, string, int) ([]domain.Source, error) {
 	return nil, nil
 }
-func (f *fakeControlStore) CreateEndpoint(context.Context, domain.Endpoint) (domain.Endpoint, error) {
-	return domain.Endpoint{}, nil
+func (f *fakeControlStore) CreateEndpoint(_ context.Context, endpoint domain.Endpoint) (domain.Endpoint, error) {
+	f.endpoint = endpoint
+	endpoint.ID = "end_1"
+	return endpoint, nil
 }
 func (f *fakeControlStore) TestEndpoint(context.Context, string, string, string, string) (domain.Delivery, error) {
 	return domain.Delivery{}, nil
