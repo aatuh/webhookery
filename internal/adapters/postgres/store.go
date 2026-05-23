@@ -4774,6 +4774,13 @@ func (s *Store) applyAuditEventRetention(ctx context.Context, tx pgx.Tx, policy 
 		return 0, err
 	}
 	for _, id := range ids {
+		if _, err := tx.Exec(ctx, `
+			UPDATE audit_chain_entries
+			SET state=$3, audit_event_deleted_at=now(), tombstone_reason=$4
+			WHERE tenant_id=$1 AND audit_event_id=$2 AND state<>$3`,
+			policy.TenantID, id, domain.AuditChainEntryStateRetained, "retention_policy:"+policy.ID); err != nil {
+			return 0, err
+		}
 		if _, err := tx.Exec(ctx, `DELETE FROM audit_events WHERE tenant_id=$1 AND id=$2`, policy.TenantID, id); err != nil {
 			return 0, err
 		}
