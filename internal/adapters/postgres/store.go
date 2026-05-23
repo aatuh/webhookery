@@ -2248,11 +2248,16 @@ func (s *Store) createDeliveriesForEventWithOptions(ctx context.Context, tenantI
 			subRows.Close()
 			return 0, err
 		}
+		payloadHash, err := s.deliveryPayloadSHA256(ctx, tx, tenantID, payloadID)
+		if err != nil {
+			subRows.Close()
+			return 0, err
+		}
 		if opts.ReplayJobID != "" {
 			if err := insertReplayDecisionEvidence(ctx, tx, replayEvidence{
 				tenantID: tenantID, replayJobID: opts.ReplayJobID, eventID: eventID, newDeliveryID: deliveryID,
 				configMode: opts.ConfigMode, subscriptionVersionID: subscriptionVersionID, retryPolicyID: retryPolicyID,
-				adapterVersionID: adapterVersionID, normalizedEnvelopeID: normalizedID, transformationVersionID: transformationVersionID, deliveryPayloadID: payloadID,
+				adapterVersionID: adapterVersionID, normalizedEnvelopeID: normalizedID, transformationVersionID: transformationVersionID, deliveryPayloadID: payloadID, deliveryPayloadSHA256: payloadHash,
 			}); err != nil {
 				subRows.Close()
 				return 0, err
@@ -2290,11 +2295,16 @@ func (s *Store) createDeliveriesForEventWithOptions(ctx context.Context, tenantI
 			routeRows.Close()
 			return 0, err
 		}
+		payloadHash, err := s.deliveryPayloadSHA256(ctx, tx, tenantID, payloadID)
+		if err != nil {
+			routeRows.Close()
+			return 0, err
+		}
 		if opts.ReplayJobID != "" {
 			if err := insertReplayDecisionEvidence(ctx, tx, replayEvidence{
 				tenantID: tenantID, replayJobID: opts.ReplayJobID, eventID: eventID, newDeliveryID: deliveryID,
 				configMode: opts.ConfigMode, routeVersionID: routeVersionID, retryPolicyID: retryPolicyID,
-				adapterVersionID: adapterVersionID, normalizedEnvelopeID: normalizedID, transformationVersionID: transformationVersionID, deliveryPayloadID: payloadID,
+				adapterVersionID: adapterVersionID, normalizedEnvelopeID: normalizedID, transformationVersionID: transformationVersionID, deliveryPayloadID: payloadID, deliveryPayloadSHA256: payloadHash,
 			}); err != nil {
 				routeRows.Close()
 				return 0, err
@@ -2413,6 +2423,18 @@ func (s *Store) cloneDeliveryPayload(ctx context.Context, tx pgx.Tx, tenantID, s
 		return "", "", "", "", err
 	}
 	return payloadID, normalizedID, adapterVersionID, transformationVersionID, nil
+}
+
+func (s *Store) deliveryPayloadSHA256(ctx context.Context, tx pgx.Tx, tenantID, payloadID string) (string, error) {
+	if payloadID == "" {
+		return "", nil
+	}
+	var hash string
+	err := tx.QueryRow(ctx, `SELECT sha256 FROM delivery_payloads WHERE tenant_id=$1 AND id=$2`, tenantID, payloadID).Scan(&hash)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", app.ErrNotFound
+	}
+	return hash, err
 }
 
 func (s *Store) legacyDeliveryEnvelope(ctx context.Context, tx pgx.Tx, tenantID, eventID string) ([]byte, error) {
@@ -2554,13 +2576,17 @@ func (s *Store) createDeliveryFromExisting(ctx context.Context, tenantID, delive
 	if err != nil {
 		return 0, replayEvidence{}, err
 	}
+	payloadHash, err := s.deliveryPayloadSHA256(ctx, tx, tenantID, newPayloadID)
+	if err != nil {
+		return 0, replayEvidence{}, err
+	}
 	if err := tx.Commit(ctx); err != nil {
 		return 0, replayEvidence{}, err
 	}
 	return 1, replayEvidence{
 		tenantID: tenantID, replayJobID: opts.ReplayJobID, eventID: eventID, originalDeliveryID: deliveryID, newDeliveryID: newDeliveryID,
 		configMode: opts.ConfigMode, routeVersionID: routeVersionID, subscriptionVersionID: subscriptionVersionID, retryPolicyID: retryPolicyID,
-		adapterVersionID: adapterVersionID, normalizedEnvelopeID: normalizedID, transformationVersionID: transformationVersionID, deliveryPayloadID: newPayloadID,
+		adapterVersionID: adapterVersionID, normalizedEnvelopeID: normalizedID, transformationVersionID: transformationVersionID, deliveryPayloadID: newPayloadID, deliveryPayloadSHA256: payloadHash,
 	}, nil
 }
 
@@ -2675,10 +2701,14 @@ func (s *Store) createDeliveriesFromOriginalEvent(ctx context.Context, tenantID,
 		if err != nil {
 			return 0, err
 		}
+		payloadHash, err := s.deliveryPayloadSHA256(ctx, tx, tenantID, newPayloadID)
+		if err != nil {
+			return 0, err
+		}
 		if err := insertReplayDecisionEvidence(ctx, tx, replayEvidence{
 			tenantID: tenantID, replayJobID: opts.ReplayJobID, eventID: eventID, originalDeliveryID: original.id, newDeliveryID: newDeliveryID,
 			configMode: opts.ConfigMode, routeVersionID: original.routeVersionID, subscriptionVersionID: original.subscriptionVersionID, retryPolicyID: original.retryPolicyID,
-			adapterVersionID: adapterVersionID, normalizedEnvelopeID: normalizedID, transformationVersionID: transformationVersionID, deliveryPayloadID: newPayloadID,
+			adapterVersionID: adapterVersionID, normalizedEnvelopeID: normalizedID, transformationVersionID: transformationVersionID, deliveryPayloadID: newPayloadID, deliveryPayloadSHA256: payloadHash,
 		}); err != nil {
 			return 0, err
 		}
@@ -2703,6 +2733,7 @@ type replayEvidence struct {
 	normalizedEnvelopeID    string
 	transformationVersionID string
 	deliveryPayloadID       string
+	deliveryPayloadSHA256   string
 }
 
 func insertReplayDecisionEvidence(ctx context.Context, tx pgx.Tx, ev replayEvidence) error {
@@ -2711,10 +2742,10 @@ func insertReplayDecisionEvidence(ctx context.Context, tx pgx.Tx, ev replayEvide
 	}
 	if _, err := tx.Exec(ctx, `
 		INSERT INTO replay_items(id, tenant_id, replay_job_id, event_id, original_delivery_id, new_delivery_id, state, config_mode,
-			route_version_id, subscription_version_id, retry_policy_id, adapter_version_id, normalized_envelope_id, transformation_version_id, delivery_payload_id, completed_at)
-		VALUES($1,$2,$3,$4,$5,$6,'completed',$7,$8,$9,$10,$11,$12,$13,$14,now())`,
+			route_version_id, subscription_version_id, retry_policy_id, adapter_version_id, normalized_envelope_id, transformation_version_id, delivery_payload_id, delivery_payload_sha256, completed_at)
+		VALUES($1,$2,$3,$4,$5,$6,'completed',$7,$8,$9,$10,$11,$12,$13,$14,$15,now())`,
 		mustID("rpi"), ev.tenantID, ev.replayJobID, ev.eventID, ev.originalDeliveryID, ev.newDeliveryID, ev.configMode,
-		ev.routeVersionID, ev.subscriptionVersionID, ev.retryPolicyID, ev.adapterVersionID, ev.normalizedEnvelopeID, ev.transformationVersionID, ev.deliveryPayloadID,
+		ev.routeVersionID, ev.subscriptionVersionID, ev.retryPolicyID, ev.adapterVersionID, ev.normalizedEnvelopeID, ev.transformationVersionID, ev.deliveryPayloadID, ev.deliveryPayloadSHA256,
 	); err != nil {
 		return err
 	}
@@ -2724,10 +2755,10 @@ func insertReplayDecisionEvidence(ctx context.Context, tx pgx.Tx, ev replayEvide
 	}
 	_, err := tx.Exec(ctx, `
 		INSERT INTO replay_receipts(id, tenant_id, replay_job_id, event_id, delivery_id, config_mode,
-			route_version_id, subscription_version_id, retry_policy_id, adapter_version_id, normalized_envelope_id, transformation_version_id, delivery_payload_id)
-		VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
+			route_version_id, subscription_version_id, retry_policy_id, adapter_version_id, normalized_envelope_id, transformation_version_id, delivery_payload_id, delivery_payload_sha256)
+		VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
 		mustID("rrc"), ev.tenantID, ev.replayJobID, ev.eventID, receiptDeliveryID, ev.configMode,
-		ev.routeVersionID, ev.subscriptionVersionID, ev.retryPolicyID, ev.adapterVersionID, ev.normalizedEnvelopeID, ev.transformationVersionID, ev.deliveryPayloadID,
+		ev.routeVersionID, ev.subscriptionVersionID, ev.retryPolicyID, ev.adapterVersionID, ev.normalizedEnvelopeID, ev.transformationVersionID, ev.deliveryPayloadID, ev.deliveryPayloadSHA256,
 	)
 	return err
 }
