@@ -145,6 +145,12 @@ Provider-specific behavior checked on May 25, 2026:
   envelopes with `application/cloudevents+json`:
   https://github.com/cloudevents/spec/blob/v1.0.2/cloudevents/bindings/http-protocol-binding.md
 
+The generic JWT/JWS ingress adapter is intentionally narrow. It accepts compact
+JWTs from `Authorization: Bearer ...` or `Webhook-JWT`, supports only HS256
+with the source verification secret, rejects `alg=none` and other algorithms,
+requires `exp`, honors `nbf` and future `iat`, and requires `body_sha256` to
+match the exact raw request body captured by Webhookery.
+
 ## Delivery Worker
 
 The worker claims durable outbox rows with database leases, evaluates active

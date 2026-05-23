@@ -1,6 +1,10 @@
 package provider
 
 import (
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"strconv"
@@ -40,6 +44,7 @@ func BuiltInRegistry() Registry {
 		"shopify":        ShopifyAdapter{},
 		"slack":          SlackAdapter{},
 		"generic-hmac":   GenericHMACAdapter{},
+		"generic-jwt":    GenericJWTAdapter{},
 		"cloudevents":    CloudEventsAdapter{},
 		"internal":       InternalTrustedAdapter{},
 		"generic-unsafe": UnsafeAdapter{},
@@ -155,6 +160,70 @@ func (GenericHMACAdapter) Verify(input VerifyInput) VerifyResult {
 	return result("generic-hmac", true, verifier.ReasonOK)
 }
 
+type GenericJWTAdapter struct{}
+
+func (GenericJWTAdapter) Name() string { return "generic-jwt" }
+
+func (GenericJWTAdapter) Verify(input VerifyInput) VerifyResult {
+	token := bearerToken(firstHeader(input.Headers, "authorization"))
+	if token == "" {
+		token = strings.TrimSpace(firstHeader(input.Headers, "webhook-jwt"))
+	}
+	if token == "" {
+		return result("generic-jwt", false, verifier.ReasonMissingSignature)
+	}
+	parts := strings.Split(token, ".")
+	if len(parts) != 3 || parts[0] == "" || parts[1] == "" || parts[2] == "" {
+		return result("generic-jwt", false, verifier.ReasonMalformedHeader)
+	}
+	var header struct {
+		Algorithm string `json:"alg"`
+		Type      string `json:"typ"`
+		KeyID     string `json:"kid"`
+	}
+	if !decodeJWTPart(parts[0], &header) {
+		return result("generic-jwt", false, verifier.ReasonMalformedHeader)
+	}
+	if header.Algorithm != "HS256" {
+		return result("generic-jwt", false, verifier.ReasonUnsupportedAlg)
+	}
+	var claims map[string]any
+	if !decodeJWTPart(parts[1], &claims) {
+		return result("generic-jwt", false, verifier.ReasonMalformedHeader)
+	}
+	signature, err := decodeBase64URL(parts[2])
+	if err != nil {
+		return result("generic-jwt", false, verifier.ReasonMalformedHeader)
+	}
+	mac := hmac.New(sha256.New, input.Secret)
+	_, _ = mac.Write([]byte(parts[0] + "." + parts[1]))
+	if !hmac.Equal(signature, mac.Sum(nil)) {
+		return result("generic-jwt", false, verifier.ReasonInvalidSignature)
+	}
+	now := input.Now
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	exp := jwtNumericClaim(claims, "exp")
+	if exp == 0 {
+		return result("generic-jwt", false, verifier.ReasonMalformedHeader)
+	}
+	if now.Unix() >= exp {
+		return VerifyResult{Provider: "generic-jwt", Reason: verifier.ReasonExpiredTimestamp, Timestamp: time.Unix(exp, 0)}
+	}
+	if nbf := jwtNumericClaim(claims, "nbf"); nbf != 0 && now.Unix() < nbf {
+		return VerifyResult{Provider: "generic-jwt", Reason: verifier.ReasonExpiredTimestamp, Timestamp: time.Unix(nbf, 0)}
+	}
+	if iat := jwtNumericClaim(claims, "iat"); iat != 0 && now.Add(5*time.Minute).Unix() < iat {
+		return VerifyResult{Provider: "generic-jwt", Reason: verifier.ReasonExpiredTimestamp, Timestamp: time.Unix(iat, 0)}
+	}
+	bodyHash, _ := claims["body_sha256"].(string)
+	if !strings.EqualFold(strings.TrimSpace(bodyHash), sha256Hex(input.RawBody)) {
+		return result("generic-jwt", false, verifier.ReasonInvalidSignature)
+	}
+	return result("generic-jwt", true, verifier.ReasonOK)
+}
+
 type CloudEventsAdapter struct{}
 
 func (CloudEventsAdapter) Name() string { return "cloudevents" }
@@ -210,4 +279,45 @@ func firstHeader(headers map[string][]string, name string) string {
 		}
 	}
 	return ""
+}
+
+func bearerToken(header string) string {
+	prefix, token, ok := strings.Cut(strings.TrimSpace(header), " ")
+	if !ok || !strings.EqualFold(prefix, "Bearer") {
+		return ""
+	}
+	return strings.TrimSpace(token)
+}
+
+func decodeJWTPart(part string, dst any) bool {
+	raw, err := decodeBase64URL(part)
+	if err != nil {
+		return false
+	}
+	return json.Unmarshal(raw, dst) == nil
+}
+
+func decodeBase64URL(value string) ([]byte, error) {
+	raw, err := base64.RawURLEncoding.DecodeString(value)
+	if err == nil {
+		return raw, nil
+	}
+	return base64.URLEncoding.DecodeString(value)
+}
+
+func jwtNumericClaim(claims map[string]any, key string) int64 {
+	switch value := claims[key].(type) {
+	case float64:
+		return int64(value)
+	case json.Number:
+		parsed, _ := value.Int64()
+		return parsed
+	default:
+		return 0
+	}
+}
+
+func sha256Hex(body []byte) string {
+	sum := sha256.Sum256(body)
+	return hex.EncodeToString(sum[:])
 }

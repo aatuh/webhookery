@@ -806,6 +806,17 @@ paths:
           description: Accepted after durable capture for binary or structured CloudEvents envelopes.
         "431":
           description: Request headers too large.
+  /v1/ingest/generic-jwt/{source_id}:
+    post:
+      summary: Generic JWT/JWS webhook ingestion
+      description: Accepts compact JWT/JWS signatures from `Authorization: Bearer ...` or `Webhook-JWT`; only HS256 is supported and the token must include `exp` plus a `body_sha256` claim for the exact raw body.
+      responses:
+        "200":
+          description: Accepted after durable capture.
+        "401":
+          description: Invalid or unsupported JWT signature.
+        "431":
+          description: Request headers too large.
   /v1/deliveries:
     get:
       summary: List deliveries

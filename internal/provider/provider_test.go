@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"testing"
 	"time"
@@ -124,6 +125,68 @@ func TestInternalTrustedProducerAdapter(t *testing.T) {
 	}
 }
 
+func TestGenericJWTAdapterVerifiesHS256AndBodyHash(t *testing.T) {
+	adapter, ok := BuiltInRegistry().Adapter("generic-jwt")
+	if !ok {
+		t.Fatal("missing generic-jwt adapter")
+	}
+	now := time.Unix(1_700_000_000, 0)
+	body := []byte(`{"id":"evt_jwt","type":"invoice.paid"}`)
+	token := jwtHS256(t, []byte("whsec_test"), map[string]any{
+		"iss":         "issuer",
+		"jti":         "evt_jwt",
+		"iat":         now.Unix(),
+		"exp":         now.Add(time.Minute).Unix(),
+		"body_sha256": sha256Hex(body),
+	})
+
+	result := adapter.Verify(VerifyInput{
+		RawBody: body,
+		Headers: map[string][]string{
+			"authorization": {"Bearer " + token},
+		},
+		Secret: []byte("whsec_test"),
+		Now:    now,
+	})
+	if !result.Verified {
+		t.Fatalf("expected generic JWT to verify, got %s", result.Reason)
+	}
+
+	mutated := adapter.Verify(VerifyInput{
+		RawBody: []byte(`{"id":"evt_jwt","type":"invoice.failed"}`),
+		Headers: map[string][]string{
+			"authorization": {"Bearer " + token},
+		},
+		Secret: []byte("whsec_test"),
+		Now:    now,
+	})
+	if mutated.Verified || mutated.Reason != "invalid_signature" {
+		t.Fatalf("mutated raw body must not verify, verified=%v reason=%s", mutated.Verified, mutated.Reason)
+	}
+}
+
+func TestGenericJWTAdapterRejectsAlgNone(t *testing.T) {
+	adapter, ok := BuiltInRegistry().Adapter("generic-jwt")
+	if !ok {
+		t.Fatal("missing generic-jwt adapter")
+	}
+	token := base64.RawURLEncoding.EncodeToString(mustJSON(t, map[string]any{"alg": "none"})) + "." +
+		base64.RawURLEncoding.EncodeToString(mustJSON(t, map[string]any{"body_sha256": sha256Hex([]byte(`{}`))})) + "." +
+		base64.RawURLEncoding.EncodeToString([]byte("ignored"))
+
+	result := adapter.Verify(VerifyInput{
+		RawBody: []byte(`{}`),
+		Headers: map[string][]string{
+			"authorization": {"Bearer " + token},
+		},
+		Secret: []byte("whsec_test"),
+		Now:    time.Unix(1_700_000_000, 0),
+	})
+	if result.Verified || result.Reason != "unsupported_algorithm" {
+		t.Fatalf("alg none must be rejected, verified=%v reason=%s", result.Verified, result.Reason)
+	}
+}
+
 func hmacHex(secret, payload []byte) string {
 	mac := hmac.New(sha256.New, secret)
 	_, _ = mac.Write(payload)
@@ -134,4 +197,23 @@ func hmacBase64(secret, payload []byte) string {
 	mac := hmac.New(sha256.New, secret)
 	_, _ = mac.Write(payload)
 	return base64.StdEncoding.EncodeToString(mac.Sum(nil))
+}
+
+func jwtHS256(t *testing.T, secret []byte, claims map[string]any) string {
+	t.Helper()
+	header := base64.RawURLEncoding.EncodeToString(mustJSON(t, map[string]any{"alg": "HS256", "typ": "JWT"}))
+	payload := base64.RawURLEncoding.EncodeToString(mustJSON(t, claims))
+	signingInput := header + "." + payload
+	mac := hmac.New(sha256.New, secret)
+	_, _ = mac.Write([]byte(signingInput))
+	return signingInput + "." + base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
+}
+
+func mustJSON(t *testing.T, value any) []byte {
+	t.Helper()
+	raw, err := json.Marshal(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return raw
 }
