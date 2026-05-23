@@ -41,6 +41,22 @@ type VerificationResult struct {
 	SignatureVersion string
 }
 
+type VerifyWebhookerySignatureInput struct {
+	Secret           []byte
+	RawBody          []byte
+	SignatureHeader  string
+	KeyIDHeader      string
+	KeyVersionHeader string
+	Now              time.Time
+	Tolerance        time.Duration
+}
+
+type WebhookerySignatureResult struct {
+	VerificationResult
+	KeyID      string
+	KeyVersion int
+}
+
 func SignHMACSHA256Hex(secret, payload []byte) string {
 	mac := hmac.New(sha256.New, secret)
 	_, _ = mac.Write(payload)
@@ -123,6 +139,31 @@ func VerifyTimestampedHMAC(input VerifyTimestampedHMACInput) VerificationResult 
 		return VerificationResult{Reason: ReasonInvalidSignature, Timestamp: ts, Age: age, SignatureVersion: version}
 	}
 	return VerificationResult{Valid: true, Reason: ReasonOK, Timestamp: ts, Age: age, SignatureVersion: version}
+}
+
+func VerifyWebhookerySignature(input VerifyWebhookerySignatureInput) WebhookerySignatureResult {
+	keyVersion := 0
+	if strings.TrimSpace(input.KeyVersionHeader) != "" {
+		parsed, err := strconv.Atoi(strings.TrimSpace(input.KeyVersionHeader))
+		if err != nil || parsed <= 0 {
+			return WebhookerySignatureResult{VerificationResult: VerificationResult{Reason: ReasonMalformedHeader}, KeyID: strings.TrimSpace(input.KeyIDHeader)}
+		}
+		keyVersion = parsed
+	}
+	result := VerifyTimestampedHMAC(VerifyTimestampedHMACInput{
+		Secret:          input.Secret,
+		RawBody:         input.RawBody,
+		Header:          input.SignatureHeader,
+		Now:             input.Now,
+		Tolerance:       input.Tolerance,
+		ExpectedVersion: "v1",
+		Encoding:        EncodingHex,
+	})
+	return WebhookerySignatureResult{
+		VerificationResult: result,
+		KeyID:              strings.TrimSpace(input.KeyIDHeader),
+		KeyVersion:         keyVersion,
+	}
 }
 
 func parseKVHeader(header string) map[string]string {

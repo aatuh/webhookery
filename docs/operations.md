@@ -30,6 +30,13 @@ uses the `Webhook-Signature` header with HMAC-SHA256 over:
 timestamp + "." + raw_delivery_body
 ```
 
+Receivers should verify the exact raw delivery body with
+`pkg/verifier.VerifyWebhookerySignature`, a five-minute timestamp window unless
+their own policy requires a smaller window, and their endpoint's active or
+grace-period signing secret. `Webhook-Signature-Key-Id` and
+`Webhook-Signature-Key-Version` are metadata for selecting and auditing the
+receiver-side secret version; they are not a substitute for HMAC verification.
+
 Webhook/source secrets and endpoint signing secrets are stored through an
 envelope encryption interface. Example env files contain placeholders only.
 Logs, errors, metrics, and UI surfaces must not print raw API keys, webhook

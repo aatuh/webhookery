@@ -55,3 +55,43 @@ func TestCompareRejectsMalformedHex(t *testing.T) {
 		t.Fatal("malformed signature must not verify")
 	}
 }
+
+func TestVerifyWebhookerySignatureReturnsKeyMetadata(t *testing.T) {
+	now := time.Unix(1_700_000_000, 0)
+	raw := []byte(`{"id":"evt_123"}`)
+	header := TimestampedHeader("v1", now, []byte("secret"), raw)
+
+	result := VerifyWebhookerySignature(VerifyWebhookerySignatureInput{
+		Secret:           []byte("secret"),
+		RawBody:          raw,
+		SignatureHeader:  header,
+		KeyIDHeader:      "esec_123",
+		KeyVersionHeader: "7",
+		Now:              now,
+		Tolerance:        5 * time.Minute,
+	})
+	if !result.Valid {
+		t.Fatalf("expected valid signature, got %s", result.Reason)
+	}
+	if result.KeyID != "esec_123" || result.KeyVersion != 7 {
+		t.Fatalf("unexpected key metadata: %+v", result)
+	}
+}
+
+func TestVerifyWebhookerySignatureRejectsMalformedKeyVersion(t *testing.T) {
+	now := time.Unix(1_700_000_000, 0)
+	raw := []byte(`{"id":"evt_123"}`)
+	header := TimestampedHeader("v1", now, []byte("secret"), raw)
+
+	result := VerifyWebhookerySignature(VerifyWebhookerySignatureInput{
+		Secret:           []byte("secret"),
+		RawBody:          raw,
+		SignatureHeader:  header,
+		KeyVersionHeader: "not-an-int",
+		Now:              now,
+		Tolerance:        5 * time.Minute,
+	})
+	if result.Valid || result.Reason != ReasonMalformedHeader {
+		t.Fatalf("expected malformed key version rejection, got %+v", result)
+	}
+}
