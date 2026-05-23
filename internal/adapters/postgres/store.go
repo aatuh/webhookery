@@ -1784,6 +1784,260 @@ func (s *Store) ListAuditEvents(ctx context.Context, tenantID string, limit int)
 	return out, rows.Err()
 }
 
+func (s *Store) GetAuditChainHead(ctx context.Context, tenantID string) (domain.AuditChainHead, error) {
+	var head domain.AuditChainHead
+	err := s.pool.QueryRow(ctx, `
+		SELECT tenant_id, sequence, chain_hash, last_audit_event_id, updated_at
+		FROM audit_chain_heads
+		WHERE tenant_id=$1`, tenantID).
+		Scan(&head.TenantID, &head.Sequence, &head.ChainHash, &head.LastAuditEventID, &head.UpdatedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		head.TenantID = tenantID
+	} else if err != nil {
+		return domain.AuditChainHead{}, err
+	}
+	if err := s.pool.QueryRow(ctx, `
+		SELECT count(*)
+		FROM audit_events a
+		WHERE a.tenant_id=$1
+		  AND NOT EXISTS (
+		      SELECT 1 FROM audit_chain_entries c
+		      WHERE c.tenant_id=a.tenant_id AND c.audit_event_id=a.id
+		  )`, tenantID).Scan(&head.UnchainedEvents); err != nil {
+		return domain.AuditChainHead{}, err
+	}
+	anchor := s.pool.QueryRow(ctx, `
+		SELECT id, to_sequence, created_at
+		FROM audit_chain_anchors
+		WHERE tenant_id=$1
+		ORDER BY to_sequence DESC, created_at DESC
+		LIMIT 1`, tenantID)
+	if err := anchor.Scan(&head.LastAnchorID, &head.LastAnchorSequence, &head.LastAnchoredAt); err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return domain.AuditChainHead{}, err
+	}
+	return head, nil
+}
+
+func (s *Store) VerifyAuditChain(ctx context.Context, tenantID string, req app.AuditChainVerifyRequest) (domain.AuditChainVerification, error) {
+	head, err := s.GetAuditChainHead(ctx, tenantID)
+	if err != nil {
+		return domain.AuditChainVerification{}, err
+	}
+	from := req.FromSequence
+	if from <= 0 {
+		from = 1
+	}
+	to := req.ToSequence
+	if to <= 0 || to > head.Sequence {
+		to = head.Sequence
+	}
+	result := domain.AuditChainVerification{
+		TenantID:       tenantID,
+		Valid:          true,
+		FromSequence:   from,
+		ToSequence:     to,
+		VerifiedAt:     time.Now().UTC(),
+		StartChainHash: "",
+	}
+	if head.Sequence == 0 || from > to {
+		result.ToSequence = 0
+		return result, nil
+	}
+	expectedPrevious := ""
+	if from > 1 {
+		if err := s.pool.QueryRow(ctx, `SELECT chain_hash FROM audit_chain_entries WHERE tenant_id=$1 AND sequence=$2`, tenantID, from-1).Scan(&expectedPrevious); err != nil {
+			result.Valid = false
+			result.Failures = append(result.Failures, domain.AuditChainFailure{Sequence: from - 1, Kind: "missing_previous_entry", Detail: err.Error()})
+			expectedPrevious = ""
+		}
+		result.StartChainHash = expectedPrevious
+	}
+	rows, err := s.pool.Query(ctx, `
+		SELECT c.sequence, c.audit_event_id, c.event_hash, c.previous_chain_hash, c.chain_hash,
+		       c.canonicalization_version, c.state, COALESCE(c.audit_event_deleted_at, 'epoch'::timestamptz), c.tombstone_reason,
+		       COALESCE(a.id,''), COALESCE(a.tenant_id,''), COALESCE(a.actor_id,''), COALESCE(a.action,''),
+		       COALESCE(a.resource,''), COALESCE(a.resource_id,''), COALESCE(a.reason,''), COALESCE(a.occurred_at, 'epoch'::timestamptz)
+		FROM audit_chain_entries c
+		LEFT JOIN audit_events a ON a.tenant_id=c.tenant_id AND a.id=c.audit_event_id
+		WHERE c.tenant_id=$1 AND c.sequence BETWEEN $2 AND $3
+		ORDER BY c.sequence ASC`, tenantID, from, to)
+	if err != nil {
+		return domain.AuditChainVerification{}, err
+	}
+	defer rows.Close()
+	expectedSequence := from
+	for rows.Next() {
+		var sequence int64
+		var auditEventID, eventHash, previousHash, chainHash, version, state, tombstoneReason string
+		var deletedAt time.Time
+		var event domain.AuditEvent
+		if err := rows.Scan(&sequence, &auditEventID, &eventHash, &previousHash, &chainHash, &version, &state, &deletedAt, &tombstoneReason,
+			&event.ID, &event.TenantID, &event.ActorID, &event.Action, &event.Resource, &event.ResourceID, &event.Reason, &event.OccurredAt); err != nil {
+			return domain.AuditChainVerification{}, err
+		}
+		for expectedSequence < sequence {
+			result.Valid = false
+			result.Failures = append(result.Failures, domain.AuditChainFailure{Sequence: expectedSequence, Kind: "missing_entry"})
+			expectedSequence++
+		}
+		result.CheckedEntries++
+		if version != auditchain.CanonicalizationVersion {
+			result.Valid = false
+			result.Failures = append(result.Failures, domain.AuditChainFailure{Sequence: sequence, AuditEventID: auditEventID, Kind: "unsupported_canonicalization_version", Detail: version})
+		}
+		if previousHash != expectedPrevious {
+			result.Valid = false
+			result.Failures = append(result.Failures, domain.AuditChainFailure{Sequence: sequence, AuditEventID: auditEventID, Kind: "previous_hash_mismatch"})
+		}
+		if event.ID == "" {
+			if state == domain.AuditChainEntryStateRetained {
+				result.RetainedEntries++
+			} else {
+				result.Valid = false
+				result.Failures = append(result.Failures, domain.AuditChainFailure{Sequence: sequence, AuditEventID: auditEventID, Kind: "missing_audit_event"})
+			}
+		} else {
+			recomputed, err := auditchain.EventHash(event)
+			if err != nil {
+				return domain.AuditChainVerification{}, err
+			}
+			if recomputed != eventHash {
+				result.Valid = false
+				result.Failures = append(result.Failures, domain.AuditChainFailure{Sequence: sequence, AuditEventID: auditEventID, Kind: "event_hash_mismatch"})
+			}
+		}
+		expectedChainHash := auditchain.ChainHash(expectedPrevious, eventHash)
+		if expectedChainHash != chainHash {
+			result.Valid = false
+			result.Failures = append(result.Failures, domain.AuditChainFailure{Sequence: sequence, AuditEventID: auditEventID, Kind: "chain_hash_mismatch"})
+		}
+		expectedPrevious = chainHash
+		result.EndChainHash = chainHash
+		expectedSequence = sequence + 1
+		_ = deletedAt
+		_ = tombstoneReason
+	}
+	if err := rows.Err(); err != nil {
+		return domain.AuditChainVerification{}, err
+	}
+	for expectedSequence <= to {
+		result.Valid = false
+		result.Failures = append(result.Failures, domain.AuditChainFailure{Sequence: expectedSequence, Kind: "missing_entry"})
+		expectedSequence++
+	}
+	return result, nil
+}
+
+func (s *Store) CreateAuditChainAnchor(ctx context.Context, tenantID, actorID string, req app.AuditChainAnchorRequest) (domain.AuditChainAnchor, error) {
+	verification, err := s.VerifyAuditChain(ctx, tenantID, app.AuditChainVerifyRequest{FromSequence: req.FromSequence, ToSequence: req.ToSequence})
+	if err != nil {
+		return domain.AuditChainAnchor{}, err
+	}
+	if !verification.Valid || verification.CheckedEntries == 0 {
+		return domain.AuditChainAnchor{}, fmt.Errorf("%w: audit chain range is not verifiable", app.ErrInvalidInput)
+	}
+	id := mustID("aca")
+	now := time.Now().UTC()
+	manifest := map[string]any{
+		"id":             id,
+		"tenant_id":      tenantID,
+		"from_sequence":  verification.FromSequence,
+		"to_sequence":    verification.ToSequence,
+		"chain_hash":     verification.EndChainHash,
+		"created_at":     now,
+		"created_by":     actorID,
+		"reason":         req.Reason,
+		"canonical_json": "audit-chain-anchor-v1",
+	}
+	manifestBytes, err := json.Marshal(manifest)
+	if err != nil {
+		return domain.AuditChainAnchor{}, err
+	}
+	storageBackend := domain.RawStoragePostgres
+	objectBucket := ""
+	objectKey := ""
+	objectWritten := false
+	if s.rawStorageMode == domain.RawStorageS3 && s.objectStore != nil {
+		storageBackend = domain.RawStorageS3
+		objectBucket = s.objectBucket
+		objectKey = blobstore.AuditAnchorKey(tenantID, id)
+		if err := s.objectStore.Put(ctx, blobstore.Object{Bucket: objectBucket, Key: objectKey, ContentType: "application/json", SHA256: evidence.SHA256(manifestBytes), SizeBytes: int64(len(manifestBytes))}, manifestBytes); err != nil {
+			return domain.AuditChainAnchor{}, err
+		}
+		objectWritten = true
+	}
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		if objectWritten {
+			_ = s.objectStore.Delete(context.Background(), objectBucket, objectKey)
+		}
+		return domain.AuditChainAnchor{}, err
+	}
+	defer rollback(ctx, tx)
+	var out domain.AuditChainAnchor
+	err = tx.QueryRow(ctx, `
+		INSERT INTO audit_chain_anchors(id, tenant_id, from_sequence, to_sequence, chain_hash, manifest_sha256,
+			storage_backend, object_bucket, object_key, manifest, created_by, reason, created_at)
+		VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,$11,$12,$13)
+		RETURNING id, tenant_id, from_sequence, to_sequence, chain_hash, manifest_sha256, storage_backend, object_bucket, object_key, created_by, reason, created_at`,
+		id, tenantID, verification.FromSequence, verification.ToSequence, verification.EndChainHash, evidence.SHA256(manifestBytes),
+		storageBackend, objectBucket, objectKey, string(manifestBytes), actorID, req.Reason, now).
+		Scan(&out.ID, &out.TenantID, &out.FromSequence, &out.ToSequence, &out.ChainHash, &out.ManifestSHA256,
+			&out.StorageBackend, &out.ObjectBucket, &out.ObjectKey, &out.CreatedBy, &out.Reason, &out.CreatedAt)
+	if err != nil {
+		if objectWritten {
+			_ = s.objectStore.Delete(context.Background(), objectBucket, objectKey)
+		}
+		return domain.AuditChainAnchor{}, err
+	}
+	if _, err := recordAuditEventTx(ctx, tx, auditEventInput{TenantID: tenantID, ActorID: actorID, Action: "audit_chain.anchored", Resource: "audit_chain_anchor", ResourceID: id, Reason: req.Reason}); err != nil {
+		if objectWritten {
+			_ = s.objectStore.Delete(context.Background(), objectBucket, objectKey)
+		}
+		return domain.AuditChainAnchor{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		if objectWritten {
+			_ = s.objectStore.Delete(context.Background(), objectBucket, objectKey)
+		}
+		return domain.AuditChainAnchor{}, err
+	}
+	return out, nil
+}
+
+func (s *Store) ListAuditChainAnchors(ctx context.Context, tenantID string, limit int) ([]domain.AuditChainAnchor, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT id, tenant_id, from_sequence, to_sequence, chain_hash, manifest_sha256, storage_backend, object_bucket, object_key, created_by, reason, created_at
+		FROM audit_chain_anchors
+		WHERE tenant_id=$1
+		ORDER BY created_at DESC
+		LIMIT $2`, tenantID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []domain.AuditChainAnchor
+	for rows.Next() {
+		item, err := scanAuditChainAnchor(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, item)
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) GetAuditChainAnchor(ctx context.Context, tenantID, anchorID string) (domain.AuditChainAnchor, error) {
+	item, err := scanAuditChainAnchor(s.pool.QueryRow(ctx, `
+		SELECT id, tenant_id, from_sequence, to_sequence, chain_hash, manifest_sha256, storage_backend, object_bucket, object_key, created_by, reason, created_at
+		FROM audit_chain_anchors
+		WHERE tenant_id=$1 AND id=$2`, tenantID, anchorID))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return domain.AuditChainAnchor{}, app.ErrNotFound
+	}
+	return item, err
+}
+
 func (s *Store) ListRetentionPolicies(ctx context.Context, tenantID string, limit int) ([]domain.RetentionPolicy, error) {
 	rows, err := s.pool.Query(ctx, `
 		SELECT id, tenant_id, resource_type, source_id, retention_days, state, created_by, created_at, updated_at
@@ -3701,6 +3955,13 @@ func (s *Store) RecordDeliveryAttempt(ctx context.Context, item worker.DeliveryI
 func scanRetentionPolicy(row rowScanner) (domain.RetentionPolicy, error) {
 	var item domain.RetentionPolicy
 	err := row.Scan(&item.ID, &item.TenantID, &item.ResourceType, &item.SourceID, &item.RetentionDays, &item.State, &item.CreatedBy, &item.CreatedAt, &item.UpdatedAt)
+	return item, err
+}
+
+func scanAuditChainAnchor(row rowScanner) (domain.AuditChainAnchor, error) {
+	var item domain.AuditChainAnchor
+	err := row.Scan(&item.ID, &item.TenantID, &item.FromSequence, &item.ToSequence, &item.ChainHash, &item.ManifestSHA256,
+		&item.StorageBackend, &item.ObjectBucket, &item.ObjectKey, &item.CreatedBy, &item.Reason, &item.CreatedAt)
 	return item, err
 }
 

@@ -59,6 +59,11 @@ type ControlStore interface {
 	ListEndpointHealth(ctx context.Context, tenantID string, limit int) ([]domain.EndpointHealth, error)
 	OpsMetrics(ctx context.Context, tenantID string) (domain.OpsMetrics, error)
 	ListAuditEvents(ctx context.Context, tenantID string, limit int) ([]domain.AuditEvent, error)
+	GetAuditChainHead(ctx context.Context, tenantID string) (domain.AuditChainHead, error)
+	VerifyAuditChain(ctx context.Context, tenantID string, req AuditChainVerifyRequest) (domain.AuditChainVerification, error)
+	CreateAuditChainAnchor(ctx context.Context, tenantID, actorID string, req AuditChainAnchorRequest) (domain.AuditChainAnchor, error)
+	ListAuditChainAnchors(ctx context.Context, tenantID string, limit int) ([]domain.AuditChainAnchor, error)
+	GetAuditChainAnchor(ctx context.Context, tenantID, anchorID string) (domain.AuditChainAnchor, error)
 	ListRetentionPolicies(ctx context.Context, tenantID string, limit int) ([]domain.RetentionPolicy, error)
 	CreateRetentionPolicy(ctx context.Context, tenantID, actorID string, req CreateRetentionPolicyRequest) (domain.RetentionPolicy, error)
 	UpdateRetentionPolicy(ctx context.Context, tenantID, policyID, actorID string, req UpdateRetentionPolicyRequest) (domain.RetentionPolicy, error)
@@ -318,6 +323,17 @@ type CreateAuditExportRequest struct {
 	IncludeTimelines     bool      `json:"include_timelines"`
 	IncludePayloadBodies bool      `json:"include_payload_bodies"`
 	Reason               string    `json:"reason,omitempty"`
+}
+
+type AuditChainVerifyRequest struct {
+	FromSequence int64 `json:"from_sequence,omitempty"`
+	ToSequence   int64 `json:"to_sequence,omitempty"`
+}
+
+type AuditChainAnchorRequest struct {
+	FromSequence int64  `json:"from_sequence,omitempty"`
+	ToSequence   int64  `json:"to_sequence,omitempty"`
+	Reason       string `json:"reason"`
 }
 
 type CreateTransformationRequest struct {
@@ -853,6 +869,60 @@ func (s *ControlService) ListAuditEvents(ctx context.Context, actor authz.Actor,
 		return nil, ErrForbidden
 	}
 	return s.store.ListAuditEvents(ctx, actor.TenantID, normalizeLimit(limit))
+}
+
+func (s *ControlService) GetAuditChainHead(ctx context.Context, actor authz.Actor) (domain.AuditChainHead, error) {
+	if !authz.Can(actor, "audit:read", actor.TenantID) {
+		return domain.AuditChainHead{}, ErrForbidden
+	}
+	return s.store.GetAuditChainHead(ctx, actor.TenantID)
+}
+
+func (s *ControlService) VerifyAuditChain(ctx context.Context, actor authz.Actor, req AuditChainVerifyRequest) (domain.AuditChainVerification, error) {
+	if !authz.Can(actor, "audit:read", actor.TenantID) {
+		return domain.AuditChainVerification{}, ErrForbidden
+	}
+	if req.FromSequence < 0 || req.ToSequence < 0 {
+		return domain.AuditChainVerification{}, fmt.Errorf("%w: sequence values must be non-negative", ErrInvalidInput)
+	}
+	if req.FromSequence > 0 && req.ToSequence > 0 && req.FromSequence > req.ToSequence {
+		return domain.AuditChainVerification{}, fmt.Errorf("%w: from_sequence must be before to_sequence", ErrInvalidInput)
+	}
+	return s.store.VerifyAuditChain(ctx, actor.TenantID, req)
+}
+
+func (s *ControlService) CreateAuditChainAnchor(ctx context.Context, actor authz.Actor, req AuditChainAnchorRequest) (domain.AuditChainAnchor, error) {
+	if !authz.Can(actor, "security:write", actor.TenantID) {
+		return domain.AuditChainAnchor{}, ErrForbidden
+	}
+	req.Reason = strings.TrimSpace(req.Reason)
+	if req.Reason == "" {
+		return domain.AuditChainAnchor{}, fmt.Errorf("%w: reason is required", ErrInvalidInput)
+	}
+	if req.FromSequence < 0 || req.ToSequence < 0 {
+		return domain.AuditChainAnchor{}, fmt.Errorf("%w: sequence values must be non-negative", ErrInvalidInput)
+	}
+	if req.FromSequence > 0 && req.ToSequence > 0 && req.FromSequence > req.ToSequence {
+		return domain.AuditChainAnchor{}, fmt.Errorf("%w: from_sequence must be before to_sequence", ErrInvalidInput)
+	}
+	return s.store.CreateAuditChainAnchor(ctx, actor.TenantID, actor.ID, req)
+}
+
+func (s *ControlService) ListAuditChainAnchors(ctx context.Context, actor authz.Actor, limit int) ([]domain.AuditChainAnchor, error) {
+	if !authz.Can(actor, "audit:read", actor.TenantID) {
+		return nil, ErrForbidden
+	}
+	return s.store.ListAuditChainAnchors(ctx, actor.TenantID, normalizeLimit(limit))
+}
+
+func (s *ControlService) GetAuditChainAnchor(ctx context.Context, actor authz.Actor, anchorID string) (domain.AuditChainAnchor, error) {
+	if !authz.Can(actor, "audit:read", actor.TenantID) {
+		return domain.AuditChainAnchor{}, ErrForbidden
+	}
+	if strings.TrimSpace(anchorID) == "" {
+		return domain.AuditChainAnchor{}, fmt.Errorf("%w: anchor_id is required", ErrInvalidInput)
+	}
+	return s.store.GetAuditChainAnchor(ctx, actor.TenantID, anchorID)
 }
 
 func (s *ControlService) ListRetentionPolicies(ctx context.Context, actor authz.Actor, limit int) ([]domain.RetentionPolicy, error) {

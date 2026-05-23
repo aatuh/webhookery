@@ -375,6 +375,33 @@ func TestControlServiceReconciliationReadRequiresReplayRead(t *testing.T) {
 	}
 }
 
+func TestControlServiceAuditChainVerifyRequiresAuditRead(t *testing.T) {
+	store := &fakeControlStore{}
+	svc := NewControlService(store, ssrf.Validator{Resolver: ssrf.StaticResolver{}})
+	actor := authz.Actor{ID: "usr_1", TenantID: "ten_a", Role: authz.RoleSupport, Scopes: []string{"events:read"}}
+
+	_, err := svc.VerifyAuditChain(context.Background(), actor, AuditChainVerifyRequest{})
+	if err != ErrForbidden {
+		t.Fatalf("expected forbidden audit chain verify, got %v", err)
+	}
+}
+
+func TestControlServiceAuditChainAnchorRequiresSecurityWriteAndReason(t *testing.T) {
+	store := &fakeControlStore{}
+	svc := NewControlService(store, ssrf.Validator{Resolver: ssrf.StaticResolver{}})
+	auditor := authz.Actor{ID: "usr_1", TenantID: "ten_a", Role: authz.RoleAuditor, Scopes: []string{"audit:read"}}
+	_, err := svc.CreateAuditChainAnchor(context.Background(), auditor, AuditChainAnchorRequest{Reason: "anchor"})
+	if err != ErrForbidden {
+		t.Fatalf("expected forbidden audit chain anchor, got %v", err)
+	}
+
+	security := authz.Actor{ID: "usr_2", TenantID: "ten_a", Role: authz.RoleSecurity, Scopes: []string{"security:write"}}
+	_, err = svc.CreateAuditChainAnchor(context.Background(), security, AuditChainAnchorRequest{})
+	if !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("expected missing reason validation, got %v", err)
+	}
+}
+
 type fakeControlStore struct {
 	eventTenantID              string
 	auditExportTenantID        string
@@ -516,6 +543,21 @@ func (f *fakeControlStore) OpsMetrics(context.Context, string) (domain.OpsMetric
 }
 func (f *fakeControlStore) ListAuditEvents(context.Context, string, int) ([]domain.AuditEvent, error) {
 	return nil, nil
+}
+func (f *fakeControlStore) GetAuditChainHead(context.Context, string) (domain.AuditChainHead, error) {
+	return domain.AuditChainHead{}, nil
+}
+func (f *fakeControlStore) VerifyAuditChain(context.Context, string, AuditChainVerifyRequest) (domain.AuditChainVerification, error) {
+	return domain.AuditChainVerification{Valid: true}, nil
+}
+func (f *fakeControlStore) CreateAuditChainAnchor(context.Context, string, string, AuditChainAnchorRequest) (domain.AuditChainAnchor, error) {
+	return domain.AuditChainAnchor{}, nil
+}
+func (f *fakeControlStore) ListAuditChainAnchors(context.Context, string, int) ([]domain.AuditChainAnchor, error) {
+	return nil, nil
+}
+func (f *fakeControlStore) GetAuditChainAnchor(context.Context, string, string) (domain.AuditChainAnchor, error) {
+	return domain.AuditChainAnchor{}, nil
 }
 func (f *fakeControlStore) ListRetentionPolicies(context.Context, string, int) ([]domain.RetentionPolicy, error) {
 	return nil, nil

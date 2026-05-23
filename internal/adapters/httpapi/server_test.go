@@ -318,6 +318,21 @@ func (noopControlStore) OpsMetrics(context.Context, string) (domain.OpsMetrics, 
 func (noopControlStore) ListAuditEvents(context.Context, string, int) ([]domain.AuditEvent, error) {
 	return nil, nil
 }
+func (noopControlStore) GetAuditChainHead(context.Context, string) (domain.AuditChainHead, error) {
+	return domain.AuditChainHead{}, nil
+}
+func (noopControlStore) VerifyAuditChain(context.Context, string, app.AuditChainVerifyRequest) (domain.AuditChainVerification, error) {
+	return domain.AuditChainVerification{}, nil
+}
+func (noopControlStore) CreateAuditChainAnchor(context.Context, string, string, app.AuditChainAnchorRequest) (domain.AuditChainAnchor, error) {
+	return domain.AuditChainAnchor{}, nil
+}
+func (noopControlStore) ListAuditChainAnchors(context.Context, string, int) ([]domain.AuditChainAnchor, error) {
+	return nil, nil
+}
+func (noopControlStore) GetAuditChainAnchor(context.Context, string, string) (domain.AuditChainAnchor, error) {
+	return domain.AuditChainAnchor{}, nil
+}
 func (noopControlStore) ListRetentionPolicies(context.Context, string, int) ([]domain.RetentionPolicy, error) {
 	return nil, nil
 }

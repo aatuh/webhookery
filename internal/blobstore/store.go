@@ -39,6 +39,10 @@ func ExportKey(tenantID, exportID string) string {
 	return path.Join("evidence-exports", safeSegment(tenantID), safeSegment(exportID)+".tar.gz")
 }
 
+func AuditAnchorKey(tenantID, anchorID string) string {
+	return path.Join("audit-chain-anchors", safeSegment(tenantID), safeSegment(anchorID)+".json")
+}
+
 func safeSegment(value string) string {
 	value = strings.TrimSpace(value)
 	value = safeSegmentPattern.ReplaceAllString(value, "_")
