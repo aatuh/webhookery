@@ -196,6 +196,69 @@ func insertAuditChainEntry(ctx context.Context, tx pgx.Tx, entry domain.AuditCha
 	return err
 }
 
+type auditEventInput struct {
+	TenantID   string
+	ActorID    string
+	Action     string
+	Resource   string
+	ResourceID string
+	Reason     string
+	OccurredAt time.Time
+	Source     string
+}
+
+func (s *Store) recordAuditEvent(ctx context.Context, input auditEventInput) error {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer rollback(ctx, tx)
+	if _, err := recordAuditEventTx(ctx, tx, input); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+func recordAuditEventTx(ctx context.Context, tx pgx.Tx, input auditEventInput) (domain.AuditEvent, error) {
+	if input.Source == "" {
+		input.Source = domain.AuditChainEntrySourceLive
+	}
+	if input.OccurredAt.IsZero() {
+		input.OccurredAt = time.Now().UTC()
+	}
+	event := domain.AuditEvent{
+		ID:         mustID("aud"),
+		TenantID:   input.TenantID,
+		ActorID:    input.ActorID,
+		Action:     input.Action,
+		Resource:   input.Resource,
+		ResourceID: input.ResourceID,
+		Reason:     input.Reason,
+		OccurredAt: input.OccurredAt.UTC(),
+	}
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO audit_events(id, tenant_id, actor_id, action, resource, resource_id, reason, occurred_at)
+		VALUES($1,$2,$3,$4,$5,$6,$7,$8)`,
+		event.ID, event.TenantID, event.ActorID, event.Action, event.Resource, event.ResourceID, event.Reason, event.OccurredAt); err != nil {
+		return domain.AuditEvent{}, err
+	}
+	sequence, previousHash, err := ensureAuditChainHead(ctx, tx, event.TenantID)
+	if err != nil {
+		return domain.AuditEvent{}, err
+	}
+	entry, err := auditchain.ComputeEntry(mustID("ace"), event, sequence+1, previousHash, input.Source, event.OccurredAt)
+	if err != nil {
+		return domain.AuditEvent{}, err
+	}
+	if err := insertAuditChainEntry(ctx, tx, entry); err != nil {
+		return domain.AuditEvent{}, err
+	}
+	if _, err := tx.Exec(ctx, `UPDATE audit_chain_heads SET sequence=$2, chain_hash=$3, last_audit_event_id=$4, updated_at=now() WHERE tenant_id=$1`, event.TenantID, entry.Sequence, entry.ChainHash, event.ID); err != nil {
+		return domain.AuditEvent{}, err
+	}
+	return event, nil
+}
+
 func (s *Store) AuthenticateAPIKey(ctx context.Context, keyHash string) (authz.Actor, error) {
 	var actor authz.Actor
 	var role string
@@ -264,7 +327,7 @@ func (s *Store) CreateAPIKey(ctx context.Context, input app.APIKeyCreateInput) (
 	if err != nil {
 		return domain.APIKey{}, err
 	}
-	if _, err := tx.Exec(ctx, `INSERT INTO audit_events(id, tenant_id, actor_id, action, resource, resource_id, reason) VALUES($1,$2,$3,'api_key.created','api_key',$4,$5)`, mustID("aud"), key.TenantID, input.ActorID, key.ID, key.Name); err != nil {
+	if _, err := recordAuditEventTx(ctx, tx, auditEventInput{TenantID: key.TenantID, ActorID: input.ActorID, Action: "api_key.created", Resource: "api_key", ResourceID: key.ID, Reason: key.Name}); err != nil {
 		return domain.APIKey{}, err
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -310,7 +373,7 @@ func (s *Store) RevokeAPIKey(ctx context.Context, tenantID, apiKeyID, actorID, r
 	if err != nil {
 		return domain.APIKey{}, err
 	}
-	_, _ = s.pool.Exec(ctx, `INSERT INTO audit_events(id, tenant_id, actor_id, action, resource, resource_id, reason) VALUES($1,$2,$3,'api_key.revoked','api_key',$4,$5)`, mustID("aud"), tenantID, actorID, apiKeyID, reason)
+	_ = s.recordAuditEvent(ctx, auditEventInput{TenantID: tenantID, ActorID: actorID, Action: "api_key.revoked", Resource: "api_key", ResourceID: apiKeyID, Reason: reason})
 	return item, nil
 }
 
@@ -573,7 +636,7 @@ func (s *Store) TestEndpoint(ctx context.Context, tenantID, endpointID, actorID,
 	if _, err := tx.Exec(ctx, `INSERT INTO dedupe_records(tenant_id, source_id, dedupe_key, first_event_id, status) VALUES($1,$2,$3,$4,$5) ON CONFLICT (tenant_id, dedupe_key) DO UPDATE SET last_seen_at=now(), status=EXCLUDED.status`, tenantID, sourceID, dedupeKey, eventID, domain.DedupeUnique); err != nil {
 		return domain.Delivery{}, err
 	}
-	if _, err := tx.Exec(ctx, `INSERT INTO audit_events(id, tenant_id, actor_id, action, resource, resource_id, reason) VALUES($1,$2,$3,'endpoint.test_requested','endpoint',$4,$5)`, mustID("aud"), tenantID, actorID, endpointID, reason); err != nil {
+	if _, err := recordAuditEventTx(ctx, tx, auditEventInput{TenantID: tenantID, ActorID: actorID, Action: "endpoint.test_requested", Resource: "endpoint", ResourceID: endpointID, Reason: reason}); err != nil {
 		return domain.Delivery{}, err
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -758,7 +821,7 @@ func (s *Store) ActivateRoute(ctx context.Context, tenantID, routeID, actorID, r
 	if _, err := tx.Exec(ctx, `UPDATE routes SET active_version_id=$1 WHERE tenant_id=$2 AND id=$3`, version.ID, tenantID, routeID); err != nil {
 		return domain.Route{}, err
 	}
-	if _, err := tx.Exec(ctx, `INSERT INTO audit_events(id, tenant_id, actor_id, action, resource, resource_id, reason) VALUES($1,$2,$3,'route.activated','route',$4,$5)`, mustID("aud"), tenantID, actorID, routeID, reason); err != nil {
+	if _, err := recordAuditEventTx(ctx, tx, auditEventInput{TenantID: tenantID, ActorID: actorID, Action: "route.activated", Resource: "route", ResourceID: routeID, Reason: reason}); err != nil {
 		return domain.Route{}, err
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -826,7 +889,7 @@ func (s *Store) CreateRetryPolicy(ctx context.Context, tenantID, actorID string,
 	if _, err := s.insertConfigVersion(ctx, tx, tenantID, domain.ConfigResourceRetryPolicy, item.ID, item.Version, item, actorID); err != nil {
 		return domain.RetryPolicy{}, err
 	}
-	if _, err := tx.Exec(ctx, `INSERT INTO audit_events(id, tenant_id, actor_id, action, resource, resource_id, reason) VALUES($1,$2,$3,'retry_policy.created','retry_policy',$4,$5)`, mustID("aud"), tenantID, actorID, item.ID, item.Name); err != nil {
+	if _, err := recordAuditEventTx(ctx, tx, auditEventInput{TenantID: tenantID, ActorID: actorID, Action: "retry_policy.created", Resource: "retry_policy", ResourceID: item.ID, Reason: item.Name}); err != nil {
 		return domain.RetryPolicy{}, err
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -889,7 +952,7 @@ func (s *Store) CreateTransformation(ctx context.Context, tenantID, actorID stri
 			return domain.Transformation{}, err
 		}
 	}
-	if _, err := tx.Exec(ctx, `INSERT INTO audit_events(id, tenant_id, actor_id, action, resource, resource_id, reason) VALUES($1,$2,$3,'transformation.created','transformation',$4,$5)`, mustID("aud"), tenantID, actorID, item.ID, item.Name); err != nil {
+	if _, err := recordAuditEventTx(ctx, tx, auditEventInput{TenantID: tenantID, ActorID: actorID, Action: "transformation.created", Resource: "transformation", ResourceID: item.ID, Reason: item.Name}); err != nil {
 		return domain.Transformation{}, err
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -944,7 +1007,7 @@ func (s *Store) CreateTransformationVersion(ctx context.Context, tenantID, trans
 	if _, err := tx.Exec(ctx, `UPDATE transformations SET updated_at=now() WHERE tenant_id=$1 AND id=$2`, tenantID, transformationID); err != nil {
 		return domain.TransformationVersion{}, err
 	}
-	if _, err := tx.Exec(ctx, `INSERT INTO audit_events(id, tenant_id, actor_id, action, resource, resource_id, reason) VALUES($1,$2,$3,'transformation_version.created','transformation',$4,$5)`, mustID("aud"), tenantID, actorID, transformationID, item.ConfigHash); err != nil {
+	if _, err := recordAuditEventTx(ctx, tx, auditEventInput{TenantID: tenantID, ActorID: actorID, Action: "transformation_version.created", Resource: "transformation", ResourceID: transformationID, Reason: item.ConfigHash}); err != nil {
 		return domain.TransformationVersion{}, err
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -1001,7 +1064,7 @@ func (s *Store) ActivateTransformationVersion(ctx context.Context, tenantID, tra
 	if _, err := tx.Exec(ctx, `UPDATE transformations SET active_version_id=$1, updated_at=now() WHERE tenant_id=$2 AND id=$3`, versionID, tenantID, transformationID); err != nil {
 		return domain.TransformationVersion{}, err
 	}
-	if _, err := tx.Exec(ctx, `INSERT INTO audit_events(id, tenant_id, actor_id, action, resource, resource_id, reason) VALUES($1,$2,$3,'transformation_version.activated','transformation',$4,$5)`, mustID("aud"), tenantID, actorID, transformationID, reason); err != nil {
+	if _, err := recordAuditEventTx(ctx, tx, auditEventInput{TenantID: tenantID, ActorID: actorID, Action: "transformation_version.activated", Resource: "transformation", ResourceID: transformationID, Reason: reason}); err != nil {
 		return domain.TransformationVersion{}, err
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -1148,7 +1211,7 @@ func (s *Store) RotateSourceSecret(ctx context.Context, tenantID, sourceID, acto
 	}, actorID); err != nil {
 		return domain.SourceSecretVersion{}, err
 	}
-	if _, err := tx.Exec(ctx, `INSERT INTO audit_events(id, tenant_id, actor_id, action, resource, resource_id, reason) VALUES($1,$2,$3,'source_secret.rotated','source',$4,$5)`, mustID("aud"), tenantID, actorID, sourceID, req.Reason); err != nil {
+	if _, err := recordAuditEventTx(ctx, tx, auditEventInput{TenantID: tenantID, ActorID: actorID, Action: "source_secret.rotated", Resource: "source", ResourceID: sourceID, Reason: req.Reason}); err != nil {
 		return domain.SourceSecretVersion{}, err
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -1210,7 +1273,7 @@ func (s *Store) RotateEndpointSecret(ctx context.Context, tenantID, endpointID, 
 	}, actorID); err != nil {
 		return domain.EndpointSecretVersion{}, err
 	}
-	if _, err := tx.Exec(ctx, `INSERT INTO audit_events(id, tenant_id, actor_id, action, resource, resource_id, reason) VALUES($1,$2,$3,'endpoint_secret.rotated','endpoint',$4,$5)`, mustID("aud"), tenantID, actorID, endpointID, req.Reason); err != nil {
+	if _, err := recordAuditEventTx(ctx, tx, auditEventInput{TenantID: tenantID, ActorID: actorID, Action: "endpoint_secret.rotated", Resource: "endpoint", ResourceID: endpointID, Reason: req.Reason}); err != nil {
 		return domain.EndpointSecretVersion{}, err
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -1463,7 +1526,7 @@ func (s *Store) GetRawPayload(ctx context.Context, tenantID, eventID, actorID st
 		}
 		raw.Body = body
 	}
-	_, _ = s.pool.Exec(ctx, `INSERT INTO audit_events(id, tenant_id, actor_id, action, resource, resource_id, reason) VALUES($1,$2,$3,'raw_payload.read','event',$4,'')`, mustID("aud"), tenantID, actorID, eventID)
+	_ = s.recordAuditEvent(ctx, auditEventInput{TenantID: tenantID, ActorID: actorID, Action: "raw_payload.read", Resource: "event", ResourceID: eventID})
 	return raw, nil
 }
 
@@ -1489,7 +1552,7 @@ func (s *Store) GetNormalizedEvent(ctx context.Context, tenantID, eventID, actor
 		if item.StorageStatus == domain.StorageStatusDeleted {
 			return domain.NormalizedEnvelope{}, app.ErrGone
 		}
-		_, _ = s.pool.Exec(ctx, `INSERT INTO audit_events(id, tenant_id, actor_id, action, resource, resource_id, reason) VALUES($1,$2,$3,'normalized_envelope.data_read','event',$4,'')`, mustID("aud"), tenantID, actorID, eventID)
+		_ = s.recordAuditEvent(ctx, auditEventInput{TenantID: tenantID, ActorID: actorID, Action: "normalized_envelope.data_read", Resource: "event", ResourceID: eventID})
 	} else {
 		item.Data = nil
 	}
@@ -1615,7 +1678,7 @@ func (s *Store) RetryDelivery(ctx context.Context, tenantID, deliveryID, actorID
 	if err != nil {
 		return domain.Delivery{}, err
 	}
-	_, _ = s.pool.Exec(ctx, `INSERT INTO audit_events(id, tenant_id, actor_id, action, resource, resource_id, reason) VALUES($1,$2,$3,$4,$5,$6,$7)`, mustID("aud"), tenantID, actorID, "delivery.retry_requested", "delivery", deliveryID, reason)
+	_ = s.recordAuditEvent(ctx, auditEventInput{TenantID: tenantID, ActorID: actorID, Action: "delivery.retry_requested", Resource: "delivery", ResourceID: deliveryID, Reason: reason})
 	return item, nil
 }
 
@@ -1628,7 +1691,7 @@ func (s *Store) CancelDelivery(ctx context.Context, tenantID, deliveryID, actorI
 	if err != nil {
 		return domain.Delivery{}, err
 	}
-	_, _ = s.pool.Exec(ctx, `INSERT INTO audit_events(id, tenant_id, actor_id, action, resource, resource_id, reason) VALUES($1,$2,$3,'delivery.canceled','delivery',$4,$5)`, mustID("aud"), tenantID, actorID, deliveryID, reason)
+	_ = s.recordAuditEvent(ctx, auditEventInput{TenantID: tenantID, ActorID: actorID, Action: "delivery.canceled", Resource: "delivery", ResourceID: deliveryID, Reason: reason})
 	return item, nil
 }
 
@@ -1757,7 +1820,7 @@ func (s *Store) CreateRetentionPolicy(ctx context.Context, tenantID, actorID str
 	if err != nil {
 		return domain.RetentionPolicy{}, err
 	}
-	_, _ = s.pool.Exec(ctx, `INSERT INTO audit_events(id, tenant_id, actor_id, action, resource, resource_id, reason) VALUES($1,$2,$3,'retention_policy.upserted','retention_policy',$4,$5)`, mustID("aud"), tenantID, actorID, item.ID, item.ResourceType)
+	_ = s.recordAuditEvent(ctx, auditEventInput{TenantID: tenantID, ActorID: actorID, Action: "retention_policy.upserted", Resource: "retention_policy", ResourceID: item.ID, Reason: item.ResourceType})
 	return item, nil
 }
 
@@ -1793,7 +1856,7 @@ func (s *Store) UpdateRetentionPolicy(ctx context.Context, tenantID, policyID, a
 	if err != nil {
 		return domain.RetentionPolicy{}, err
 	}
-	_, _ = s.pool.Exec(ctx, `INSERT INTO audit_events(id, tenant_id, actor_id, action, resource, resource_id, reason) VALUES($1,$2,$3,'retention_policy.updated','retention_policy',$4,$5)`, mustID("aud"), tenantID, actorID, policyID, existing.ResourceType)
+	_ = s.recordAuditEvent(ctx, auditEventInput{TenantID: tenantID, ActorID: actorID, Action: "retention_policy.updated", Resource: "retention_policy", ResourceID: policyID, Reason: existing.ResourceType})
 	return existing, nil
 }
 
@@ -1820,7 +1883,7 @@ func (s *Store) CreateProviderConnection(ctx context.Context, tenantID, actorID 
 	if err != nil {
 		return domain.ProviderConnection{}, err
 	}
-	_, _ = s.pool.Exec(ctx, `INSERT INTO audit_events(id, tenant_id, actor_id, action, resource, resource_id, reason) VALUES($1,$2,$3,'provider_connection.created','provider_connection',$4,$5)`, mustID("aud"), tenantID, actorID, id, req.Provider)
+	_ = s.recordAuditEvent(ctx, auditEventInput{TenantID: tenantID, ActorID: actorID, Action: "provider_connection.created", Resource: "provider_connection", ResourceID: id, Reason: req.Provider})
 	return normalizeProviderConnection(item), nil
 }
 
@@ -1889,7 +1952,7 @@ func (s *Store) VerifyProviderConnection(ctx context.Context, tenantID, connecti
 	if err != nil {
 		return domain.ProviderConnection{}, err
 	}
-	_, _ = s.pool.Exec(ctx, `INSERT INTO audit_events(id, tenant_id, actor_id, action, resource, resource_id, reason) VALUES($1,$2,$3,'provider_connection.verified','provider_connection',$4,$5)`, mustID("aud"), tenantID, actorID, connectionID, reason)
+	_ = s.recordAuditEvent(ctx, auditEventInput{TenantID: tenantID, ActorID: actorID, Action: "provider_connection.verified", Resource: "provider_connection", ResourceID: connectionID, Reason: reason})
 	return normalizeProviderConnection(out), nil
 }
 
@@ -1910,7 +1973,7 @@ func (s *Store) RevokeProviderConnection(ctx context.Context, tenantID, connecti
 	if err != nil {
 		return domain.ProviderConnection{}, err
 	}
-	_, _ = s.pool.Exec(ctx, `INSERT INTO audit_events(id, tenant_id, actor_id, action, resource, resource_id, reason) VALUES($1,$2,$3,'provider_connection.revoked','provider_connection',$4,$5)`, mustID("aud"), tenantID, actorID, connectionID, reason)
+	_ = s.recordAuditEvent(ctx, auditEventInput{TenantID: tenantID, ActorID: actorID, Action: "provider_connection.revoked", Resource: "provider_connection", ResourceID: connectionID, Reason: reason})
 	return normalizeProviderConnection(out), nil
 }
 
@@ -2009,7 +2072,7 @@ func (s *Store) CreateReconciliationJob(ctx context.Context, tenantID, actorID s
 			return domain.ReconciliationJob{}, err
 		}
 	}
-	_, _ = s.pool.Exec(ctx, `INSERT INTO audit_events(id, tenant_id, actor_id, action, resource, resource_id, reason) VALUES($1,$2,$3,'reconciliation.created','reconciliation_job',$4,$5)`, mustID("aud"), tenantID, actorID, id, req.Reason)
+	_ = s.recordAuditEvent(ctx, auditEventInput{TenantID: tenantID, ActorID: actorID, Action: "reconciliation.created", Resource: "reconciliation_job", ResourceID: id, Reason: req.Reason})
 	return normalizeReconciliationJob(item), nil
 }
 
@@ -2086,7 +2149,7 @@ func (s *Store) CancelReconciliationJob(ctx context.Context, tenantID, jobID, ac
 	if err != nil {
 		return domain.ReconciliationJob{}, err
 	}
-	_, _ = s.pool.Exec(ctx, `INSERT INTO audit_events(id, tenant_id, actor_id, action, resource, resource_id, reason) VALUES($1,$2,$3,'reconciliation.canceled','reconciliation_job',$4,$5)`, mustID("aud"), tenantID, actorID, jobID, reason)
+	_ = s.recordAuditEvent(ctx, auditEventInput{TenantID: tenantID, ActorID: actorID, Action: "reconciliation.canceled", Resource: "reconciliation_job", ResourceID: jobID, Reason: reason})
 	return normalizeReconciliationJob(item), nil
 }
 
@@ -2211,7 +2274,7 @@ func (s *Store) CreateAuditExport(ctx context.Context, tenantID, actorID string,
 	if reason == "" {
 		reason = "audit export"
 	}
-	if _, err := tx.Exec(ctx, `INSERT INTO audit_events(id, tenant_id, actor_id, action, resource, resource_id, reason) VALUES($1,$2,$3,'audit_export.created','audit_export',$4,$5)`, mustID("aud"), tenantID, actorID, id, reason); err != nil {
+	if _, err := recordAuditEventTx(ctx, tx, auditEventInput{TenantID: tenantID, ActorID: actorID, Action: "audit_export.created", Resource: "audit_export", ResourceID: id, Reason: reason}); err != nil {
 		if objectWritten {
 			_ = s.objectStore.Delete(context.Background(), objectBucket, objectKey)
 		}
@@ -2286,7 +2349,7 @@ func (s *Store) DownloadAuditExport(ctx context.Context, tenantID, exportID, act
 	if evidence.SHA256(body) != out.SHA256 {
 		return app.EvidenceExportDownload{}, errors.New("audit export bundle hash mismatch")
 	}
-	_, _ = s.pool.Exec(ctx, `INSERT INTO audit_events(id, tenant_id, actor_id, action, resource, resource_id, reason) VALUES($1,$2,$3,'audit_export.downloaded','audit_export',$4,'')`, mustID("aud"), tenantID, actorID, exportID)
+	_ = s.recordAuditEvent(ctx, auditEventInput{TenantID: tenantID, ActorID: actorID, Action: "audit_export.downloaded", Resource: "audit_export", ResourceID: exportID})
 	out = normalizeEvidenceExportTimes(out)
 	return app.EvidenceExportDownload{
 		Export:      out,
@@ -2343,7 +2406,7 @@ func (s *Store) ReleaseDeadLetter(ctx context.Context, tenantID, entryID, actorI
 	if _, err := s.pool.Exec(ctx, `UPDATE dead_letter_entries SET state='released' WHERE tenant_id=$1 AND id=$2`, tenantID, entryID); err != nil {
 		return app.ReplayJob{}, err
 	}
-	_, _ = s.pool.Exec(ctx, `INSERT INTO audit_events(id, tenant_id, actor_id, action, resource, resource_id, reason) VALUES($1,$2,$3,'dead_letter.released','dead_letter_entry',$4,$5)`, mustID("aud"), tenantID, actorID, entryID, reason)
+	_ = s.recordAuditEvent(ctx, auditEventInput{TenantID: tenantID, ActorID: actorID, Action: "dead_letter.released", Resource: "dead_letter_entry", ResourceID: entryID, Reason: reason})
 	return job, nil
 }
 
@@ -2390,7 +2453,7 @@ func (s *Store) ApproveQuarantine(ctx context.Context, tenantID, entryID, actorI
 	if err != nil {
 		return nil, err
 	}
-	_, _ = s.pool.Exec(ctx, `INSERT INTO audit_events(id, tenant_id, actor_id, action, resource, resource_id, reason) VALUES($1,$2,$3,'quarantine.approved','quarantine_entry',$4,$5)`, mustID("aud"), tenantID, actorID, entryID, reason)
+	_ = s.recordAuditEvent(ctx, auditEventInput{TenantID: tenantID, ActorID: actorID, Action: "quarantine.approved", Resource: "quarantine_entry", ResourceID: entryID, Reason: reason})
 	if routeAfterRelease && eventID != "" {
 		if _, err := s.createDeliveriesForEvent(ctx, tenantID, eventID); err != nil {
 			return nil, err
@@ -2408,7 +2471,7 @@ func (s *Store) RejectQuarantine(ctx context.Context, tenantID, entryID, actorID
 	if err != nil {
 		return nil, err
 	}
-	_, _ = s.pool.Exec(ctx, `INSERT INTO audit_events(id, tenant_id, actor_id, action, resource, resource_id, reason) VALUES($1,$2,$3,'quarantine.rejected','quarantine_entry',$4,$5)`, mustID("aud"), tenantID, actorID, entryID, reason)
+	_ = s.recordAuditEvent(ctx, auditEventInput{TenantID: tenantID, ActorID: actorID, Action: "quarantine.rejected", Resource: "quarantine_entry", ResourceID: entryID, Reason: reason})
 	return map[string]any{"id": entryID, "event_id": eventID, "state": "rejected"}, nil
 }
 
@@ -2508,7 +2571,7 @@ func (s *Store) CreateReplay(ctx context.Context, tenantID, actorID string, req 
 	if _, err := tx.Exec(ctx, `INSERT INTO outbox(id, tenant_id, kind, resource_id, payload) VALUES($1,$2,'replay_job',$3,$4)`, mustID("out"), tenantID, id, scopeBytes); err != nil {
 		return app.ReplayJob{}, err
 	}
-	if _, err := tx.Exec(ctx, `INSERT INTO audit_events(id, tenant_id, actor_id, action, resource, resource_id, reason) VALUES($1,$2,$3,'replay.created','replay_job',$4,$5)`, mustID("aud"), tenantID, actorID, id, req.Reason); err != nil {
+	if _, err := recordAuditEventTx(ctx, tx, auditEventInput{TenantID: tenantID, ActorID: actorID, Action: "replay.created", Resource: "replay_job", ResourceID: id, Reason: req.Reason}); err != nil {
 		return app.ReplayJob{}, err
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -2563,7 +2626,7 @@ func (s *Store) updateReplayState(ctx context.Context, tenantID, replayJobID, ac
 	if err != nil {
 		return app.ReplayJob{}, err
 	}
-	_, _ = s.pool.Exec(ctx, `INSERT INTO audit_events(id, tenant_id, actor_id, action, resource, resource_id, reason) VALUES($1,$2,$3,$4,'replay_job',$5,$6)`, mustID("aud"), tenantID, actorID, action, replayJobID, reason)
+	_ = s.recordAuditEvent(ctx, auditEventInput{TenantID: tenantID, ActorID: actorID, Action: action, Resource: "replay_job", ResourceID: replayJobID, Reason: reason})
 	return item, nil
 }
 
@@ -3074,7 +3137,7 @@ func (s *Store) captureRecoveredProviderEvent(ctx context.Context, conn domain.P
 	); err != nil {
 		return "", err
 	}
-	if _, err := tx.Exec(ctx, `INSERT INTO audit_events(id, tenant_id, actor_id, action, resource, resource_id, reason) VALUES($1,$2,'reconciliation-worker','reconciliation.event_captured','event',$3,$4)`, mustID("aud"), conn.TenantID, eventID, conn.ID); err != nil {
+	if _, err := recordAuditEventTx(ctx, tx, auditEventInput{TenantID: conn.TenantID, ActorID: "reconciliation-worker", Action: "reconciliation.event_captured", Resource: "event", ResourceID: eventID, Reason: conn.ID}); err != nil {
 		return "", err
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -4133,7 +4196,7 @@ func (s *Store) applyRetentionPolicy(ctx context.Context, workerID string, polic
 		WHERE tenant_id=$3 AND id=$4`, domain.RetentionRunStateCompleted, processed, policy.TenantID, runID); err != nil {
 		return err
 	}
-	if _, err := tx.Exec(ctx, `INSERT INTO audit_events(id, tenant_id, actor_id, action, resource, resource_id, reason) VALUES($1,$2,$3,'retention.run.completed','retention_policy',$4,$5)`, mustID("aud"), policy.TenantID, workerID, policy.ID, policy.ResourceType); err != nil {
+	if _, err := recordAuditEventTx(ctx, tx, auditEventInput{TenantID: policy.TenantID, ActorID: workerID, Action: "retention.run.completed", Resource: "retention_policy", ResourceID: policy.ID, Reason: policy.ResourceType}); err != nil {
 		return err
 	}
 	return tx.Commit(ctx)
