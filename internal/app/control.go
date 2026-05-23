@@ -284,12 +284,16 @@ type CreateRetentionPolicyRequest struct {
 	SourceID      string `json:"source_id,omitempty"`
 	RetentionDays int    `json:"retention_days"`
 	State         string `json:"state,omitempty"`
+	LegalHold     bool   `json:"legal_hold,omitempty"`
+	HoldReason    string `json:"hold_reason,omitempty"`
 }
 
 type UpdateRetentionPolicyRequest struct {
 	RetentionDays *int    `json:"retention_days,omitempty"`
 	State         string  `json:"state,omitempty"`
 	SourceID      *string `json:"source_id,omitempty"`
+	LegalHold     *bool   `json:"legal_hold,omitempty"`
+	HoldReason    *string `json:"hold_reason,omitempty"`
 }
 
 type CreateProviderConnectionRequest struct {
@@ -939,8 +943,12 @@ func (s *ControlService) CreateRetentionPolicy(ctx context.Context, actor authz.
 	req.ResourceType = strings.TrimSpace(req.ResourceType)
 	req.SourceID = strings.TrimSpace(req.SourceID)
 	req.State = normalizeState(req.State)
+	req.HoldReason = strings.TrimSpace(req.HoldReason)
 	if err := validateRetentionPolicyInput(req.ResourceType, req.RetentionDays, req.State); err != nil {
 		return domain.RetentionPolicy{}, err
+	}
+	if req.LegalHold && req.HoldReason == "" {
+		return domain.RetentionPolicy{}, fmt.Errorf("%w: hold_reason is required when legal_hold is true", ErrInvalidInput)
 	}
 	return s.store.CreateRetentionPolicy(ctx, actor.TenantID, actor.ID, req)
 }
@@ -962,6 +970,13 @@ func (s *ControlService) UpdateRetentionPolicy(ctx context.Context, actor authz.
 	if req.SourceID != nil {
 		trimmed := strings.TrimSpace(*req.SourceID)
 		req.SourceID = &trimmed
+	}
+	if req.HoldReason != nil {
+		trimmed := strings.TrimSpace(*req.HoldReason)
+		req.HoldReason = &trimmed
+	}
+	if req.LegalHold != nil && *req.LegalHold && (req.HoldReason == nil || *req.HoldReason == "") {
+		return domain.RetentionPolicy{}, fmt.Errorf("%w: hold_reason is required when legal_hold is true", ErrInvalidInput)
 	}
 	return s.store.UpdateRetentionPolicy(ctx, actor.TenantID, policyID, actor.ID, req)
 }

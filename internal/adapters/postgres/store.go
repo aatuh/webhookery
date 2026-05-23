@@ -2095,7 +2095,7 @@ func (s *Store) GetAuditChainAnchor(ctx context.Context, tenantID, anchorID stri
 
 func (s *Store) ListRetentionPolicies(ctx context.Context, tenantID string, limit int) ([]domain.RetentionPolicy, error) {
 	rows, err := s.pool.Query(ctx, `
-		SELECT id, tenant_id, resource_type, source_id, retention_days, state, created_by, created_at, updated_at
+		SELECT id, tenant_id, resource_type, source_id, retention_days, state, legal_hold, hold_reason, created_by, created_at, updated_at
 		FROM retention_policies
 		WHERE tenant_id=$1
 		ORDER BY updated_at DESC
@@ -2119,13 +2119,13 @@ func (s *Store) CreateRetentionPolicy(ctx context.Context, tenantID, actorID str
 	id := mustID("ret")
 	var item domain.RetentionPolicy
 	err := s.pool.QueryRow(ctx, `
-		INSERT INTO retention_policies(id, tenant_id, resource_type, source_id, retention_days, state, created_by)
-		VALUES($1,$2,$3,$4,$5,$6,$7)
+		INSERT INTO retention_policies(id, tenant_id, resource_type, source_id, retention_days, state, legal_hold, hold_reason, created_by)
+		VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)
 		ON CONFLICT (tenant_id, resource_type, source_id) DO UPDATE
-		SET retention_days=EXCLUDED.retention_days, state=EXCLUDED.state, updated_at=now()
-		RETURNING id, tenant_id, resource_type, source_id, retention_days, state, created_by, created_at, updated_at`,
-		id, tenantID, req.ResourceType, req.SourceID, req.RetentionDays, req.State, actorID,
-	).Scan(&item.ID, &item.TenantID, &item.ResourceType, &item.SourceID, &item.RetentionDays, &item.State, &item.CreatedBy, &item.CreatedAt, &item.UpdatedAt)
+		SET retention_days=EXCLUDED.retention_days, state=EXCLUDED.state, legal_hold=EXCLUDED.legal_hold, hold_reason=EXCLUDED.hold_reason, updated_at=now()
+		RETURNING id, tenant_id, resource_type, source_id, retention_days, state, legal_hold, hold_reason, created_by, created_at, updated_at`,
+		id, tenantID, req.ResourceType, req.SourceID, req.RetentionDays, req.State, req.LegalHold, req.HoldReason, actorID,
+	).Scan(&item.ID, &item.TenantID, &item.ResourceType, &item.SourceID, &item.RetentionDays, &item.State, &item.LegalHold, &item.HoldReason, &item.CreatedBy, &item.CreatedAt, &item.UpdatedAt)
 	if err != nil {
 		return domain.RetentionPolicy{}, err
 	}
@@ -2136,10 +2136,10 @@ func (s *Store) CreateRetentionPolicy(ctx context.Context, tenantID, actorID str
 func (s *Store) UpdateRetentionPolicy(ctx context.Context, tenantID, policyID, actorID string, req app.UpdateRetentionPolicyRequest) (domain.RetentionPolicy, error) {
 	var existing domain.RetentionPolicy
 	err := s.pool.QueryRow(ctx, `
-		SELECT id, tenant_id, resource_type, source_id, retention_days, state, created_by, created_at, updated_at
+		SELECT id, tenant_id, resource_type, source_id, retention_days, state, legal_hold, hold_reason, created_by, created_at, updated_at
 		FROM retention_policies
 		WHERE tenant_id=$1 AND id=$2`, tenantID, policyID).
-		Scan(&existing.ID, &existing.TenantID, &existing.ResourceType, &existing.SourceID, &existing.RetentionDays, &existing.State, &existing.CreatedBy, &existing.CreatedAt, &existing.UpdatedAt)
+		Scan(&existing.ID, &existing.TenantID, &existing.ResourceType, &existing.SourceID, &existing.RetentionDays, &existing.State, &existing.LegalHold, &existing.HoldReason, &existing.CreatedBy, &existing.CreatedAt, &existing.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return domain.RetentionPolicy{}, app.ErrNotFound
 	}
@@ -2155,13 +2155,19 @@ func (s *Store) UpdateRetentionPolicy(ctx context.Context, tenantID, policyID, a
 	if req.SourceID != nil {
 		existing.SourceID = *req.SourceID
 	}
+	if req.LegalHold != nil {
+		existing.LegalHold = *req.LegalHold
+	}
+	if req.HoldReason != nil {
+		existing.HoldReason = *req.HoldReason
+	}
 	err = s.pool.QueryRow(ctx, `
 		UPDATE retention_policies
-		SET source_id=$1, retention_days=$2, state=$3, updated_at=now()
-		WHERE tenant_id=$4 AND id=$5
-		RETURNING id, tenant_id, resource_type, source_id, retention_days, state, created_by, created_at, updated_at`,
-		existing.SourceID, existing.RetentionDays, existing.State, tenantID, policyID,
-	).Scan(&existing.ID, &existing.TenantID, &existing.ResourceType, &existing.SourceID, &existing.RetentionDays, &existing.State, &existing.CreatedBy, &existing.CreatedAt, &existing.UpdatedAt)
+		SET source_id=$1, retention_days=$2, state=$3, legal_hold=$4, hold_reason=$5, updated_at=now()
+		WHERE tenant_id=$6 AND id=$7
+		RETURNING id, tenant_id, resource_type, source_id, retention_days, state, legal_hold, hold_reason, created_by, created_at, updated_at`,
+		existing.SourceID, existing.RetentionDays, existing.State, existing.LegalHold, existing.HoldReason, tenantID, policyID,
+	).Scan(&existing.ID, &existing.TenantID, &existing.ResourceType, &existing.SourceID, &existing.RetentionDays, &existing.State, &existing.LegalHold, &existing.HoldReason, &existing.CreatedBy, &existing.CreatedAt, &existing.UpdatedAt)
 	if err != nil {
 		return domain.RetentionPolicy{}, err
 	}
@@ -2686,9 +2692,9 @@ func (s *Store) ApplyRetentionPolicies(ctx context.Context, workerID string, lim
 		limit = 10
 	}
 	rows, err := s.pool.Query(ctx, `
-		SELECT id, tenant_id, resource_type, source_id, retention_days, state, created_by, created_at, updated_at
+		SELECT id, tenant_id, resource_type, source_id, retention_days, state, legal_hold, hold_reason, created_by, created_at, updated_at
 		FROM retention_policies
-		WHERE state='active'
+		WHERE state='active' AND legal_hold=false
 		ORDER BY updated_at ASC
 		LIMIT $1`, limit)
 	if err != nil {
@@ -4042,7 +4048,7 @@ func (s *Store) RecordDeliveryAttempt(ctx context.Context, item worker.DeliveryI
 
 func scanRetentionPolicy(row rowScanner) (domain.RetentionPolicy, error) {
 	var item domain.RetentionPolicy
-	err := row.Scan(&item.ID, &item.TenantID, &item.ResourceType, &item.SourceID, &item.RetentionDays, &item.State, &item.CreatedBy, &item.CreatedAt, &item.UpdatedAt)
+	err := row.Scan(&item.ID, &item.TenantID, &item.ResourceType, &item.SourceID, &item.RetentionDays, &item.State, &item.LegalHold, &item.HoldReason, &item.CreatedBy, &item.CreatedAt, &item.UpdatedAt)
 	return item, err
 }
 
@@ -4595,6 +4601,9 @@ func nullableTime(value time.Time) any {
 }
 
 func (s *Store) applyRetentionPolicy(ctx context.Context, workerID string, policy domain.RetentionPolicy) error {
+	if policy.LegalHold {
+		return nil
+	}
 	runID := mustID("rrn")
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {

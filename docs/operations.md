@@ -290,7 +290,9 @@ types are:
 
 The worker applies active policies in bounded batches and records
 `retention_runs` plus `retention_run_items`. Policy changes and completed runs
-write chained audit events.
+write chained audit events. Policies can be placed on `legal_hold` with a
+`hold_reason`; held policies remain visible and auditable but are skipped by
+the retention worker until the hold is cleared.
 
 ## Audit Evidence Exports
 

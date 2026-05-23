@@ -2073,6 +2073,12 @@ components:
           type: string
           enum: [active, disabled]
           default: active
+        legal_hold:
+          type: boolean
+          default: false
+        hold_reason:
+          type: string
+          description: Required when legal_hold is true.
     RetryPolicy:
       type: object
       properties:
@@ -2087,6 +2093,10 @@ components:
         state:
           type: string
           enum: [active, disabled]
+        legal_hold:
+          type: boolean
+        hold_reason:
+          type: string
         max_attempts:
           type: integer
         max_duration_seconds:
@@ -2483,7 +2493,7 @@ components:
           enum: [active, disabled]
     RetentionPolicy:
       type: object
-      required: [id, tenant_id, resource_type, retention_days, state, created_by, created_at, updated_at]
+      required: [id, tenant_id, resource_type, retention_days, state, legal_hold, created_by, created_at, updated_at]
       properties:
         id:
           type: string
@@ -2499,6 +2509,10 @@ components:
         state:
           type: string
           enum: [active, disabled]
+        legal_hold:
+          type: boolean
+        hold_reason:
+          type: string
         created_by:
           type: string
         created_at:

@@ -159,6 +159,22 @@ func TestControlServiceRetentionPolicyRequiresSecurityWrite(t *testing.T) {
 	}
 }
 
+func TestControlServiceRetentionLegalHoldRequiresReason(t *testing.T) {
+	store := &fakeControlStore{}
+	svc := NewControlService(store, ssrf.Validator{Resolver: ssrf.StaticResolver{}})
+	actor := authz.Actor{ID: "usr_1", TenantID: "ten_a", Role: authz.RoleOwner, Scopes: []string{"security:write"}}
+
+	_, err := svc.CreateRetentionPolicy(context.Background(), actor, CreateRetentionPolicyRequest{ResourceType: domain.RetentionResourceRawPayload, RetentionDays: 30, LegalHold: true})
+	if !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("expected invalid input for legal hold without reason, got %v", err)
+	}
+	hold := true
+	_, err = svc.UpdateRetentionPolicy(context.Background(), actor, "ret_1", UpdateRetentionPolicyRequest{LegalHold: &hold})
+	if !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("expected invalid input for legal hold update without reason, got %v", err)
+	}
+}
+
 func TestControlServiceTestEndpointRequiresReason(t *testing.T) {
 	store := &fakeControlStore{}
 	svc := NewControlService(store, ssrf.Validator{Resolver: ssrf.StaticResolver{}})
@@ -563,14 +579,21 @@ func (f *fakeControlStore) ListRetentionPolicies(context.Context, string, int) (
 	return nil, nil
 }
 func (f *fakeControlStore) CreateRetentionPolicy(_ context.Context, tenantID, actorID string, req CreateRetentionPolicyRequest) (domain.RetentionPolicy, error) {
-	return domain.RetentionPolicy{ID: "ret_1", TenantID: tenantID, ResourceType: req.ResourceType, RetentionDays: req.RetentionDays, CreatedBy: actorID}, nil
+	return domain.RetentionPolicy{ID: "ret_1", TenantID: tenantID, ResourceType: req.ResourceType, RetentionDays: req.RetentionDays, LegalHold: req.LegalHold, HoldReason: req.HoldReason, CreatedBy: actorID}, nil
 }
 func (f *fakeControlStore) UpdateRetentionPolicy(_ context.Context, tenantID, policyID, actorID string, req UpdateRetentionPolicyRequest) (domain.RetentionPolicy, error) {
 	days := 30
 	if req.RetentionDays != nil {
 		days = *req.RetentionDays
 	}
-	return domain.RetentionPolicy{ID: policyID, TenantID: tenantID, RetentionDays: days, CreatedBy: actorID}, nil
+	item := domain.RetentionPolicy{ID: policyID, TenantID: tenantID, RetentionDays: days, CreatedBy: actorID}
+	if req.LegalHold != nil {
+		item.LegalHold = *req.LegalHold
+	}
+	if req.HoldReason != nil {
+		item.HoldReason = *req.HoldReason
+	}
+	return item, nil
 }
 func (f *fakeControlStore) CreateProviderConnection(_ context.Context, tenantID, actorID string, req CreateProviderConnectionRequest) (domain.ProviderConnection, error) {
 	f.providerConnectionTenantID = tenantID

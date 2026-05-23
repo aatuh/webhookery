@@ -758,9 +758,16 @@ func runRetention(args []string) error {
 	sourceID := fs.String("source-id", "", "optional source id for raw payload retention")
 	retentionDays := fs.Int("retention-days", 0, "retention period in days")
 	state := fs.String("state", "", "active or disabled")
+	legalHold := fs.Bool("legal-hold", false, "put policy on legal hold")
+	clearLegalHold := fs.Bool("clear-legal-hold", false, "clear policy legal hold")
+	holdReason := fs.String("hold-reason", "", "legal hold reason")
 	if err := fs.Parse(args[1:]); err != nil {
 		return err
 	}
+	visited := map[string]bool{}
+	fs.Visit(func(flag *flag.Flag) {
+		visited[flag.Name] = true
+	})
 	switch args[0] {
 	case "list":
 		return getJSON(*baseURL, *apiKey, "/v1/admin/retention-policies")
@@ -770,6 +777,8 @@ func runRetention(args []string) error {
 			"source_id":      *sourceID,
 			"retention_days": *retentionDays,
 			"state":          *state,
+			"legal_hold":     *legalHold,
+			"hold_reason":    *holdReason,
 		})
 	case "update":
 		if strings.TrimSpace(*policyID) == "" {
@@ -784,6 +793,16 @@ func runRetention(args []string) error {
 		}
 		if *sourceID != "" {
 			body["source_id"] = *sourceID
+		}
+		if visited["legal-hold"] {
+			body["legal_hold"] = *legalHold
+		}
+		if *clearLegalHold {
+			body["legal_hold"] = false
+			body["hold_reason"] = ""
+		}
+		if *holdReason != "" {
+			body["hold_reason"] = *holdReason
 		}
 		return patchJSON(*baseURL, *apiKey, "/v1/admin/retention-policies/"+url.PathEscape(*policyID), body)
 	default:

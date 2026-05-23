@@ -540,6 +540,8 @@ type RetentionPolicy struct {
 	SourceID      string    `json:"source_id,omitempty"`
 	RetentionDays int       `json:"retention_days"`
 	State         string    `json:"state"`
+	LegalHold     bool      `json:"legal_hold"`
+	HoldReason    string    `json:"hold_reason,omitempty"`
 	CreatedBy     string    `json:"created_by"`
 	CreatedAt     time.Time `json:"created_at"`
 	UpdatedAt     time.Time `json:"updated_at"`
