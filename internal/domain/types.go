@@ -391,6 +391,7 @@ type Delivery struct {
 	NormalizedEnvelopeID    string    `json:"normalized_envelope_id,omitempty"`
 	TransformationVersionID string    `json:"transformation_version_id,omitempty"`
 	DeliveryPayloadID       string    `json:"delivery_payload_id,omitempty"`
+	DeliveryPayloadSHA256   string    `json:"delivery_payload_sha256,omitempty"`
 	State                   string    `json:"state"`
 	AttemptCount            int       `json:"attempt_count"`
 	NextAttemptAt           time.Time `json:"next_attempt_at,omitempty"`

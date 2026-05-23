@@ -127,7 +127,10 @@ var indexTemplate = template.Must(template.New("index").Parse(`<!doctype html>
         view.textContent = "No rows";
         return;
       }
-      const keys = [...new Set(rows.flatMap(row => Object.keys(row)))].slice(0, 8);
+      let keys = [...new Set(rows.flatMap(row => Object.keys(row)))].slice(0, 8);
+      if (name === "deliveries") {
+        keys = ["id", "event_id", "endpoint_id", "state", "adapter_version_id", "normalized_envelope_id", "transformation_version_id", "delivery_payload_sha256"];
+      }
       const table = document.createElement("table");
       const head = document.createElement("tr");
       for (const key of keys) {
@@ -138,6 +141,11 @@ var indexTemplate = template.Must(template.New("index").Parse(`<!doctype html>
       if (name === "events") {
         const th = document.createElement("th");
         th.textContent = "normalized";
+        head.append(th);
+      }
+      if (name === "transformations") {
+        const th = document.createElement("th");
+        th.textContent = "versions";
         head.append(th);
       }
       if (name === "audit exports") {
@@ -160,6 +168,16 @@ var indexTemplate = template.Must(template.New("index").Parse(`<!doctype html>
             const button = document.createElement("button");
             button.textContent = "View";
             button.onclick = () => showNormalized(row.id);
+            td.append(button);
+          }
+          tr.append(td);
+        }
+        if (name === "transformations") {
+          const td = document.createElement("td");
+          if (row.id) {
+            const button = document.createElement("button");
+            button.textContent = "Versions";
+            button.onclick = () => showTransformationVersions(row.id);
             td.append(button);
           }
           tr.append(td);
@@ -188,6 +206,18 @@ var indexTemplate = template.Must(template.New("index").Parse(`<!doctype html>
         raw.hidden = false;
         raw.textContent = JSON.stringify(error, null, 2);
         status.textContent = "Normalized read failed";
+      }
+    }
+
+    async function showTransformationVersions(id) {
+      try {
+        const body = await request("/v1/transformations/" + encodeURIComponent(id) + "/versions");
+        raw.hidden = false;
+        raw.textContent = JSON.stringify(body, null, 2);
+      } catch (error) {
+        raw.hidden = false;
+        raw.textContent = JSON.stringify(error, null, 2);
+        status.textContent = "Version read failed";
       }
     }
 

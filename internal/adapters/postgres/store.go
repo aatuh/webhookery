@@ -1441,7 +1441,13 @@ func (s *Store) ListEventTimeline(ctx context.Context, tenantID, eventID string,
 }
 
 func (s *Store) ListDeliveries(ctx context.Context, tenantID string, limit int) ([]domain.Delivery, error) {
-	rows, err := s.pool.Query(ctx, `SELECT id, tenant_id, event_id, endpoint_id, COALESCE(route_id,''), COALESCE(route_version_id,''), COALESCE(subscription_id,''), COALESCE(subscription_version_id,''), COALESCE(retry_policy_id,''), COALESCE(replay_job_id,''), COALESCE(adapter_version_id,''), COALESCE(normalized_envelope_id,''), COALESCE(transformation_version_id,''), COALESCE(delivery_payload_id,''), state, attempt_count, COALESCE(next_attempt_at, 'epoch'::timestamptz) FROM deliveries WHERE tenant_id=$1 ORDER BY created_at DESC LIMIT $2`, tenantID, limit)
+	rows, err := s.pool.Query(ctx, `
+		SELECT d.id, d.tenant_id, d.event_id, d.endpoint_id, COALESCE(d.route_id,''), COALESCE(d.route_version_id,''), COALESCE(d.subscription_id,''), COALESCE(d.subscription_version_id,''), COALESCE(d.retry_policy_id,''), COALESCE(d.replay_job_id,''), COALESCE(d.adapter_version_id,''), COALESCE(d.normalized_envelope_id,''), COALESCE(d.transformation_version_id,''), COALESCE(d.delivery_payload_id,''), COALESCE(p.sha256,''), d.state, d.attempt_count, COALESCE(d.next_attempt_at, 'epoch'::timestamptz)
+		FROM deliveries d
+		LEFT JOIN delivery_payloads p ON p.tenant_id=d.tenant_id AND p.id=d.delivery_payload_id
+		WHERE d.tenant_id=$1
+		ORDER BY d.created_at DESC
+		LIMIT $2`, tenantID, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -1484,7 +1490,7 @@ func (s *Store) GetDeliveryAttempt(ctx context.Context, tenantID, attemptID stri
 }
 
 func (s *Store) RetryDelivery(ctx context.Context, tenantID, deliveryID, actorID, reason string) (domain.Delivery, error) {
-	row := s.pool.QueryRow(ctx, `UPDATE deliveries SET state='scheduled', next_attempt_at=now(), locked_by=NULL, lock_expires_at=NULL WHERE tenant_id=$1 AND id=$2 RETURNING id, tenant_id, event_id, endpoint_id, COALESCE(route_id,''), COALESCE(route_version_id,''), COALESCE(subscription_id,''), COALESCE(subscription_version_id,''), COALESCE(retry_policy_id,''), COALESCE(replay_job_id,''), COALESCE(adapter_version_id,''), COALESCE(normalized_envelope_id,''), COALESCE(transformation_version_id,''), COALESCE(delivery_payload_id,''), state, attempt_count, COALESCE(next_attempt_at, 'epoch'::timestamptz)`, tenantID, deliveryID)
+	row := s.pool.QueryRow(ctx, `UPDATE deliveries SET state='scheduled', next_attempt_at=now(), locked_by=NULL, lock_expires_at=NULL WHERE tenant_id=$1 AND id=$2 RETURNING id, tenant_id, event_id, endpoint_id, COALESCE(route_id,''), COALESCE(route_version_id,''), COALESCE(subscription_id,''), COALESCE(subscription_version_id,''), COALESCE(retry_policy_id,''), COALESCE(replay_job_id,''), COALESCE(adapter_version_id,''), COALESCE(normalized_envelope_id,''), COALESCE(transformation_version_id,''), COALESCE(delivery_payload_id,''), COALESCE((SELECT p.sha256 FROM delivery_payloads p WHERE p.tenant_id=deliveries.tenant_id AND p.id=deliveries.delivery_payload_id), ''), state, attempt_count, COALESCE(next_attempt_at, 'epoch'::timestamptz)`, tenantID, deliveryID)
 	item, err := scanDelivery(row)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return domain.Delivery{}, app.ErrNotFound
@@ -1497,7 +1503,7 @@ func (s *Store) RetryDelivery(ctx context.Context, tenantID, deliveryID, actorID
 }
 
 func (s *Store) CancelDelivery(ctx context.Context, tenantID, deliveryID, actorID, reason string) (domain.Delivery, error) {
-	row := s.pool.QueryRow(ctx, `UPDATE deliveries SET state='canceled', locked_by=NULL, lock_expires_at=NULL WHERE tenant_id=$1 AND id=$2 AND state NOT IN ('succeeded','dead_lettered','canceled') RETURNING id, tenant_id, event_id, endpoint_id, COALESCE(route_id,''), COALESCE(route_version_id,''), COALESCE(subscription_id,''), COALESCE(subscription_version_id,''), COALESCE(retry_policy_id,''), COALESCE(replay_job_id,''), COALESCE(adapter_version_id,''), COALESCE(normalized_envelope_id,''), COALESCE(transformation_version_id,''), COALESCE(delivery_payload_id,''), state, attempt_count, COALESCE(next_attempt_at, 'epoch'::timestamptz)`, tenantID, deliveryID)
+	row := s.pool.QueryRow(ctx, `UPDATE deliveries SET state='canceled', locked_by=NULL, lock_expires_at=NULL WHERE tenant_id=$1 AND id=$2 AND state NOT IN ('succeeded','dead_lettered','canceled') RETURNING id, tenant_id, event_id, endpoint_id, COALESCE(route_id,''), COALESCE(route_version_id,''), COALESCE(subscription_id,''), COALESCE(subscription_version_id,''), COALESCE(retry_policy_id,''), COALESCE(replay_job_id,''), COALESCE(adapter_version_id,''), COALESCE(normalized_envelope_id,''), COALESCE(transformation_version_id,''), COALESCE(delivery_payload_id,''), COALESCE((SELECT p.sha256 FROM delivery_payloads p WHERE p.tenant_id=deliveries.tenant_id AND p.id=deliveries.delivery_payload_id), ''), state, attempt_count, COALESCE(next_attempt_at, 'epoch'::timestamptz)`, tenantID, deliveryID)
 	item, err := scanDelivery(row)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return domain.Delivery{}, app.ErrNotFound
@@ -3484,7 +3490,7 @@ func scanTransformationVersion(row rowScanner) (domain.TransformationVersion, er
 
 func scanDelivery(row rowScanner) (domain.Delivery, error) {
 	var item domain.Delivery
-	err := row.Scan(&item.ID, &item.TenantID, &item.EventID, &item.EndpointID, &item.RouteID, &item.RouteVersionID, &item.SubscriptionID, &item.SubscriptionVersionID, &item.RetryPolicyID, &item.ReplayJobID, &item.AdapterVersionID, &item.NormalizedEnvelopeID, &item.TransformationVersionID, &item.DeliveryPayloadID, &item.State, &item.AttemptCount, &item.NextAttemptAt)
+	err := row.Scan(&item.ID, &item.TenantID, &item.EventID, &item.EndpointID, &item.RouteID, &item.RouteVersionID, &item.SubscriptionID, &item.SubscriptionVersionID, &item.RetryPolicyID, &item.ReplayJobID, &item.AdapterVersionID, &item.NormalizedEnvelopeID, &item.TransformationVersionID, &item.DeliveryPayloadID, &item.DeliveryPayloadSHA256, &item.State, &item.AttemptCount, &item.NextAttemptAt)
 	return item, err
 }
 
