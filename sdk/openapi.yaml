@@ -133,6 +133,104 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/SourceSecretVersion"
+  /v1/provider-connections:
+    get:
+      summary: List provider API reconciliation connections
+      description: Plaintext provider credentials are never returned.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: Paginated provider connection metadata.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProviderConnectionPage"
+    post:
+      summary: Create provider API reconciliation connection
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateProviderConnectionRequest"
+      responses:
+        "201":
+          description: Provider connection created with encrypted credentials.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProviderConnection"
+  /v1/provider-connections/{connection_id}:
+    get:
+      summary: Get provider API reconciliation connection
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: connection_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Provider connection metadata.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProviderConnection"
+  /v1/provider-connections/{connection_id}:verify:
+    post:
+      summary: Verify provider API connection credentials
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: connection_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ReasonRequest"
+      responses:
+        "200":
+          description: Provider connection verified.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProviderConnection"
+  /v1/provider-connections/{connection_id}:revoke:
+    post:
+      summary: Revoke provider API connection credentials
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: connection_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ReasonRequest"
+      responses:
+        "200":
+          description: Provider connection revoked.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProviderConnection"
   /v1/endpoints:
     get:
       summary: List outbound endpoints
@@ -857,6 +955,132 @@ paths:
       responses:
         "200":
           description: Replay job canceled.
+  /v1/reconciliation-jobs:dry-run:
+    post:
+      summary: Dry-run provider reconciliation
+      description: Reports expected matched, missing, recoverable, redelivery, or unrecoverable outcomes without capturing recovered events or requesting redelivery.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ReconciliationJobRequest"
+      responses:
+        "200":
+          description: Dry-run reconciliation result.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReconciliationJob"
+  /v1/reconciliation-jobs:
+    get:
+      summary: List provider reconciliation jobs
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: Paginated reconciliation jobs.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReconciliationJobPage"
+    post:
+      summary: Create provider reconciliation job
+      description: Recovered provider API events are not marked as signed webhooks and route only when `route_recovered=true`.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ReconciliationJobRequest"
+            examples:
+              stripe_recovery:
+                value:
+                  connection_id: pcn_stripe
+                  window_start: "2026-05-25T00:00:00Z"
+                  window_end: "2026-05-25T12:00:00Z"
+                  capture_missing: true
+                  route_recovered: true
+                  reason: support case recovery
+              github_redelivery:
+                value:
+                  connection_id: pcn_github
+                  redeliver_failed: true
+                  reason: request GitHub redelivery for failed deliveries
+      responses:
+        "201":
+          description: Reconciliation job scheduled.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReconciliationJob"
+  /v1/reconciliation-jobs/{job_id}:
+    get:
+      summary: Get provider reconciliation job
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: job_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Reconciliation job.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReconciliationJob"
+  /v1/reconciliation-jobs/{job_id}/items:
+    get:
+      summary: List provider reconciliation gap items
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: job_id
+          in: path
+          required: true
+          schema:
+            type: string
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: Paginated reconciliation items.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReconciliationItemPage"
+  /v1/reconciliation-jobs/{job_id}:cancel:
+    post:
+      summary: Cancel provider reconciliation job
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: job_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ReasonRequest"
+      responses:
+        "200":
+          description: Reconciliation job canceled.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReconciliationJob"
   /v1/dead-letter:
     get:
       summary: List dead-letter entries
@@ -1507,6 +1731,233 @@ components:
           nullable: true
         has_more:
           type: boolean
+    CreateProviderConnectionRequest:
+      type: object
+      required: [name, provider, credential]
+      additionalProperties: false
+      properties:
+        name:
+          type: string
+          minLength: 1
+        provider:
+          type: string
+          enum: [stripe, github, shopify, slack]
+        credential_type:
+          type: string
+          enum: [api_key, bearer_token]
+          default: api_key
+        credential:
+          type: string
+          minLength: 1
+          writeOnly: true
+        config:
+          type: object
+          additionalProperties:
+            type: string
+          description: Provider-specific settings such as `source_id`, GitHub `owner`, `repo`, and `hook_id`, or test `base_url`.
+    ProviderConnection:
+      type: object
+      properties:
+        id:
+          type: string
+        tenant_id:
+          type: string
+        name:
+          type: string
+        provider:
+          type: string
+          enum: [stripe, github, shopify, slack]
+        state:
+          type: string
+          enum: [active, revoked]
+        credential_type:
+          type: string
+        credential_hint:
+          type: string
+        config:
+          type: object
+          additionalProperties:
+            type: string
+        verified_at:
+          type: string
+          format: date-time
+        revoked_at:
+          type: string
+          format: date-time
+        created_by:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+    ProviderConnectionPage:
+      type: object
+      properties:
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/ProviderConnection"
+        next_cursor:
+          type: string
+          nullable: true
+        has_more:
+          type: boolean
+    ReconciliationJobRequest:
+      type: object
+      required: [connection_id]
+      additionalProperties: false
+      properties:
+        connection_id:
+          type: string
+        dry_run:
+          type: boolean
+          default: false
+        capture_missing:
+          type: boolean
+          default: false
+        route_recovered:
+          type: boolean
+          default: false
+          description: Requires `capture_missing=true`; recovered provider API events route only when explicitly enabled.
+        redeliver_failed:
+          type: boolean
+          default: false
+        scope_object_id:
+          type: string
+        window_start:
+          type: string
+          format: date-time
+        window_end:
+          type: string
+          format: date-time
+        reason:
+          type: string
+    ReconciliationJob:
+      type: object
+      properties:
+        id:
+          type: string
+        tenant_id:
+          type: string
+        connection_id:
+          type: string
+        provider:
+          type: string
+        state:
+          type: string
+          enum: [scheduled, running, completed, canceled, failed]
+        dry_run:
+          type: boolean
+        capture_missing:
+          type: boolean
+        route_recovered:
+          type: boolean
+        redeliver_failed:
+          type: boolean
+        scope_object_id:
+          type: string
+        window_start:
+          type: string
+          format: date-time
+        window_end:
+          type: string
+          format: date-time
+        cursor:
+          type: string
+        reason:
+          type: string
+        total_items:
+          type: integer
+        matched_items:
+          type: integer
+        missing_items:
+          type: integer
+        captured_items:
+          type: integer
+        redelivered_items:
+          type: integer
+        unrecoverable_items:
+          type: integer
+        failed_items:
+          type: integer
+        error:
+          type: string
+        created_by:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        started_at:
+          type: string
+          format: date-time
+        completed_at:
+          type: string
+          format: date-time
+        canceled_at:
+          type: string
+          format: date-time
+    ReconciliationJobPage:
+      type: object
+      properties:
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/ReconciliationJob"
+        next_cursor:
+          type: string
+          nullable: true
+        has_more:
+          type: boolean
+    ReconciliationItem:
+      type: object
+      properties:
+        id:
+          type: string
+        tenant_id:
+          type: string
+        job_id:
+          type: string
+        provider:
+          type: string
+        provider_object_id:
+          type: string
+        provider_object_type:
+          type: string
+        outcome:
+          type: string
+          enum: [matched, missing, captured, redelivery_requested, unrecoverable, failed]
+        local_event_id:
+          type: string
+        recovered_event_id:
+          type: string
+        provider_api_evidence_id:
+          type: string
+        redelivery_requested:
+          type: boolean
+        error:
+          type: string
+        metadata:
+          type: object
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+    ReconciliationItemPage:
+      type: object
+      properties:
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/ReconciliationItem"
+        next_cursor:
+          type: string
+          nullable: true
+        has_more:
+          type: boolean
     CreateRetryPolicyRequest:
       type: object
       required: [name, max_attempts, max_duration_seconds, initial_delay_seconds, max_delay_seconds]
@@ -1790,7 +2241,7 @@ components:
       properties:
         resource_type:
           type: string
-          enum: [raw_payload, normalized_envelope_data, delivery_payload, audit_event]
+          enum: [raw_payload, normalized_envelope_data, delivery_payload, provider_api_evidence, audit_event]
         source_id:
           type: string
           description: Optional source filter for raw payload policies.
@@ -1825,7 +2276,7 @@ components:
           type: string
         resource_type:
           type: string
-          enum: [raw_payload, normalized_envelope_data, delivery_payload, audit_event]
+          enum: [raw_payload, normalized_envelope_data, delivery_payload, provider_api_evidence, audit_event]
         source_id:
           type: string
         retention_days:
@@ -1916,6 +2367,14 @@ components:
           additionalProperties:
             type: integer
         replay_jobs_by_state:
+          type: object
+          additionalProperties:
+            type: integer
+        reconciliation_jobs_by_state:
+          type: object
+          additionalProperties:
+            type: integer
+        reconciliation_items_by_outcome:
           type: object
           additionalProperties:
             type: integer

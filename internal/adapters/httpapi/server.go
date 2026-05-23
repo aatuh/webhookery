@@ -59,6 +59,11 @@ func (s *Server) Routes() http.Handler {
 			r.Get("/sources", s.listSources)
 			r.Post("/sources", s.createSource)
 			r.Post("/sources/{source_id}/secrets:rotate", s.rotateSourceSecret)
+			r.Get("/provider-connections", s.listProviderConnections)
+			r.Post("/provider-connections", s.createProviderConnection)
+			r.Get("/provider-connections/{connection_id}", s.getProviderConnection)
+			r.Post("/provider-connections/{connection_id}:verify", s.verifyProviderConnection)
+			r.Post("/provider-connections/{connection_id}:revoke", s.revokeProviderConnection)
 			r.Get("/endpoints", s.listEndpoints)
 			r.Post("/endpoints", s.createEndpoint)
 			r.Post("/endpoints:validate-url", s.validateEndpointURL)
@@ -102,6 +107,12 @@ func (s *Server) Routes() http.Handler {
 			r.Post("/replay-jobs/{replay_job_id}:pause", s.pauseReplayJob)
 			r.Post("/replay-jobs/{replay_job_id}:resume", s.resumeReplayJob)
 			r.Post("/replay-jobs/{replay_job_id}:cancel", s.cancelReplayJob)
+			r.Post("/reconciliation-jobs:dry-run", s.dryRunReconciliation)
+			r.Get("/reconciliation-jobs", s.listReconciliationJobs)
+			r.Post("/reconciliation-jobs", s.createReconciliationJob)
+			r.Get("/reconciliation-jobs/{job_id}", s.getReconciliationJob)
+			r.Get("/reconciliation-jobs/{job_id}/items", s.listReconciliationItems)
+			r.Post("/reconciliation-jobs/{job_id}:cancel", s.cancelReconciliationJob)
 			r.Get("/dead-letter", s.listDeadLetter)
 			r.Post("/dead-letter/{entry_id}:release", s.releaseDeadLetter)
 			r.Post("/dead-letter:bulk-release", s.bulkReleaseDeadLetter)
@@ -228,6 +239,63 @@ func (s *Server) listSources(w http.ResponseWriter, r *http.Request) {
 		out = append(out, publicSource(item))
 	}
 	writeJSON(w, http.StatusOK, page(out))
+}
+
+func (s *Server) createProviderConnection(w http.ResponseWriter, r *http.Request) {
+	var req app.CreateProviderConnectionRequest
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	item, err := s.cfg.Control.CreateProviderConnection(r.Context(), actorFrom(r), req)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, item)
+}
+
+func (s *Server) listProviderConnections(w http.ResponseWriter, r *http.Request) {
+	items, err := s.cfg.Control.ListProviderConnections(r.Context(), actorFrom(r), queryLimit(r))
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, page(items))
+}
+
+func (s *Server) getProviderConnection(w http.ResponseWriter, r *http.Request) {
+	item, err := s.cfg.Control.GetProviderConnection(r.Context(), actorFrom(r), chi.URLParam(r, "connection_id"))
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, item)
+}
+
+func (s *Server) verifyProviderConnection(w http.ResponseWriter, r *http.Request) {
+	var req app.ProviderConnectionStateRequest
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	item, err := s.cfg.Control.VerifyProviderConnection(r.Context(), actorFrom(r), chi.URLParam(r, "connection_id"), req)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, item)
+}
+
+func (s *Server) revokeProviderConnection(w http.ResponseWriter, r *http.Request) {
+	var req app.ProviderConnectionStateRequest
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	item, err := s.cfg.Control.RevokeProviderConnection(r.Context(), actorFrom(r), chi.URLParam(r, "connection_id"), req)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, item)
 }
 
 func (s *Server) rotateSourceSecret(w http.ResponseWriter, r *http.Request) {
@@ -815,6 +883,72 @@ func (s *Server) changeReplayJobState(w http.ResponseWriter, r *http.Request, fn
 	writeJSON(w, http.StatusOK, item)
 }
 
+func (s *Server) dryRunReconciliation(w http.ResponseWriter, r *http.Request) {
+	var req app.ReconciliationJobRequest
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	item, err := s.cfg.Control.DryRunReconciliation(r.Context(), actorFrom(r), req)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, item)
+}
+
+func (s *Server) createReconciliationJob(w http.ResponseWriter, r *http.Request) {
+	var req app.ReconciliationJobRequest
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	item, err := s.cfg.Control.CreateReconciliationJob(r.Context(), actorFrom(r), req)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, item)
+}
+
+func (s *Server) listReconciliationJobs(w http.ResponseWriter, r *http.Request) {
+	items, err := s.cfg.Control.ListReconciliationJobs(r.Context(), actorFrom(r), queryLimit(r))
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, page(items))
+}
+
+func (s *Server) getReconciliationJob(w http.ResponseWriter, r *http.Request) {
+	item, err := s.cfg.Control.GetReconciliationJob(r.Context(), actorFrom(r), chi.URLParam(r, "job_id"))
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, item)
+}
+
+func (s *Server) listReconciliationItems(w http.ResponseWriter, r *http.Request) {
+	items, err := s.cfg.Control.ListReconciliationItems(r.Context(), actorFrom(r), chi.URLParam(r, "job_id"), queryLimit(r))
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, page(items))
+}
+
+func (s *Server) cancelReconciliationJob(w http.ResponseWriter, r *http.Request) {
+	var req app.ProviderConnectionStateRequest
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	item, err := s.cfg.Control.CancelReconciliationJob(r.Context(), actorFrom(r), chi.URLParam(r, "job_id"), req)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, item)
+}
+
 func (s *Server) listDeadLetter(w http.ResponseWriter, r *http.Request) {
 	items, err := s.cfg.Control.ListDeadLetter(r.Context(), actorFrom(r), queryLimit(r))
 	if err != nil {
@@ -1095,6 +1229,12 @@ func formatPrometheus(metrics domain.OpsMetrics) string {
 	}
 	for state, count := range metrics.ReplayJobsByState {
 		fmt.Fprintf(&b, "webhookery_replay_jobs{state=%q} %d\n", state, count)
+	}
+	for state, count := range metrics.ReconciliationJobsByState {
+		fmt.Fprintf(&b, "webhookery_reconciliation_jobs{state=%q} %d\n", state, count)
+	}
+	for outcome, count := range metrics.ReconciliationItemsByOutcome {
+		fmt.Fprintf(&b, "webhookery_reconciliation_items{outcome=%q} %d\n", outcome, count)
 	}
 	return b.String()
 }

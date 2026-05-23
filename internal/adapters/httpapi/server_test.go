@@ -152,6 +152,34 @@ func TestTransformationWriteRequiresRoutesWrite(t *testing.T) {
 	}
 }
 
+func TestProviderConnectionCreateRequiresSourcesWrite(t *testing.T) {
+	server := testServerWithActor(authz.Actor{ID: "usr_1", TenantID: "ten_1", Role: authz.RoleDeveloper, Scopes: []string{"sources:read"}})
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/v1/provider-connections", bytes.NewBufferString(`{"name":"Stripe","provider":"stripe","credential":"sk_test_secret"}`))
+	req.Header.Set("Authorization", "Bearer token")
+	req.Header.Set("Content-Type", "application/json")
+
+	server.Routes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("expected 403, got %d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestReconciliationCreateRequiresReplayWrite(t *testing.T) {
+	server := testServerWithActor(authz.Actor{ID: "usr_1", TenantID: "ten_1", Role: authz.RoleSupport, Scopes: []string{"replay:read"}})
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/v1/reconciliation-jobs", bytes.NewBufferString(`{"connection_id":"pcn_1","reason":"recover"}`))
+	req.Header.Set("Authorization", "Bearer token")
+	req.Header.Set("Content-Type", "application/json")
+
+	server.Routes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("expected 403, got %d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
 type fakeIngestStore struct{}
 
 func (fakeIngestStore) FindSource(context.Context, string, string) (domain.Source, error) {
@@ -302,6 +330,39 @@ func (noopControlStore) UpdateRetentionPolicy(_ context.Context, tenantID, polic
 		days = *req.RetentionDays
 	}
 	return domain.RetentionPolicy{ID: policyID, TenantID: tenantID, ResourceType: domain.RetentionResourceRawPayload, RetentionDays: days, State: domain.StateActive, CreatedBy: actorID}, nil
+}
+func (noopControlStore) CreateProviderConnection(_ context.Context, tenantID, actorID string, req app.CreateProviderConnectionRequest) (domain.ProviderConnection, error) {
+	return domain.ProviderConnection{ID: "pcn_1", TenantID: tenantID, Name: req.Name, Provider: req.Provider, State: domain.ProviderConnectionStateActive, CredentialType: req.CredentialType, CredentialHint: "***", Config: req.Config, CreatedBy: actorID}, nil
+}
+func (noopControlStore) ListProviderConnections(context.Context, string, int) ([]domain.ProviderConnection, error) {
+	return nil, nil
+}
+func (noopControlStore) GetProviderConnection(_ context.Context, tenantID, connectionID string) (domain.ProviderConnection, error) {
+	return domain.ProviderConnection{ID: connectionID, TenantID: tenantID, State: domain.ProviderConnectionStateActive}, nil
+}
+func (noopControlStore) VerifyProviderConnection(_ context.Context, tenantID, connectionID, actorID, reason string) (domain.ProviderConnection, error) {
+	return domain.ProviderConnection{ID: connectionID, TenantID: tenantID, State: domain.ProviderConnectionStateActive, CreatedBy: actorID}, nil
+}
+func (noopControlStore) RevokeProviderConnection(_ context.Context, tenantID, connectionID, actorID, reason string) (domain.ProviderConnection, error) {
+	return domain.ProviderConnection{ID: connectionID, TenantID: tenantID, State: domain.ProviderConnectionStateRevoked, CreatedBy: actorID}, nil
+}
+func (noopControlStore) DryRunReconciliation(_ context.Context, tenantID string, req app.ReconciliationJobRequest) (domain.ReconciliationJob, error) {
+	return domain.ReconciliationJob{ID: "rec_dry", TenantID: tenantID, ConnectionID: req.ConnectionID, State: domain.ReconciliationJobStateCompleted, DryRun: true}, nil
+}
+func (noopControlStore) CreateReconciliationJob(_ context.Context, tenantID, actorID string, req app.ReconciliationJobRequest) (domain.ReconciliationJob, error) {
+	return domain.ReconciliationJob{ID: "rec_1", TenantID: tenantID, ConnectionID: req.ConnectionID, State: domain.ReconciliationJobStateScheduled, CreatedBy: actorID}, nil
+}
+func (noopControlStore) ListReconciliationJobs(context.Context, string, int) ([]domain.ReconciliationJob, error) {
+	return nil, nil
+}
+func (noopControlStore) GetReconciliationJob(_ context.Context, tenantID, jobID string) (domain.ReconciliationJob, error) {
+	return domain.ReconciliationJob{ID: jobID, TenantID: tenantID}, nil
+}
+func (noopControlStore) ListReconciliationItems(context.Context, string, string, int) ([]domain.ReconciliationItem, error) {
+	return nil, nil
+}
+func (noopControlStore) CancelReconciliationJob(_ context.Context, tenantID, jobID, actorID, reason string) (domain.ReconciliationJob, error) {
+	return domain.ReconciliationJob{ID: jobID, TenantID: tenantID, State: domain.ReconciliationJobStateCanceled}, nil
 }
 func (noopControlStore) CreateAuditExport(_ context.Context, tenantID, actorID string, req app.CreateAuditExportRequest) (domain.EvidenceExport, error) {
 	return domain.EvidenceExport{ID: "exp_1", TenantID: tenantID, State: domain.EvidenceExportStateReady, IncludeRawPayloads: req.IncludeRawPayloads, CreatedBy: actorID}, nil

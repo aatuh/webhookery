@@ -40,6 +40,11 @@ go run ./cmd/whcp audit export --include-timelines --include-payloads --reason "
 go run ./cmd/whcp audit export-status --export-id exp_... --api-key "$WEBHOOKERY_API_KEY"
 go run ./cmd/whcp audit download --export-id exp_... --output evidence.tar.gz --api-key "$WEBHOOKERY_API_KEY"
 go run ./cmd/whcp retention create --resource-type raw_payload --retention-days 30 --api-key "$WEBHOOKERY_API_KEY"
+go run ./cmd/whcp provider-connections create --name stripe-prod --provider stripe --credential "$STRIPE_API_KEY" --config source_id=src_stripe --api-key "$WEBHOOKERY_API_KEY"
+go run ./cmd/whcp provider-connections verify --connection-id pcn_... --reason "initial credential check" --api-key "$WEBHOOKERY_API_KEY"
+go run ./cmd/whcp reconciliation-jobs dry-run --connection-id pcn_... --from 2026-05-25T00:00:00Z --to 2026-05-25T12:00:00Z --capture-missing --api-key "$WEBHOOKERY_API_KEY"
+go run ./cmd/whcp reconciliation-jobs create --connection-id pcn_... --capture-missing --route-recovered --reason "recover missing Stripe events" --api-key "$WEBHOOKERY_API_KEY"
+go run ./cmd/whcp reconciliation-jobs items --job-id rec_... --api-key "$WEBHOOKERY_API_KEY"
 go run ./cmd/whcp retry-policies create --name standard --max-attempts 12 --max-duration-seconds 259200 --initial-delay-seconds 10 --max-delay-seconds 21600 --api-key "$WEBHOOKERY_API_KEY"
 go run ./cmd/whcp routes create --source-id src_... --endpoint-id end_... --event-types invoice.paid --retry-policy-id rtp_...
 go run ./cmd/whcp routes versions --route-id rte_... --api-key "$WEBHOOKERY_API_KEY"
@@ -67,6 +72,15 @@ subscriptions can reference deterministic JSON Pointer transformations; new
 deliveries snapshot the exact outbound payload bytes and sign those stored
 bytes. Transformation payloads may contain PII, so body reads and payload-body
 exports require `events:raw`.
+
+Provider reconciliation jobs compare provider-side API evidence to local
+Webhookery evidence when provider APIs permit it. Stripe event reconciliation
+can capture recoverable missing events as `provider_api_reconciliation`
+evidence; GitHub repository webhook reconciliation can compare delivery GUIDs
+and request redelivery for failed deliveries. Shopify and Slack currently
+record capability/limitation evidence instead of claiming generic missed-event
+recovery. Recovered events are not marked as signed webhooks and route only
+when `route_recovered=true`.
 
 For local MinIO testing:
 

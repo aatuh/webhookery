@@ -22,6 +22,7 @@ const (
 	RetentionResourceAuditEvent      = "audit_event"
 	RetentionResourceNormalized      = "normalized_envelope_data"
 	RetentionResourceDeliveryPayload = "delivery_payload"
+	RetentionResourceProviderAPI     = "provider_api_evidence"
 
 	RetentionRunStateRunning   = "running"
 	RetentionRunStateCompleted = "completed"
@@ -45,6 +46,26 @@ const (
 	SecretStateActive   = "active"
 	SecretStatePrevious = "previous"
 	SecretStateRevoked  = "revoked"
+
+	ProviderConnectionStateActive  = "active"
+	ProviderConnectionStateRevoked = "revoked"
+
+	ReconciliationJobStateScheduled = "scheduled"
+	ReconciliationJobStateRunning   = "running"
+	ReconciliationJobStateCompleted = "completed"
+	ReconciliationJobStateCanceled  = "canceled"
+	ReconciliationJobStateFailed    = "failed"
+
+	ReconciliationOutcomeMatched             = "matched"
+	ReconciliationOutcomeMissing             = "missing"
+	ReconciliationOutcomeCaptured            = "captured"
+	ReconciliationOutcomeRedeliveryRequested = "redelivery_requested"
+	ReconciliationOutcomeUnrecoverable       = "unrecoverable"
+	ReconciliationOutcomeFailed              = "failed"
+	VerificationReasonProviderAPIReconcile   = "provider_api_reconciliation"
+	ProviderAPIEvidenceStorageStatusStored   = "stored"
+	ProviderAPIEvidenceStorageStatusDeleted  = "deleted"
+	ProviderAPIEvidenceStorageStatusMetadata = "metadata_only"
 )
 
 type HeaderPair struct {
@@ -489,14 +510,98 @@ type EvidenceExport struct {
 }
 
 type OpsMetrics struct {
-	EventsTotal         int64            `json:"events_total"`
-	OutboxPending       int64            `json:"outbox_pending"`
-	OldestOutboxAgeSec  int64            `json:"oldest_outbox_age_seconds"`
-	DeadLetterOpen      int64            `json:"dead_letter_open"`
-	QuarantineOpen      int64            `json:"quarantine_open"`
-	EndpointCircuitOpen int64            `json:"endpoint_circuit_open"`
-	DeliveriesByState   map[string]int64 `json:"deliveries_by_state"`
-	ReplayJobsByState   map[string]int64 `json:"replay_jobs_by_state"`
+	EventsTotal                  int64            `json:"events_total"`
+	OutboxPending                int64            `json:"outbox_pending"`
+	OldestOutboxAgeSec           int64            `json:"oldest_outbox_age_seconds"`
+	DeadLetterOpen               int64            `json:"dead_letter_open"`
+	QuarantineOpen               int64            `json:"quarantine_open"`
+	EndpointCircuitOpen          int64            `json:"endpoint_circuit_open"`
+	DeliveriesByState            map[string]int64 `json:"deliveries_by_state"`
+	ReplayJobsByState            map[string]int64 `json:"replay_jobs_by_state"`
+	ReconciliationJobsByState    map[string]int64 `json:"reconciliation_jobs_by_state,omitempty"`
+	ReconciliationItemsByOutcome map[string]int64 `json:"reconciliation_items_by_outcome,omitempty"`
+}
+
+type ProviderConnection struct {
+	ID             string            `json:"id"`
+	TenantID       string            `json:"tenant_id"`
+	Name           string            `json:"name"`
+	Provider       string            `json:"provider"`
+	State          string            `json:"state"`
+	CredentialType string            `json:"credential_type"`
+	CredentialHint string            `json:"credential_hint"`
+	Config         map[string]string `json:"config,omitempty"`
+	VerifiedAt     time.Time         `json:"verified_at,omitempty"`
+	RevokedAt      time.Time         `json:"revoked_at,omitempty"`
+	CreatedBy      string            `json:"created_by"`
+	CreatedAt      time.Time         `json:"created_at"`
+	UpdatedAt      time.Time         `json:"updated_at"`
+}
+
+type ReconciliationJob struct {
+	ID                 string    `json:"id"`
+	TenantID           string    `json:"tenant_id"`
+	ConnectionID       string    `json:"connection_id"`
+	Provider           string    `json:"provider"`
+	State              string    `json:"state"`
+	DryRun             bool      `json:"dry_run"`
+	CaptureMissing     bool      `json:"capture_missing"`
+	RouteRecovered     bool      `json:"route_recovered"`
+	RedeliverFailed    bool      `json:"redeliver_failed"`
+	ScopeObjectID      string    `json:"scope_object_id,omitempty"`
+	WindowStart        time.Time `json:"window_start,omitempty"`
+	WindowEnd          time.Time `json:"window_end,omitempty"`
+	Cursor             string    `json:"cursor,omitempty"`
+	Reason             string    `json:"reason"`
+	TotalItems         int       `json:"total_items"`
+	MatchedItems       int       `json:"matched_items"`
+	MissingItems       int       `json:"missing_items"`
+	CapturedItems      int       `json:"captured_items"`
+	RedeliveredItems   int       `json:"redelivered_items"`
+	UnrecoverableItems int       `json:"unrecoverable_items"`
+	FailedItems        int       `json:"failed_items"`
+	Error              string    `json:"error,omitempty"`
+	CreatedBy          string    `json:"created_by"`
+	CreatedAt          time.Time `json:"created_at"`
+	StartedAt          time.Time `json:"started_at,omitempty"`
+	CompletedAt        time.Time `json:"completed_at,omitempty"`
+	CanceledAt         time.Time `json:"canceled_at,omitempty"`
+}
+
+type ReconciliationItem struct {
+	ID                    string          `json:"id"`
+	TenantID              string          `json:"tenant_id"`
+	JobID                 string          `json:"job_id"`
+	Provider              string          `json:"provider"`
+	ProviderObjectID      string          `json:"provider_object_id"`
+	ProviderObjectType    string          `json:"provider_object_type"`
+	Outcome               string          `json:"outcome"`
+	LocalEventID          string          `json:"local_event_id,omitempty"`
+	RecoveredEventID      string          `json:"recovered_event_id,omitempty"`
+	ProviderAPIEvidenceID string          `json:"provider_api_evidence_id,omitempty"`
+	RedeliveryRequested   bool            `json:"redelivery_requested"`
+	Error                 string          `json:"error,omitempty"`
+	Metadata              json.RawMessage `json:"metadata,omitempty"`
+	CreatedAt             time.Time       `json:"created_at"`
+	UpdatedAt             time.Time       `json:"updated_at"`
+}
+
+type ProviderAPIEvidence struct {
+	ID                string    `json:"id"`
+	TenantID          string    `json:"tenant_id"`
+	JobID             string    `json:"job_id"`
+	ItemID            string    `json:"item_id,omitempty"`
+	ConnectionID      string    `json:"connection_id"`
+	Provider          string    `json:"provider"`
+	RequestMethod     string    `json:"request_method"`
+	RequestURL        string    `json:"request_url"`
+	ResponseStatus    int       `json:"response_status"`
+	ResponseSHA256    string    `json:"response_sha256"`
+	ResponseSizeBytes int64     `json:"response_size_bytes"`
+	StorageStatus     string    `json:"storage_status"`
+	StorageDeletedAt  time.Time `json:"storage_deleted_at,omitempty"`
+	Error             string    `json:"error,omitempty"`
+	CreatedAt         time.Time `json:"created_at"`
 }
 
 func HashSHA256(data []byte) string {

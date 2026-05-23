@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -18,7 +19,9 @@ import (
 	"webhookery/internal/blobstore"
 	"webhookery/internal/domain"
 	"webhookery/internal/evidence"
+	"webhookery/internal/provider"
 	"webhookery/internal/random"
+	"webhookery/internal/reconcile"
 	"webhookery/internal/retry"
 	"webhookery/internal/transform"
 	"webhookery/internal/worker"
@@ -1433,6 +1436,14 @@ func (s *Store) ListEventTimeline(ctx context.Context, tenantID, eventID string,
 			SELECT 'attempt' AS kind, id AS ref_id, state, failure_class AS detail, COALESCE(completed_at, started_at) AS occurred_at
 			FROM delivery_attempts WHERE tenant_id=$1 AND event_id=$2
 			UNION ALL
+			SELECT 'reconciliation' AS kind, id AS ref_id, outcome AS state,
+			       'job=' || job_id ||
+			       ' provider_object=' || provider_object_id ||
+			       ' evidence=' || COALESCE(NULLIF(provider_api_evidence_id,''),'none') AS detail,
+			       created_at AS occurred_at
+			FROM reconciliation_items
+			WHERE tenant_id=$1 AND (local_event_id=$2 OR recovered_event_id=$2)
+			UNION ALL
 			SELECT 'audit' AS kind, id AS ref_id, action AS state, reason AS detail, occurred_at
 			FROM audit_events WHERE tenant_id=$1 AND resource_id=$2
 		) timeline
@@ -1545,7 +1556,12 @@ func (s *Store) ListEndpointHealth(ctx context.Context, tenantID string, limit i
 }
 
 func (s *Store) OpsMetrics(ctx context.Context, tenantID string) (domain.OpsMetrics, error) {
-	metrics := domain.OpsMetrics{DeliveriesByState: map[string]int64{}, ReplayJobsByState: map[string]int64{}}
+	metrics := domain.OpsMetrics{
+		DeliveriesByState:            map[string]int64{},
+		ReplayJobsByState:            map[string]int64{},
+		ReconciliationJobsByState:    map[string]int64{},
+		ReconciliationItemsByOutcome: map[string]int64{},
+	}
 	predicate, args := tenantPredicate(tenantID)
 	if err := s.pool.QueryRow(ctx, "SELECT count(*) FROM events"+predicate, args...).Scan(&metrics.EventsTotal); err != nil {
 		return metrics, err
@@ -1571,6 +1587,12 @@ func (s *Store) OpsMetrics(ctx context.Context, tenantID string) (domain.OpsMetr
 		return metrics, err
 	}
 	if err := scanCounts(ctx, s.pool, "SELECT state, count(*) FROM replay_jobs"+predicate+" GROUP BY state", args, metrics.ReplayJobsByState); err != nil {
+		return metrics, err
+	}
+	if err := scanCounts(ctx, s.pool, "SELECT state, count(*) FROM reconciliation_jobs"+predicate+" GROUP BY state", args, metrics.ReconciliationJobsByState); err != nil {
+		return metrics, err
+	}
+	if err := scanCounts(ctx, s.pool, "SELECT outcome, count(*) FROM reconciliation_items"+predicate+" GROUP BY outcome", args, metrics.ReconciliationItemsByOutcome); err != nil {
 		return metrics, err
 	}
 	return metrics, nil
@@ -1669,6 +1691,299 @@ func (s *Store) UpdateRetentionPolicy(ctx context.Context, tenantID, policyID, a
 	return existing, nil
 }
 
+func (s *Store) CreateProviderConnection(ctx context.Context, tenantID, actorID string, req app.CreateProviderConnectionRequest) (domain.ProviderConnection, error) {
+	id := mustID("pcn")
+	encrypted, err := s.box.Encrypt([]byte(req.Credential))
+	if err != nil {
+		return domain.ProviderConnection{}, err
+	}
+	configJSON, err := json.Marshal(req.Config)
+	if err != nil {
+		return domain.ProviderConnection{}, err
+	}
+	var item domain.ProviderConnection
+	err = s.pool.QueryRow(ctx, `
+		INSERT INTO provider_connections(id, tenant_id, name, provider, state, credential_type, credential_hint, encrypted_credential, config_json, created_by)
+		VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb,$10)
+		RETURNING id, tenant_id, name, provider, state, credential_type, credential_hint, config_json,
+			COALESCE(verified_at, 'epoch'::timestamptz), COALESCE(revoked_at, 'epoch'::timestamptz), created_by, created_at, updated_at`,
+		id, tenantID, req.Name, req.Provider, domain.ProviderConnectionStateActive, req.CredentialType,
+		reconcile.RedactCredential(req.Credential), encrypted, string(configJSON), actorID,
+	).Scan(&item.ID, &item.TenantID, &item.Name, &item.Provider, &item.State, &item.CredentialType, &item.CredentialHint, &item.Config,
+		&item.VerifiedAt, &item.RevokedAt, &item.CreatedBy, &item.CreatedAt, &item.UpdatedAt)
+	if err != nil {
+		return domain.ProviderConnection{}, err
+	}
+	_, _ = s.pool.Exec(ctx, `INSERT INTO audit_events(id, tenant_id, actor_id, action, resource, resource_id, reason) VALUES($1,$2,$3,'provider_connection.created','provider_connection',$4,$5)`, mustID("aud"), tenantID, actorID, id, req.Provider)
+	return normalizeProviderConnection(item), nil
+}
+
+func (s *Store) ListProviderConnections(ctx context.Context, tenantID string, limit int) ([]domain.ProviderConnection, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT id, tenant_id, name, provider, state, credential_type, credential_hint, config_json,
+			COALESCE(verified_at, 'epoch'::timestamptz), COALESCE(revoked_at, 'epoch'::timestamptz), created_by, created_at, updated_at
+		FROM provider_connections
+		WHERE tenant_id=$1
+		ORDER BY updated_at DESC
+		LIMIT $2`, tenantID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []domain.ProviderConnection
+	for rows.Next() {
+		item, err := scanProviderConnection(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, normalizeProviderConnection(item))
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) GetProviderConnection(ctx context.Context, tenantID, connectionID string) (domain.ProviderConnection, error) {
+	item, err := s.getProviderConnectionPublic(ctx, tenantID, connectionID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return domain.ProviderConnection{}, app.ErrNotFound
+	}
+	return item, err
+}
+
+func (s *Store) VerifyProviderConnection(ctx context.Context, tenantID, connectionID, actorID, reason string) (domain.ProviderConnection, error) {
+	conn, credential, err := s.getProviderConnectionSecret(ctx, tenantID, connectionID)
+	if err != nil {
+		return domain.ProviderConnection{}, err
+	}
+	adapter, ok := reconcile.BuiltInRegistry(nil).Adapter(conn.Provider)
+	if !ok {
+		return domain.ProviderConnection{}, app.ErrInvalidInput
+	}
+	if err := adapter.ValidateConnection(ctx, reconcile.Connection{
+		ID:             conn.ID,
+		Provider:       conn.Provider,
+		CredentialType: conn.CredentialType,
+		Credential:     credential,
+		Config:         conn.Config,
+	}); err != nil {
+		return domain.ProviderConnection{}, fmt.Errorf("%w: provider connection verification failed", app.ErrInvalidInput)
+	}
+	var out domain.ProviderConnection
+	err = s.pool.QueryRow(ctx, `
+		UPDATE provider_connections
+		SET verified_at=now(), updated_at=now()
+		WHERE tenant_id=$1 AND id=$2 AND state='active'
+		RETURNING id, tenant_id, name, provider, state, credential_type, credential_hint, config_json,
+			COALESCE(verified_at, 'epoch'::timestamptz), COALESCE(revoked_at, 'epoch'::timestamptz), created_by, created_at, updated_at`,
+		tenantID, connectionID,
+	).Scan(&out.ID, &out.TenantID, &out.Name, &out.Provider, &out.State, &out.CredentialType, &out.CredentialHint, &out.Config,
+		&out.VerifiedAt, &out.RevokedAt, &out.CreatedBy, &out.CreatedAt, &out.UpdatedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return domain.ProviderConnection{}, app.ErrNotFound
+	}
+	if err != nil {
+		return domain.ProviderConnection{}, err
+	}
+	_, _ = s.pool.Exec(ctx, `INSERT INTO audit_events(id, tenant_id, actor_id, action, resource, resource_id, reason) VALUES($1,$2,$3,'provider_connection.verified','provider_connection',$4,$5)`, mustID("aud"), tenantID, actorID, connectionID, reason)
+	return normalizeProviderConnection(out), nil
+}
+
+func (s *Store) RevokeProviderConnection(ctx context.Context, tenantID, connectionID, actorID, reason string) (domain.ProviderConnection, error) {
+	var out domain.ProviderConnection
+	err := s.pool.QueryRow(ctx, `
+		UPDATE provider_connections
+		SET state='revoked', revoked_at=now(), updated_at=now()
+		WHERE tenant_id=$1 AND id=$2 AND state <> 'revoked'
+		RETURNING id, tenant_id, name, provider, state, credential_type, credential_hint, config_json,
+			COALESCE(verified_at, 'epoch'::timestamptz), COALESCE(revoked_at, 'epoch'::timestamptz), created_by, created_at, updated_at`,
+		tenantID, connectionID,
+	).Scan(&out.ID, &out.TenantID, &out.Name, &out.Provider, &out.State, &out.CredentialType, &out.CredentialHint, &out.Config,
+		&out.VerifiedAt, &out.RevokedAt, &out.CreatedBy, &out.CreatedAt, &out.UpdatedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return domain.ProviderConnection{}, app.ErrNotFound
+	}
+	if err != nil {
+		return domain.ProviderConnection{}, err
+	}
+	_, _ = s.pool.Exec(ctx, `INSERT INTO audit_events(id, tenant_id, actor_id, action, resource, resource_id, reason) VALUES($1,$2,$3,'provider_connection.revoked','provider_connection',$4,$5)`, mustID("aud"), tenantID, actorID, connectionID, reason)
+	return normalizeProviderConnection(out), nil
+}
+
+func (s *Store) DryRunReconciliation(ctx context.Context, tenantID string, req app.ReconciliationJobRequest) (domain.ReconciliationJob, error) {
+	conn, credential, err := s.getProviderConnectionSecret(ctx, tenantID, req.ConnectionID)
+	if err != nil {
+		return domain.ReconciliationJob{}, err
+	}
+	adapter, ok := reconcile.BuiltInRegistry(nil).Adapter(conn.Provider)
+	if !ok {
+		return domain.ReconciliationJob{}, app.ErrInvalidInput
+	}
+	caps := adapter.Capabilities(conn.Config)
+	job := domain.ReconciliationJob{
+		ID:              "dry_run",
+		TenantID:        tenantID,
+		ConnectionID:    conn.ID,
+		Provider:        conn.Provider,
+		State:           domain.ReconciliationJobStateCompleted,
+		DryRun:          true,
+		CaptureMissing:  req.CaptureMissing,
+		RouteRecovered:  req.RouteRecovered,
+		RedeliverFailed: req.RedeliverFailed,
+		ScopeObjectID:   req.ScopeObjectID,
+		WindowStart:     req.WindowStart,
+		WindowEnd:       req.WindowEnd,
+		Reason:          req.Reason,
+		CreatedAt:       time.Now().UTC(),
+		CompletedAt:     time.Now().UTC(),
+	}
+	if !caps.CanScanEvents {
+		job.TotalItems = 1
+		job.UnrecoverableItems = 1
+		job.Error = strings.Join(caps.Limitations, "; ")
+		return job, nil
+	}
+	scan, err := adapter.Scan(ctx, reconcile.ScanRequest{
+		Connection:  reconcile.Connection{ID: conn.ID, Provider: conn.Provider, CredentialType: conn.CredentialType, Credential: credential, Config: conn.Config},
+		WindowStart: req.WindowStart, WindowEnd: req.WindowEnd, ScopeObjectID: req.ScopeObjectID,
+		CaptureMissing: req.CaptureMissing, RedeliverFailed: req.RedeliverFailed,
+	})
+	if err != nil {
+		job.State = domain.ReconciliationJobStateFailed
+		job.Error = providerErrorForDB(err)
+		return job, nil
+	}
+	for _, object := range scan.Objects {
+		job.TotalItems++
+		localID, err := s.findLocalProviderEvent(ctx, tenantID, conn, object.ID)
+		if err != nil {
+			return domain.ReconciliationJob{}, err
+		}
+		if localID != "" {
+			job.MatchedItems++
+		} else {
+			job.MissingItems++
+		}
+		if object.Failed && req.RedeliverFailed && object.Redeliverable {
+			job.RedeliveredItems++
+		}
+	}
+	return normalizeReconciliationJob(job), nil
+}
+
+func (s *Store) CreateReconciliationJob(ctx context.Context, tenantID, actorID string, req app.ReconciliationJobRequest) (domain.ReconciliationJob, error) {
+	conn, err := s.getProviderConnectionPublic(ctx, tenantID, req.ConnectionID)
+	if err != nil {
+		return domain.ReconciliationJob{}, err
+	}
+	id := mustID("rec")
+	state := domain.ReconciliationJobStateScheduled
+	if req.DryRun {
+		state = domain.ReconciliationJobStateCompleted
+	}
+	var item domain.ReconciliationJob
+	err = s.pool.QueryRow(ctx, `
+		INSERT INTO reconciliation_jobs(id, tenant_id, connection_id, provider, state, dry_run, capture_missing, route_recovered, redeliver_failed,
+			scope_object_id, window_start, window_end, reason, created_by, completed_at)
+		VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,CASE WHEN $6 THEN now() ELSE NULL END)
+		RETURNING id, tenant_id, connection_id, provider, state, dry_run, capture_missing, route_recovered, redeliver_failed, scope_object_id,
+			COALESCE(window_start, 'epoch'::timestamptz), COALESCE(window_end, 'epoch'::timestamptz), cursor, reason,
+			total_items, matched_items, missing_items, captured_items, redelivered_items, unrecoverable_items, failed_items, error,
+			created_by, created_at, COALESCE(started_at, 'epoch'::timestamptz), COALESCE(completed_at, 'epoch'::timestamptz), COALESCE(canceled_at, 'epoch'::timestamptz)`,
+		id, tenantID, req.ConnectionID, conn.Provider, state, req.DryRun, req.CaptureMissing, req.RouteRecovered, req.RedeliverFailed,
+		req.ScopeObjectID, nullableTime(req.WindowStart), nullableTime(req.WindowEnd), req.Reason, actorID,
+	).Scan(&item.ID, &item.TenantID, &item.ConnectionID, &item.Provider, &item.State, &item.DryRun, &item.CaptureMissing, &item.RouteRecovered,
+		&item.RedeliverFailed, &item.ScopeObjectID, &item.WindowStart, &item.WindowEnd, &item.Cursor, &item.Reason, &item.TotalItems,
+		&item.MatchedItems, &item.MissingItems, &item.CapturedItems, &item.RedeliveredItems, &item.UnrecoverableItems, &item.FailedItems,
+		&item.Error, &item.CreatedBy, &item.CreatedAt, &item.StartedAt, &item.CompletedAt, &item.CanceledAt)
+	if err != nil {
+		return domain.ReconciliationJob{}, err
+	}
+	if !req.DryRun {
+		payload, _ := json.Marshal(map[string]any{"job_id": id})
+		if _, err := s.pool.Exec(ctx, `INSERT INTO outbox(id, tenant_id, kind, resource_id, payload) VALUES($1,$2,'reconciliation_job',$3,$4)`, mustID("out"), tenantID, id, payload); err != nil {
+			return domain.ReconciliationJob{}, err
+		}
+	}
+	_, _ = s.pool.Exec(ctx, `INSERT INTO audit_events(id, tenant_id, actor_id, action, resource, resource_id, reason) VALUES($1,$2,$3,'reconciliation.created','reconciliation_job',$4,$5)`, mustID("aud"), tenantID, actorID, id, req.Reason)
+	return normalizeReconciliationJob(item), nil
+}
+
+func (s *Store) ListReconciliationJobs(ctx context.Context, tenantID string, limit int) ([]domain.ReconciliationJob, error) {
+	rows, err := s.pool.Query(ctx, reconciliationJobSelectSQL()+` WHERE tenant_id=$1 ORDER BY created_at DESC LIMIT $2`, tenantID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []domain.ReconciliationJob
+	for rows.Next() {
+		item, err := scanReconciliationJob(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, normalizeReconciliationJob(item))
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) GetReconciliationJob(ctx context.Context, tenantID, jobID string) (domain.ReconciliationJob, error) {
+	item, err := scanReconciliationJob(s.pool.QueryRow(ctx, reconciliationJobSelectSQL()+` WHERE tenant_id=$1 AND id=$2`, tenantID, jobID))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return domain.ReconciliationJob{}, app.ErrNotFound
+	}
+	return normalizeReconciliationJob(item), err
+}
+
+func (s *Store) ListReconciliationItems(ctx context.Context, tenantID, jobID string, limit int) ([]domain.ReconciliationItem, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT id, tenant_id, job_id, provider, provider_object_id, provider_object_type, outcome, local_event_id, recovered_event_id,
+			provider_api_evidence_id, redelivery_requested, error, metadata_json, created_at, updated_at
+		FROM reconciliation_items
+		WHERE tenant_id=$1 AND job_id=$2
+		ORDER BY created_at ASC
+		LIMIT $3`, tenantID, jobID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []domain.ReconciliationItem
+	for rows.Next() {
+		item, err := scanReconciliationItem(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, item)
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) CancelReconciliationJob(ctx context.Context, tenantID, jobID, actorID, reason string) (domain.ReconciliationJob, error) {
+	item, err := scanReconciliationJob(s.pool.QueryRow(ctx, reconciliationJobSelectSQL()+`
+		WHERE tenant_id=$1 AND id=$2 AND state NOT IN ('completed','failed','canceled')`, tenantID, jobID))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return domain.ReconciliationJob{}, app.ErrNotFound
+	}
+	if err != nil {
+		return domain.ReconciliationJob{}, err
+	}
+	err = s.pool.QueryRow(ctx, `
+		UPDATE reconciliation_jobs
+		SET state='canceled', canceled_at=now(), completed_at=now(), error='', cursor=cursor
+		WHERE tenant_id=$1 AND id=$2
+		RETURNING id, tenant_id, connection_id, provider, state, dry_run, capture_missing, route_recovered, redeliver_failed, scope_object_id,
+			COALESCE(window_start, 'epoch'::timestamptz), COALESCE(window_end, 'epoch'::timestamptz), cursor, reason,
+			total_items, matched_items, missing_items, captured_items, redelivered_items, unrecoverable_items, failed_items, error,
+			created_by, created_at, COALESCE(started_at, 'epoch'::timestamptz), COALESCE(completed_at, 'epoch'::timestamptz), COALESCE(canceled_at, 'epoch'::timestamptz)`,
+		tenantID, item.ID,
+	).Scan(&item.ID, &item.TenantID, &item.ConnectionID, &item.Provider, &item.State, &item.DryRun, &item.CaptureMissing, &item.RouteRecovered,
+		&item.RedeliverFailed, &item.ScopeObjectID, &item.WindowStart, &item.WindowEnd, &item.Cursor, &item.Reason, &item.TotalItems,
+		&item.MatchedItems, &item.MissingItems, &item.CapturedItems, &item.RedeliveredItems, &item.UnrecoverableItems, &item.FailedItems,
+		&item.Error, &item.CreatedBy, &item.CreatedAt, &item.StartedAt, &item.CompletedAt, &item.CanceledAt)
+	if err != nil {
+		return domain.ReconciliationJob{}, err
+	}
+	_, _ = s.pool.Exec(ctx, `INSERT INTO audit_events(id, tenant_id, actor_id, action, resource, resource_id, reason) VALUES($1,$2,$3,'reconciliation.canceled','reconciliation_job',$4,$5)`, mustID("aud"), tenantID, actorID, jobID, reason)
+	return normalizeReconciliationJob(item), nil
+}
+
 func (s *Store) CreateAuditExport(ctx context.Context, tenantID, actorID string, req app.CreateAuditExportRequest) (domain.EvidenceExport, error) {
 	id := mustID("exp")
 	now := time.Now().UTC()
@@ -1704,6 +2019,11 @@ func (s *Store) CreateAuditExport(ctx context.Context, tenantID, actorID string,
 		return domain.EvidenceExport{}, err
 	}
 	files["payload_evidence.jsonl"] = payloadEvidence
+	reconciliationEvidence, err := s.reconciliationEvidenceJSONLForExport(ctx, tenantID, req.From, req.To, req.IncludePayloadBodies)
+	if err != nil {
+		return domain.EvidenceExport{}, err
+	}
+	files["reconciliation_evidence.jsonl"] = reconciliationEvidence
 	bundle, err := evidence.BuildTarGzipBundle(evidence.Manifest{
 		ExportID:             id,
 		TenantID:             tenantID,
@@ -2194,9 +2514,156 @@ func (s *Store) ProcessOutbox(ctx context.Context, item worker.OutboxItem) error
 		return err
 	case "replay_job":
 		return s.createReplayDeliveries(ctx, item.TenantID, item.ResourceID)
+	case "reconciliation_job":
+		return s.RunReconciliationJob(ctx, item.TenantID, item.ResourceID)
 	default:
 		return nil
 	}
+}
+
+func (s *Store) RunReconciliationJob(ctx context.Context, tenantID, jobID string) error {
+	job, err := scanReconciliationJob(s.pool.QueryRow(ctx, reconciliationJobSelectSQL()+` WHERE tenant_id=$1 AND id=$2`, tenantID, jobID))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return app.ErrNotFound
+	}
+	if err != nil {
+		return err
+	}
+	job = normalizeReconciliationJob(job)
+	if job.State == domain.ReconciliationJobStateCanceled || job.State == domain.ReconciliationJobStateCompleted {
+		return nil
+	}
+	conn, credential, err := s.getProviderConnectionSecret(ctx, tenantID, job.ConnectionID)
+	if err != nil {
+		return s.failReconciliationJob(ctx, tenantID, jobID, err)
+	}
+	adapter, ok := reconcile.BuiltInRegistry(nil).Adapter(conn.Provider)
+	if !ok {
+		return s.failReconciliationJob(ctx, tenantID, jobID, fmt.Errorf("unsupported provider %q", conn.Provider))
+	}
+	if _, err := s.pool.Exec(ctx, `UPDATE reconciliation_jobs SET state='running', started_at=COALESCE(started_at, now()) WHERE tenant_id=$1 AND id=$2 AND state='scheduled'`, tenantID, jobID); err != nil {
+		return err
+	}
+	caps := adapter.Capabilities(conn.Config)
+	if !caps.CanScanEvents {
+		metadata, _ := json.Marshal(map[string]any{"limitations": caps.Limitations})
+		if _, err := s.insertReconciliationItem(ctx, reconciliationItemInput{
+			tenantID: tenantID, jobID: jobID, provider: conn.Provider, objectID: conn.Provider + ":unsupported", objectType: "capability",
+			outcome: domain.ReconciliationOutcomeUnrecoverable, errText: strings.Join(caps.Limitations, "; "), metadata: metadata,
+		}); err != nil {
+			return err
+		}
+		return s.completeReconciliationJob(ctx, tenantID, jobID)
+	}
+	scan, err := adapter.Scan(ctx, reconcile.ScanRequest{
+		Connection: reconcile.Connection{
+			ID: conn.ID, Provider: conn.Provider, CredentialType: conn.CredentialType, Credential: credential, Config: conn.Config,
+		},
+		WindowStart: job.WindowStart, WindowEnd: job.WindowEnd, ScopeObjectID: job.ScopeObjectID, Cursor: job.Cursor,
+		CaptureMissing: job.CaptureMissing, RedeliverFailed: job.RedeliverFailed,
+	})
+	for _, ev := range scan.Evidence {
+		if _, recErr := s.insertProviderAPIEvidence(ctx, tenantID, jobID, "", conn.ID, conn.Provider, ev); recErr != nil {
+			return recErr
+		}
+	}
+	if err != nil {
+		return s.failReconciliationJob(ctx, tenantID, jobID, err)
+	}
+	for _, object := range scan.Objects {
+		if err := s.reconcileProviderObject(ctx, job, conn, credential, adapter, object); err != nil {
+			return s.failReconciliationJob(ctx, tenantID, jobID, err)
+		}
+	}
+	if scan.NextCursor != "" {
+		if _, err := s.pool.Exec(ctx, `UPDATE reconciliation_jobs SET cursor=$1 WHERE tenant_id=$2 AND id=$3`, scan.NextCursor, tenantID, jobID); err != nil {
+			return err
+		}
+	}
+	return s.completeReconciliationJob(ctx, tenantID, jobID)
+}
+
+func (s *Store) reconcileProviderObject(ctx context.Context, job domain.ReconciliationJob, conn domain.ProviderConnection, credential string, adapter reconcile.Adapter, object reconcile.ProviderObject) error {
+	tenantID := job.TenantID
+	localEventID, err := s.findLocalProviderEvent(ctx, tenantID, conn, object.ID)
+	if err != nil {
+		return err
+	}
+	outcome := domain.ReconciliationOutcomeMatched
+	if localEventID == "" {
+		outcome = domain.ReconciliationOutcomeMissing
+	}
+	metadata, _ := json.Marshal(object.Metadata)
+	var evidenceID string
+	var recoveredEventID string
+	var errText string
+	if localEventID == "" && job.CaptureMissing {
+		lookupObject := object
+		lookupEvidence := []reconcile.Evidence(nil)
+		if len(lookupObject.RawBody) == 0 || !lookupObject.Recoverable {
+			lookupID := providerLookupID(object)
+			lookedUp, evs, lookupErr := adapter.Lookup(ctx, reconcile.Connection{ID: conn.ID, Provider: conn.Provider, CredentialType: conn.CredentialType, Credential: credential, Config: conn.Config}, lookupID)
+			lookupEvidence = evs
+			if lookupErr == nil {
+				lookupObject = lookedUp
+			} else if errors.Is(lookupErr, reconcile.ErrUnsupported) {
+				outcome = domain.ReconciliationOutcomeUnrecoverable
+				errText = "provider does not expose recoverable payload evidence for this object"
+			} else {
+				outcome = domain.ReconciliationOutcomeFailed
+				errText = providerErrorForDB(lookupErr)
+			}
+		}
+		for _, ev := range lookupEvidence {
+			id, recErr := s.insertProviderAPIEvidence(ctx, tenantID, job.ID, "", conn.ID, conn.Provider, ev)
+			if recErr != nil {
+				return recErr
+			}
+			evidenceID = id
+		}
+		if outcome == domain.ReconciliationOutcomeMissing && lookupObject.Recoverable && len(lookupObject.RawBody) > 0 {
+			recoveredEventID, err = s.captureRecoveredProviderEvent(ctx, conn, lookupObject, job.RouteRecovered)
+			if err != nil {
+				outcome = domain.ReconciliationOutcomeFailed
+				errText = err.Error()
+			} else {
+				outcome = domain.ReconciliationOutcomeCaptured
+			}
+		} else if outcome == domain.ReconciliationOutcomeMissing {
+			outcome = domain.ReconciliationOutcomeUnrecoverable
+			errText = "provider API did not include a recoverable payload body"
+		}
+	}
+	redeliveryRequested := false
+	if job.RedeliverFailed && object.Failed && object.Redeliverable {
+		evs, redeliverErr := adapter.RequestRedelivery(ctx, reconcile.Connection{ID: conn.ID, Provider: conn.Provider, CredentialType: conn.CredentialType, Credential: credential, Config: conn.Config}, providerLookupID(object))
+		for _, ev := range evs {
+			id, recErr := s.insertProviderAPIEvidence(ctx, tenantID, job.ID, "", conn.ID, conn.Provider, ev)
+			if recErr != nil {
+				return recErr
+			}
+			evidenceID = id
+		}
+		if redeliverErr != nil {
+			outcome = domain.ReconciliationOutcomeFailed
+			errText = providerErrorForDB(redeliverErr)
+		} else {
+			outcome = domain.ReconciliationOutcomeRedeliveryRequested
+			redeliveryRequested = true
+		}
+	}
+	itemID, err := s.insertReconciliationItem(ctx, reconciliationItemInput{
+		tenantID: tenantID, jobID: job.ID, provider: conn.Provider, objectID: object.ID, objectType: object.ObjectType,
+		outcome: outcome, localEventID: localEventID, recoveredEventID: recoveredEventID, evidenceID: evidenceID,
+		redeliveryRequested: redeliveryRequested, errText: errText, metadata: metadata,
+	})
+	if err != nil {
+		return err
+	}
+	if evidenceID != "" {
+		_, _ = s.pool.Exec(ctx, `UPDATE provider_api_evidence SET item_id=$1 WHERE tenant_id=$2 AND id=$3`, itemID, tenantID, evidenceID)
+	}
+	return nil
 }
 
 func (s *Store) createDeliveriesForEvent(ctx context.Context, tenantID, eventID string) (int, error) {
@@ -2207,6 +2674,7 @@ type deliveryCreationOptions struct {
 	ReplayJobID        string
 	ConfigMode         string
 	RateLimitPerMinute int
+	AllowRecovered     bool
 }
 
 func (s *Store) createDeliveriesForEventWithOptions(ctx context.Context, tenantID, eventID string, opts deliveryCreationOptions) (int, error) {
@@ -2214,7 +2682,7 @@ func (s *Store) createDeliveriesForEventWithOptions(ctx context.Context, tenantI
 	if err != nil {
 		return 0, err
 	}
-	if !event.Verified {
+	if !event.Verified && (!opts.AllowRecovered || event.VerifyReason != domain.VerificationReasonProviderAPIReconcile) {
 		return 0, nil
 	}
 	tx, err := s.pool.Begin(ctx)
@@ -2375,6 +2843,146 @@ func (s *Store) createDeliveryPayload(ctx context.Context, tx pgx.Tx, tenantID, 
 	}
 	_ = data
 	return payloadID, normalizedID, adapterVersionID, nil
+}
+
+func (s *Store) captureRecoveredProviderEvent(ctx context.Context, conn domain.ProviderConnection, object reconcile.ProviderObject, routeRecovered bool) (string, error) {
+	sourceID := strings.TrimSpace(conn.Config["source_id"])
+	if sourceID == "" {
+		return "", errors.New("provider connection config source_id is required for recovered capture")
+	}
+	var source domain.Source
+	err := s.pool.QueryRow(ctx, `SELECT id, tenant_id, name, provider, adapter, state, created_at FROM sources WHERE tenant_id=$1 AND id=$2 AND state='active'`, conn.TenantID, sourceID).
+		Scan(&source.ID, &source.TenantID, &source.Name, &source.Provider, &source.Adapter, &source.State, &source.CreatedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", app.ErrNotFound
+	}
+	if err != nil {
+		return "", err
+	}
+	now := time.Now().UTC()
+	eventID := mustID("evt")
+	rawID := mustID("raw")
+	receiptID := mustID("rcp")
+	rawHash := domain.HashSHA256(object.RawBody)
+	dedupeKey := "reconcile:" + conn.Provider + ":" + source.ID + ":" + object.ID
+	raw := domain.RawPayload{
+		TenantID:    conn.TenantID,
+		SHA256:      rawHash,
+		ContentType: "application/json",
+		SizeBytes:   int64(len(object.RawBody)),
+		Body:        append([]byte(nil), object.RawBody...),
+		CreatedAt:   now,
+	}
+	storage, bodyForDB, err := s.prepareRawPayloadStorage(ctx, conn.TenantID, rawID, raw)
+	if err != nil {
+		return "", err
+	}
+	objectWritten := storage.backend == domain.RawStorageS3
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		if objectWritten {
+			_ = s.objectStore.Delete(context.Background(), storage.bucket, storage.key)
+		}
+		return "", err
+	}
+	defer rollback(ctx, tx)
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO raw_payloads(id, tenant_id, sha256, content_type, size_bytes, body, storage_backend, object_bucket, object_key, storage_status, created_at)
+		VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
+		rawID, conn.TenantID, rawHash, raw.ContentType, raw.SizeBytes, bodyForDB, storage.backend, storage.bucket, storage.key, domain.StorageStatusStored, now,
+	); err != nil {
+		if objectWritten {
+			_ = s.objectStore.Delete(context.Background(), storage.bucket, storage.key)
+		}
+		return "", err
+	}
+	var existingEventID string
+	err = tx.QueryRow(ctx, `SELECT id FROM events WHERE tenant_id=$1 AND dedupe_key=$2`, conn.TenantID, dedupeKey).Scan(&existingEventID)
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return "", err
+	}
+	if existingEventID != "" {
+		eventID = existingEventID
+		if _, err := tx.Exec(ctx, `UPDATE raw_payloads SET event_id=$1 WHERE id=$2`, eventID, rawID); err != nil {
+			return "", err
+		}
+	} else {
+		eventType := firstNonEmpty(object.EventType, "unknown")
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO events(id, tenant_id, source_id, provider, type, provider_event_id, raw_payload_id, raw_payload_hash,
+				signature_verified, verification_reason, dedupe_key, dedupe_status, received_at, trace_id)
+			VALUES($1,$2,$3,$4,$5,$6,$7,$8,false,$9,$10,$11,$12,$13)`,
+			eventID, conn.TenantID, source.ID, source.Provider, eventType, object.ID, rawID, rawHash,
+			domain.VerificationReasonProviderAPIReconcile, dedupeKey, domain.DedupeUnique, now, "",
+		); err != nil {
+			return "", err
+		}
+		if _, err := tx.Exec(ctx, `UPDATE raw_payloads SET event_id=$1 WHERE id=$2`, eventID, rawID); err != nil {
+			return "", err
+		}
+		headers := headerPairsFromMap(object.RequestHeaders)
+		normalized, err := provider.Normalize(provider.NormalizeInput{
+			Adapter: source.Adapter, Provider: source.Provider, TenantID: conn.TenantID, SourceID: source.ID,
+			RawBody: object.RawBody, Headers: domain.CanonicalHeaders(headers), Verified: false,
+			VerifyReason: domain.VerificationReasonProviderAPIReconcile, RawHash: rawHash,
+		})
+		if err == nil {
+			adapterVersionID, err := s.lookupAdapterVersionID(ctx, tx, firstNonEmpty(source.Adapter, source.Provider))
+			if err != nil {
+				return "", err
+			}
+			if _, err := tx.Exec(ctx, `
+				INSERT INTO normalized_envelopes(id, tenant_id, event_id, adapter_version_id, provider, provider_event_id, type, source, subject,
+					envelope_json, data_json, metadata_json, envelope_sha256, data_sha256, metadata_sha256, storage_status, created_at)
+				VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,$11::jsonb,$12::jsonb,$13,$14,$15,$16,$17)`,
+				mustID("nenv"), conn.TenantID, eventID, adapterVersionID, source.Provider, normalized.ProviderEventID, normalized.Type,
+				normalized.Source, normalized.Subject, string(normalized.Envelope), string(normalized.Data), string(normalized.Metadata),
+				normalized.EnvelopeHash, normalized.DataHash, normalized.MetadataHash, domain.StorageStatusStored, now,
+			); err != nil {
+				return "", err
+			}
+		}
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO idempotency_records(tenant_id, dedupe_key, resource_type, resource_id, status_code)
+			VALUES($1,$2,'event',$3,202)
+			ON CONFLICT (tenant_id, dedupe_key) DO NOTHING`,
+			conn.TenantID, dedupeKey, eventID,
+		); err != nil {
+			return "", err
+		}
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO dedupe_records(tenant_id, source_id, dedupe_key, first_event_id, last_receipt_id, status)
+			VALUES($1,$2,$3,$4,$5,$6)
+			ON CONFLICT (tenant_id, dedupe_key) DO UPDATE
+			SET last_receipt_id=EXCLUDED.last_receipt_id, status=EXCLUDED.status, last_seen_at=now()`,
+			conn.TenantID, source.ID, dedupeKey, eventID, receiptID, domain.DedupeUnique,
+		); err != nil {
+			return "", err
+		}
+	}
+	headersJSON, _ := json.Marshal(headerPairsFromMap(object.RequestHeaders))
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO provider_receipts(id, tenant_id, source_id, event_id, raw_payload_id, raw_headers, remote_ip, verification_ok, verification_reason, received_at)
+		VALUES($1,$2,$3,$4,$5,$6,'provider-api',false,$7,$8)`,
+		receiptID, conn.TenantID, source.ID, eventID, rawID, headersJSON, domain.VerificationReasonProviderAPIReconcile, now,
+	); err != nil {
+		return "", err
+	}
+	if _, err := tx.Exec(ctx, `INSERT INTO audit_events(id, tenant_id, actor_id, action, resource, resource_id, reason) VALUES($1,$2,'reconciliation-worker','reconciliation.event_captured','event',$3,$4)`, mustID("aud"), conn.TenantID, eventID, conn.ID); err != nil {
+		return "", err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		if objectWritten {
+			_ = s.objectStore.Delete(context.Background(), storage.bucket, storage.key)
+		}
+		return "", err
+	}
+	if routeRecovered {
+		if _, err := s.createDeliveriesForEventWithOptions(ctx, conn.TenantID, eventID, deliveryCreationOptions{AllowRecovered: true}); err != nil {
+			return "", err
+		}
+	}
+	return eventID, nil
 }
 
 func (s *Store) cloneDeliveryPayload(ctx context.Context, tx pgx.Tx, tenantID, sourcePayloadID, newDeliveryID string) (payloadID, normalizedID, adapterVersionID, transformationVersionID string, err error) {
@@ -3201,6 +3809,141 @@ func (s *Store) deliveryPayloadEvidenceLines(ctx context.Context, tenantID strin
 	return lines, nil
 }
 
+func (s *Store) reconciliationEvidenceJSONLForExport(ctx context.Context, tenantID string, from, to time.Time, includeBodies bool) ([]byte, error) {
+	query := `
+		SELECT j.id, j.connection_id, j.provider, j.state, j.dry_run, j.capture_missing, j.route_recovered, j.redeliver_failed,
+		       j.scope_object_id, COALESCE(j.window_start, 'epoch'::timestamptz), COALESCE(j.window_end, 'epoch'::timestamptz),
+		       j.total_items, j.matched_items, j.missing_items, j.captured_items, j.redelivered_items, j.unrecoverable_items, j.failed_items,
+		       j.error, j.created_by, j.created_at, COALESCE(j.completed_at, 'epoch'::timestamptz)
+		FROM reconciliation_jobs j
+		WHERE j.tenant_id=$1`
+	args := []any{tenantID}
+	if !from.IsZero() {
+		args = append(args, from)
+		query += fmt.Sprintf(" AND j.created_at >= $%d", len(args))
+	}
+	if !to.IsZero() {
+		args = append(args, to)
+		query += fmt.Sprintf(" AND j.created_at <= $%d", len(args))
+	}
+	query += " ORDER BY j.created_at ASC, j.id ASC"
+	rows, err := s.pool.Query(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var lines []any
+	for rows.Next() {
+		var id, connectionID, providerName, state, scopeObjectID, errText, createdBy string
+		var dryRun, captureMissing, routeRecovered, redeliverFailed bool
+		var windowStart, windowEnd, createdAt, completedAt time.Time
+		var total, matched, missing, captured, redelivered, unrecoverable, failed int
+		if err := rows.Scan(&id, &connectionID, &providerName, &state, &dryRun, &captureMissing, &routeRecovered, &redeliverFailed,
+			&scopeObjectID, &windowStart, &windowEnd, &total, &matched, &missing, &captured, &redelivered, &unrecoverable, &failed,
+			&errText, &createdBy, &createdAt, &completedAt); err != nil {
+			return nil, err
+		}
+		items, err := s.reconciliationItemsForExport(ctx, tenantID, id)
+		if err != nil {
+			return nil, err
+		}
+		apiEvidence, err := s.providerAPIEvidenceForExport(ctx, tenantID, id, includeBodies)
+		if err != nil {
+			return nil, err
+		}
+		lines = append(lines, map[string]any{
+			"resource_type":         "reconciliation_job",
+			"id":                    id,
+			"connection_id":         connectionID,
+			"provider":              providerName,
+			"state":                 state,
+			"dry_run":               dryRun,
+			"capture_missing":       captureMissing,
+			"route_recovered":       routeRecovered,
+			"redeliver_failed":      redeliverFailed,
+			"scope_object_id":       scopeObjectID,
+			"window_start":          zeroTimeOmit(windowStart),
+			"window_end":            zeroTimeOmit(windowEnd),
+			"total_items":           total,
+			"matched_items":         matched,
+			"missing_items":         missing,
+			"captured_items":        captured,
+			"redelivered_items":     redelivered,
+			"unrecoverable_items":   unrecoverable,
+			"failed_items":          failed,
+			"error":                 errText,
+			"created_by":            createdBy,
+			"created_at":            createdAt,
+			"completed_at":          zeroTimeOmit(completedAt),
+			"items":                 items,
+			"provider_api_evidence": apiEvidence,
+			"body_included":         includeBodies,
+		})
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return evidence.JSONLines(lines)
+}
+
+func (s *Store) reconciliationItemsForExport(ctx context.Context, tenantID, jobID string) ([]map[string]any, error) {
+	return listRows(ctx, s.pool, `
+		SELECT id, provider, provider_object_id, provider_object_type, outcome, local_event_id, recovered_event_id,
+		       provider_api_evidence_id, redelivery_requested, error, metadata_json, created_at, updated_at
+		FROM reconciliation_items
+		WHERE tenant_id=$1 AND job_id=$2
+		ORDER BY created_at ASC, id ASC`, tenantID, jobID)
+}
+
+func (s *Store) providerAPIEvidenceForExport(ctx context.Context, tenantID, jobID string, includeBodies bool) ([]map[string]any, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT id, item_id, connection_id, provider, request_method, request_url, response_status, response_sha256,
+		       response_size_bytes, storage_status, COALESCE(storage_deleted_at, 'epoch'::timestamptz), error, created_at,
+		       CASE WHEN $3::boolean AND storage_status='stored' THEN response_body ELSE ''::bytea END
+		FROM provider_api_evidence
+		WHERE tenant_id=$1 AND job_id=$2
+		ORDER BY created_at ASC, id ASC`, tenantID, jobID, includeBodies)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []map[string]any
+	for rows.Next() {
+		var id, itemID, connectionID, providerName, method, rawURL, hash, storageStatus, errText string
+		var status int
+		var size int64
+		var storageDeletedAt, createdAt time.Time
+		var body []byte
+		if err := rows.Scan(&id, &itemID, &connectionID, &providerName, &method, &rawURL, &status, &hash, &size,
+			&storageStatus, &storageDeletedAt, &errText, &createdAt, &body); err != nil {
+			return nil, err
+		}
+		bodyAvailable := storageStatus == domain.ProviderAPIEvidenceStorageStatusStored
+		item := map[string]any{
+			"id":                  id,
+			"item_id":             itemID,
+			"connection_id":       connectionID,
+			"provider":            providerName,
+			"request_method":      method,
+			"request_url":         rawURL,
+			"response_status":     status,
+			"response_sha256":     hash,
+			"response_size_bytes": size,
+			"storage_status":      storageStatus,
+			"body_available":      bodyAvailable,
+			"body_included":       includeBodies && bodyAvailable,
+			"storage_deleted_at":  zeroTimeOmit(storageDeletedAt),
+			"error":               errText,
+			"created_at":          createdAt,
+		}
+		if includeBodies && bodyAvailable {
+			item["response_body_base64"] = base64.StdEncoding.EncodeToString(body)
+		}
+		out = append(out, item)
+	}
+	return out, rows.Err()
+}
+
 func zeroTimeOmit(value time.Time) any {
 	if value.Equal(time.Unix(0, 0).UTC()) {
 		return nil
@@ -3267,6 +4010,8 @@ func (s *Store) applyRetentionPolicy(ctx context.Context, workerID string, polic
 		processed, err = s.applyNormalizedEnvelopeRetention(ctx, tx, policy, runID, cutoff)
 	case domain.RetentionResourceDeliveryPayload:
 		processed, err = s.applyDeliveryPayloadRetention(ctx, tx, policy, runID, cutoff)
+	case domain.RetentionResourceProviderAPI:
+		processed, err = s.applyProviderAPIEvidenceRetention(ctx, tx, policy, runID, cutoff)
 	case domain.RetentionResourceAuditEvent:
 		processed, err = s.applyAuditEventRetention(ctx, tx, policy, runID, cutoff)
 	default:
@@ -3436,6 +4181,46 @@ func (s *Store) applyDeliveryPayloadRetention(ctx context.Context, tx pgx.Tx, po
 	return len(ids), nil
 }
 
+func (s *Store) applyProviderAPIEvidenceRetention(ctx context.Context, tx pgx.Tx, policy domain.RetentionPolicy, runID string, cutoff time.Time) (int, error) {
+	rows, err := tx.Query(ctx, `
+		SELECT id
+		FROM provider_api_evidence
+		WHERE tenant_id=$1 AND storage_status='stored' AND created_at < $2
+		ORDER BY created_at ASC
+		LIMIT 100`, policy.TenantID, cutoff)
+	if err != nil {
+		return 0, err
+	}
+	defer rows.Close()
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return 0, err
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		return 0, err
+	}
+	for _, id := range ids {
+		if _, err := tx.Exec(ctx, `
+			UPDATE provider_api_evidence
+			SET response_body='', storage_status='deleted', storage_deleted_at=now()
+			WHERE tenant_id=$1 AND id=$2`, policy.TenantID, id); err != nil {
+			return 0, err
+		}
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO retention_run_items(id, tenant_id, retention_run_id, resource_type, resource_id, action, state)
+			VALUES($1,$2,$3,$4,$5,'delete_body','completed')`,
+			mustID("rri"), policy.TenantID, runID, domain.RetentionResourceProviderAPI, id,
+		); err != nil {
+			return 0, err
+		}
+	}
+	return len(ids), nil
+}
+
 func (s *Store) applyAuditEventRetention(ctx context.Context, tx pgx.Tx, policy domain.RetentionPolicy, runID string, cutoff time.Time) (int, error) {
 	rows, err := tx.Query(ctx, `
 		SELECT id
@@ -3475,6 +4260,258 @@ func (s *Store) applyAuditEventRetention(ctx context.Context, tx pgx.Tx, policy 
 
 type rowScanner interface {
 	Scan(dest ...any) error
+}
+
+func (s *Store) getProviderConnectionPublic(ctx context.Context, tenantID, connectionID string) (domain.ProviderConnection, error) {
+	item, err := scanProviderConnection(s.pool.QueryRow(ctx, `
+		SELECT id, tenant_id, name, provider, state, credential_type, credential_hint, config_json,
+			COALESCE(verified_at, 'epoch'::timestamptz), COALESCE(revoked_at, 'epoch'::timestamptz), created_by, created_at, updated_at
+		FROM provider_connections
+		WHERE tenant_id=$1 AND id=$2`, tenantID, connectionID))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return domain.ProviderConnection{}, app.ErrNotFound
+	}
+	return normalizeProviderConnection(item), err
+}
+
+func (s *Store) getProviderConnectionSecret(ctx context.Context, tenantID, connectionID string) (domain.ProviderConnection, string, error) {
+	var encrypted []byte
+	var item domain.ProviderConnection
+	row := s.pool.QueryRow(ctx, `
+		SELECT id, tenant_id, name, provider, state, credential_type, credential_hint, config_json,
+			COALESCE(verified_at, 'epoch'::timestamptz), COALESCE(revoked_at, 'epoch'::timestamptz), created_by, created_at, updated_at, encrypted_credential
+		FROM provider_connections
+		WHERE tenant_id=$1 AND id=$2 AND state='active'`, tenantID, connectionID)
+	err := row.Scan(&item.ID, &item.TenantID, &item.Name, &item.Provider, &item.State, &item.CredentialType, &item.CredentialHint, &item.Config,
+		&item.VerifiedAt, &item.RevokedAt, &item.CreatedBy, &item.CreatedAt, &item.UpdatedAt, &encrypted)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return domain.ProviderConnection{}, "", app.ErrNotFound
+	}
+	if err != nil {
+		return domain.ProviderConnection{}, "", err
+	}
+	plain, err := s.box.Decrypt(encrypted)
+	if err != nil {
+		return domain.ProviderConnection{}, "", err
+	}
+	return normalizeProviderConnection(item), string(plain), nil
+}
+
+func scanProviderConnection(row rowScanner) (domain.ProviderConnection, error) {
+	var item domain.ProviderConnection
+	err := row.Scan(&item.ID, &item.TenantID, &item.Name, &item.Provider, &item.State, &item.CredentialType, &item.CredentialHint, &item.Config, &item.VerifiedAt, &item.RevokedAt, &item.CreatedBy, &item.CreatedAt, &item.UpdatedAt)
+	return item, err
+}
+
+func normalizeProviderConnection(item domain.ProviderConnection) domain.ProviderConnection {
+	if item.Config == nil {
+		item.Config = map[string]string{}
+	}
+	if item.VerifiedAt.Equal(time.Unix(0, 0).UTC()) {
+		item.VerifiedAt = time.Time{}
+	}
+	if item.RevokedAt.Equal(time.Unix(0, 0).UTC()) {
+		item.RevokedAt = time.Time{}
+	}
+	return item
+}
+
+func reconciliationJobSelectSQL() string {
+	return `SELECT id, tenant_id, connection_id, provider, state, dry_run, capture_missing, route_recovered, redeliver_failed, scope_object_id,
+		COALESCE(window_start, 'epoch'::timestamptz), COALESCE(window_end, 'epoch'::timestamptz), cursor, reason,
+		total_items, matched_items, missing_items, captured_items, redelivered_items, unrecoverable_items, failed_items, error,
+		created_by, created_at, COALESCE(started_at, 'epoch'::timestamptz), COALESCE(completed_at, 'epoch'::timestamptz), COALESCE(canceled_at, 'epoch'::timestamptz)
+		FROM reconciliation_jobs`
+}
+
+func scanReconciliationJob(row rowScanner) (domain.ReconciliationJob, error) {
+	var item domain.ReconciliationJob
+	err := row.Scan(&item.ID, &item.TenantID, &item.ConnectionID, &item.Provider, &item.State, &item.DryRun, &item.CaptureMissing, &item.RouteRecovered,
+		&item.RedeliverFailed, &item.ScopeObjectID, &item.WindowStart, &item.WindowEnd, &item.Cursor, &item.Reason, &item.TotalItems,
+		&item.MatchedItems, &item.MissingItems, &item.CapturedItems, &item.RedeliveredItems, &item.UnrecoverableItems, &item.FailedItems,
+		&item.Error, &item.CreatedBy, &item.CreatedAt, &item.StartedAt, &item.CompletedAt, &item.CanceledAt)
+	return item, err
+}
+
+func normalizeReconciliationJob(item domain.ReconciliationJob) domain.ReconciliationJob {
+	epoch := time.Unix(0, 0).UTC()
+	if item.WindowStart.Equal(epoch) {
+		item.WindowStart = time.Time{}
+	}
+	if item.WindowEnd.Equal(epoch) {
+		item.WindowEnd = time.Time{}
+	}
+	if item.StartedAt.Equal(epoch) {
+		item.StartedAt = time.Time{}
+	}
+	if item.CompletedAt.Equal(epoch) {
+		item.CompletedAt = time.Time{}
+	}
+	if item.CanceledAt.Equal(epoch) {
+		item.CanceledAt = time.Time{}
+	}
+	return item
+}
+
+func scanReconciliationItem(row rowScanner) (domain.ReconciliationItem, error) {
+	var item domain.ReconciliationItem
+	err := row.Scan(&item.ID, &item.TenantID, &item.JobID, &item.Provider, &item.ProviderObjectID, &item.ProviderObjectType, &item.Outcome,
+		&item.LocalEventID, &item.RecoveredEventID, &item.ProviderAPIEvidenceID, &item.RedeliveryRequested, &item.Error, &item.Metadata, &item.CreatedAt, &item.UpdatedAt)
+	return item, err
+}
+
+type reconciliationItemInput struct {
+	tenantID            string
+	jobID               string
+	provider            string
+	objectID            string
+	objectType          string
+	outcome             string
+	localEventID        string
+	recoveredEventID    string
+	evidenceID          string
+	redeliveryRequested bool
+	errText             string
+	metadata            []byte
+}
+
+func (s *Store) insertReconciliationItem(ctx context.Context, input reconciliationItemInput) (string, error) {
+	id := mustID("rci")
+	if len(input.metadata) == 0 {
+		input.metadata = []byte("{}")
+	}
+	_, err := s.pool.Exec(ctx, `
+		INSERT INTO reconciliation_items(id, tenant_id, job_id, provider, provider_object_id, provider_object_type, outcome, local_event_id,
+			recovered_event_id, provider_api_evidence_id, redelivery_requested, error, metadata_json)
+		VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13::jsonb)`,
+		id, input.tenantID, input.jobID, input.provider, input.objectID, input.objectType, input.outcome, input.localEventID,
+		input.recoveredEventID, input.evidenceID, input.redeliveryRequested, input.errText, string(input.metadata),
+	)
+	return id, err
+}
+
+func (s *Store) insertProviderAPIEvidence(ctx context.Context, tenantID, jobID, itemID, connectionID, providerName string, ev reconcile.Evidence) (string, error) {
+	id := mustID("pae")
+	body := ev.Body
+	status := domain.ProviderAPIEvidenceStorageStatusStored
+	if len(body) == 0 {
+		status = domain.ProviderAPIEvidenceStorageStatusMetadata
+	}
+	_, err := s.pool.Exec(ctx, `
+		INSERT INTO provider_api_evidence(id, tenant_id, job_id, item_id, connection_id, provider, request_method, request_url,
+			response_status, response_sha256, response_size_bytes, response_body, storage_status, error)
+		VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
+		id, tenantID, jobID, itemID, connectionID, providerName, ev.Method, redactProviderURL(ev.URL), ev.StatusCode,
+		domain.HashSHA256(body), int64(len(body)), body, status, ev.Error,
+	)
+	return id, err
+}
+
+func (s *Store) findLocalProviderEvent(ctx context.Context, tenantID string, conn domain.ProviderConnection, providerObjectID string) (string, error) {
+	query := `SELECT id FROM events WHERE tenant_id=$1 AND provider=$2 AND provider_event_id=$3`
+	args := []any{tenantID, conn.Provider, providerObjectID}
+	if sourceID := strings.TrimSpace(conn.Config["source_id"]); sourceID != "" {
+		query += ` AND source_id=$4`
+		args = append(args, sourceID)
+	}
+	query += ` ORDER BY received_at ASC LIMIT 1`
+	var id string
+	err := s.pool.QueryRow(ctx, query, args...).Scan(&id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", nil
+	}
+	return id, err
+}
+
+func providerLookupID(object reconcile.ProviderObject) string {
+	if value, ok := object.Metadata["delivery_id"]; ok && fmt.Sprint(value) != "" {
+		return fmt.Sprint(value)
+	}
+	return object.ID
+}
+
+func providerErrorForDB(err error) string {
+	if err == nil {
+		return ""
+	}
+	var providerErr reconcile.ProviderError
+	if errors.As(err, &providerErr) {
+		if providerErr.Class != "" {
+			return providerErr.Class
+		}
+	}
+	if errors.Is(err, reconcile.ErrUnsupported) {
+		return reconcile.ErrorUnsupported
+	}
+	msg := err.Error()
+	for _, marker := range []string{"sk_", "ghp_", "github_pat_", "xoxb-", "shpat_"} {
+		if strings.Contains(msg, marker) {
+			return "provider request failed"
+		}
+	}
+	return msg
+}
+
+func headerPairsFromMap(values map[string]string) []domain.HeaderPair {
+	headers := []domain.HeaderPair{{Name: "Webhookery-Recovered-By", Value: "provider-api-reconciliation"}}
+	for name, value := range values {
+		headers = append(headers, domain.HeaderPair{Name: name, Value: value})
+	}
+	return headers
+}
+
+func redactProviderURL(rawURL string) string {
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		return rawURL
+	}
+	query := parsed.Query()
+	for key := range query {
+		lower := strings.ToLower(key)
+		if strings.Contains(lower, "key") || strings.Contains(lower, "token") || strings.Contains(lower, "secret") {
+			query.Set(key, "redacted")
+		}
+	}
+	parsed.RawQuery = query.Encode()
+	return parsed.String()
+}
+
+func (s *Store) completeReconciliationJob(ctx context.Context, tenantID, jobID string) error {
+	_, err := s.pool.Exec(ctx, `
+		UPDATE reconciliation_jobs j
+		SET state='completed',
+		    total_items=counts.total,
+		    matched_items=counts.matched,
+		    missing_items=counts.missing,
+		    captured_items=counts.captured,
+		    redelivered_items=counts.redelivered,
+		    unrecoverable_items=counts.unrecoverable,
+		    failed_items=counts.failed,
+		    completed_at=now()
+		FROM (
+			SELECT
+				count(*)::int AS total,
+				count(*) FILTER (WHERE outcome='matched')::int AS matched,
+				count(*) FILTER (WHERE outcome='missing')::int AS missing,
+				count(*) FILTER (WHERE outcome='captured')::int AS captured,
+				count(*) FILTER (WHERE outcome='redelivery_requested')::int AS redelivered,
+				count(*) FILTER (WHERE outcome='unrecoverable')::int AS unrecoverable,
+				count(*) FILTER (WHERE outcome='failed')::int AS failed
+			FROM reconciliation_items
+			WHERE tenant_id=$1 AND job_id=$2
+		) counts
+		WHERE j.tenant_id=$1 AND j.id=$2 AND j.state <> 'canceled'`, tenantID, jobID)
+	return err
+}
+
+func (s *Store) failReconciliationJob(ctx context.Context, tenantID, jobID string, cause error) error {
+	_, err := s.pool.Exec(ctx, `
+		UPDATE reconciliation_jobs
+		SET state='failed', error=$3, completed_at=now()
+		WHERE tenant_id=$1 AND id=$2 AND state <> 'canceled'`,
+		tenantID, jobID, providerErrorForDB(cause),
+	)
+	return err
 }
 
 func scanEvent(row rowScanner) (domain.Event, error) {

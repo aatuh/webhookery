@@ -58,6 +58,8 @@ func run(args []string) error {
 		return runEvents(args[1:])
 	case "sources":
 		return runSources(args[1:])
+	case "provider-connections":
+		return runProviderConnections(args[1:])
 	case "endpoints":
 		return runEndpoints(args[1:])
 	case "subscriptions":
@@ -72,6 +74,8 @@ func run(args []string) error {
 		return runDeliveries(args[1:])
 	case "replay-jobs":
 		return runReplayJobs(args[1:])
+	case "reconciliation-jobs":
+		return runReconciliationJobs(args[1:])
 	case "ops":
 		return runOps(args[1:])
 	case "audit":
@@ -92,7 +96,7 @@ func run(args []string) error {
 }
 
 func usage() error {
-	return fmt.Errorf("usage: whcp <api|worker|scheduler|migrate|admin|api-keys|events|sources|endpoints|subscriptions|retry-policies|routes|transformations|deliveries|replay-jobs|ops|audit|retention|schemas|dead-letter|quarantine|signatures>")
+	return fmt.Errorf("usage: whcp <api|worker|scheduler|migrate|admin|api-keys|events|sources|provider-connections|endpoints|subscriptions|retry-policies|routes|transformations|deliveries|replay-jobs|reconciliation-jobs|ops|audit|retention|schemas|dead-letter|quarantine|signatures>")
 }
 
 func runAPI() error {
@@ -291,6 +295,54 @@ func runSources(args []string) error {
 		return postJSON(*baseURL, *apiKey, "/v1/sources/"+url.PathEscape(*sourceID)+"/secrets:rotate", map[string]any{"new_secret": *secret, "grace_period_hours": *graceHours, "reason": *reason})
 	default:
 		return fmt.Errorf("usage: whcp sources <create|rotate-secret>")
+	}
+}
+
+func runProviderConnections(args []string) error {
+	if len(args) == 0 {
+		return fmt.Errorf("usage: whcp provider-connections <list|get|create|verify|revoke>")
+	}
+	fs := flag.NewFlagSet("provider-connections "+args[0], flag.ContinueOnError)
+	baseURL := fs.String("base-url", "http://localhost:8080", "API base URL")
+	apiKey := fs.String("api-key", os.Getenv("WEBHOOKERY_API_KEY"), "API key")
+	connectionID := fs.String("connection-id", "", "provider connection id")
+	name := fs.String("name", "", "connection name")
+	providerName := fs.String("provider", "", "stripe, github, shopify, or slack")
+	credential := fs.String("credential", "", "provider API credential")
+	credentialType := fs.String("credential-type", "api_key", "api_key or bearer_token")
+	config := fs.String("config", "", "comma-separated key=value provider config")
+	reason := fs.String("reason", "", "operator reason")
+	if err := fs.Parse(args[1:]); err != nil {
+		return err
+	}
+	switch args[0] {
+	case "list":
+		return getJSON(*baseURL, *apiKey, "/v1/provider-connections")
+	case "get":
+		if strings.TrimSpace(*connectionID) == "" {
+			return fmt.Errorf("connection-id is required")
+		}
+		return getJSON(*baseURL, *apiKey, "/v1/provider-connections/"+url.PathEscape(*connectionID))
+	case "create":
+		return postJSON(*baseURL, *apiKey, "/v1/provider-connections", map[string]any{
+			"name":            *name,
+			"provider":        *providerName,
+			"credential":      *credential,
+			"credential_type": *credentialType,
+			"config":          parseKeyValueCSV(*config),
+		})
+	case "verify":
+		if strings.TrimSpace(*connectionID) == "" {
+			return fmt.Errorf("connection-id is required")
+		}
+		return postJSON(*baseURL, *apiKey, "/v1/provider-connections/"+url.PathEscape(*connectionID)+":verify", map[string]string{"reason": *reason})
+	case "revoke":
+		if strings.TrimSpace(*connectionID) == "" {
+			return fmt.Errorf("connection-id is required")
+		}
+		return postJSON(*baseURL, *apiKey, "/v1/provider-connections/"+url.PathEscape(*connectionID)+":revoke", map[string]string{"reason": *reason})
+	default:
+		return fmt.Errorf("usage: whcp provider-connections <list|get|create|verify|revoke>")
 	}
 }
 
@@ -537,6 +589,71 @@ func runReplayJobs(args []string) error {
 		return postJSON(*baseURL, *apiKey, "/v1/replay-jobs/"+url.PathEscape(*replayJobID)+":cancel", map[string]string{"reason": *reason})
 	default:
 		return fmt.Errorf("usage: whcp replay-jobs <list|dry-run|create|pause|resume|cancel>")
+	}
+}
+
+func runReconciliationJobs(args []string) error {
+	if len(args) == 0 {
+		return fmt.Errorf("usage: whcp reconciliation-jobs <list|get|items|dry-run|create|cancel>")
+	}
+	fs := flag.NewFlagSet("reconciliation-jobs "+args[0], flag.ContinueOnError)
+	baseURL := fs.String("base-url", "http://localhost:8080", "API base URL")
+	apiKey := fs.String("api-key", os.Getenv("WEBHOOKERY_API_KEY"), "API key")
+	jobID := fs.String("job-id", "", "reconciliation job id")
+	connectionID := fs.String("connection-id", "", "provider connection id")
+	scopeObjectID := fs.String("scope-object-id", "", "provider-specific object or event scope")
+	fromRaw := fs.String("from", "", "RFC3339 lower bound")
+	toRaw := fs.String("to", "", "RFC3339 upper bound")
+	captureMissing := fs.Bool("capture-missing", false, "capture recoverable missing provider events")
+	routeRecovered := fs.Bool("route-recovered", false, "route recovered events after durable capture")
+	redeliverFailed := fs.Bool("redeliver-failed", false, "request provider redelivery for failed deliveries when supported")
+	reason := fs.String("reason", "", "operator reason")
+	if err := fs.Parse(args[1:]); err != nil {
+		return err
+	}
+	switch args[0] {
+	case "list":
+		return getJSON(*baseURL, *apiKey, "/v1/reconciliation-jobs")
+	case "get":
+		if strings.TrimSpace(*jobID) == "" {
+			return fmt.Errorf("job-id is required")
+		}
+		return getJSON(*baseURL, *apiKey, "/v1/reconciliation-jobs/"+url.PathEscape(*jobID))
+	case "items":
+		if strings.TrimSpace(*jobID) == "" {
+			return fmt.Errorf("job-id is required")
+		}
+		return getJSON(*baseURL, *apiKey, "/v1/reconciliation-jobs/"+url.PathEscape(*jobID)+"/items")
+	case "dry-run", "create":
+		from, err := parseOptionalTime(*fromRaw)
+		if err != nil {
+			return err
+		}
+		to, err := parseOptionalTime(*toRaw)
+		if err != nil {
+			return err
+		}
+		body := map[string]any{
+			"connection_id":    *connectionID,
+			"scope_object_id":  *scopeObjectID,
+			"window_start":     nullableCLITime(from),
+			"window_end":       nullableCLITime(to),
+			"capture_missing":  *captureMissing,
+			"route_recovered":  *routeRecovered,
+			"redeliver_failed": *redeliverFailed,
+			"reason":           *reason,
+		}
+		if args[0] == "dry-run" {
+			return postJSON(*baseURL, *apiKey, "/v1/reconciliation-jobs:dry-run", body)
+		}
+		return postJSON(*baseURL, *apiKey, "/v1/reconciliation-jobs", body)
+	case "cancel":
+		if strings.TrimSpace(*jobID) == "" {
+			return fmt.Errorf("job-id is required")
+		}
+		return postJSON(*baseURL, *apiKey, "/v1/reconciliation-jobs/"+url.PathEscape(*jobID)+":cancel", map[string]string{"reason": *reason})
+	default:
+		return fmt.Errorf("usage: whcp reconciliation-jobs <list|get|items|dry-run|create|cancel>")
 	}
 }
 
@@ -1037,6 +1154,22 @@ func splitCSV(value string) []string {
 		if part != "" {
 			out = append(out, part)
 		}
+	}
+	return out
+}
+
+func parseKeyValueCSV(value string) map[string]string {
+	out := map[string]string{}
+	for _, part := range splitCSV(value) {
+		key, val, ok := strings.Cut(part, "=")
+		if !ok {
+			continue
+		}
+		key = strings.TrimSpace(key)
+		if key == "" {
+			continue
+		}
+		out[key] = strings.TrimSpace(val)
 	}
 	return out
 }

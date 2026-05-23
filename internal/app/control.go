@@ -62,6 +62,17 @@ type ControlStore interface {
 	ListRetentionPolicies(ctx context.Context, tenantID string, limit int) ([]domain.RetentionPolicy, error)
 	CreateRetentionPolicy(ctx context.Context, tenantID, actorID string, req CreateRetentionPolicyRequest) (domain.RetentionPolicy, error)
 	UpdateRetentionPolicy(ctx context.Context, tenantID, policyID, actorID string, req UpdateRetentionPolicyRequest) (domain.RetentionPolicy, error)
+	CreateProviderConnection(ctx context.Context, tenantID, actorID string, req CreateProviderConnectionRequest) (domain.ProviderConnection, error)
+	ListProviderConnections(ctx context.Context, tenantID string, limit int) ([]domain.ProviderConnection, error)
+	GetProviderConnection(ctx context.Context, tenantID, connectionID string) (domain.ProviderConnection, error)
+	VerifyProviderConnection(ctx context.Context, tenantID, connectionID, actorID, reason string) (domain.ProviderConnection, error)
+	RevokeProviderConnection(ctx context.Context, tenantID, connectionID, actorID, reason string) (domain.ProviderConnection, error)
+	DryRunReconciliation(ctx context.Context, tenantID string, req ReconciliationJobRequest) (domain.ReconciliationJob, error)
+	CreateReconciliationJob(ctx context.Context, tenantID, actorID string, req ReconciliationJobRequest) (domain.ReconciliationJob, error)
+	ListReconciliationJobs(ctx context.Context, tenantID string, limit int) ([]domain.ReconciliationJob, error)
+	GetReconciliationJob(ctx context.Context, tenantID, jobID string) (domain.ReconciliationJob, error)
+	ListReconciliationItems(ctx context.Context, tenantID, jobID string, limit int) ([]domain.ReconciliationItem, error)
+	CancelReconciliationJob(ctx context.Context, tenantID, jobID, actorID, reason string) (domain.ReconciliationJob, error)
 	CreateAuditExport(ctx context.Context, tenantID, actorID string, req CreateAuditExportRequest) (domain.EvidenceExport, error)
 	ListAuditExports(ctx context.Context, tenantID string, limit int) ([]domain.EvidenceExport, error)
 	GetAuditExport(ctx context.Context, tenantID, exportID string) (domain.EvidenceExport, error)
@@ -274,6 +285,30 @@ type UpdateRetentionPolicyRequest struct {
 	RetentionDays *int    `json:"retention_days,omitempty"`
 	State         string  `json:"state,omitempty"`
 	SourceID      *string `json:"source_id,omitempty"`
+}
+
+type CreateProviderConnectionRequest struct {
+	Name           string            `json:"name"`
+	Provider       string            `json:"provider"`
+	CredentialType string            `json:"credential_type,omitempty"`
+	Credential     string            `json:"credential"`
+	Config         map[string]string `json:"config,omitempty"`
+}
+
+type ProviderConnectionStateRequest struct {
+	Reason string `json:"reason"`
+}
+
+type ReconciliationJobRequest struct {
+	ConnectionID    string    `json:"connection_id"`
+	DryRun          bool      `json:"dry_run,omitempty"`
+	CaptureMissing  bool      `json:"capture_missing,omitempty"`
+	RouteRecovered  bool      `json:"route_recovered,omitempty"`
+	RedeliverFailed bool      `json:"redeliver_failed,omitempty"`
+	ScopeObjectID   string    `json:"scope_object_id,omitempty"`
+	WindowStart     time.Time `json:"window_start,omitempty"`
+	WindowEnd       time.Time `json:"window_end,omitempty"`
+	Reason          string    `json:"reason,omitempty"`
 }
 
 type CreateAuditExportRequest struct {
@@ -861,6 +896,111 @@ func (s *ControlService) UpdateRetentionPolicy(ctx context.Context, actor authz.
 	return s.store.UpdateRetentionPolicy(ctx, actor.TenantID, policyID, actor.ID, req)
 }
 
+func (s *ControlService) CreateProviderConnection(ctx context.Context, actor authz.Actor, req CreateProviderConnectionRequest) (domain.ProviderConnection, error) {
+	if !authz.Can(actor, "sources:write", actor.TenantID) {
+		return domain.ProviderConnection{}, ErrForbidden
+	}
+	if err := validateProviderConnectionRequest(&req); err != nil {
+		return domain.ProviderConnection{}, err
+	}
+	return s.store.CreateProviderConnection(ctx, actor.TenantID, actor.ID, req)
+}
+
+func (s *ControlService) ListProviderConnections(ctx context.Context, actor authz.Actor, limit int) ([]domain.ProviderConnection, error) {
+	if !authz.Can(actor, "sources:read", actor.TenantID) {
+		return nil, ErrForbidden
+	}
+	return s.store.ListProviderConnections(ctx, actor.TenantID, normalizeLimit(limit))
+}
+
+func (s *ControlService) GetProviderConnection(ctx context.Context, actor authz.Actor, connectionID string) (domain.ProviderConnection, error) {
+	if !authz.Can(actor, "sources:read", actor.TenantID) {
+		return domain.ProviderConnection{}, ErrForbidden
+	}
+	if strings.TrimSpace(connectionID) == "" {
+		return domain.ProviderConnection{}, fmt.Errorf("%w: connection_id is required", ErrInvalidInput)
+	}
+	return s.store.GetProviderConnection(ctx, actor.TenantID, connectionID)
+}
+
+func (s *ControlService) VerifyProviderConnection(ctx context.Context, actor authz.Actor, connectionID string, req ProviderConnectionStateRequest) (domain.ProviderConnection, error) {
+	if !authz.Can(actor, "sources:write", actor.TenantID) {
+		return domain.ProviderConnection{}, ErrForbidden
+	}
+	if strings.TrimSpace(connectionID) == "" || strings.TrimSpace(req.Reason) == "" {
+		return domain.ProviderConnection{}, fmt.Errorf("%w: connection_id and reason are required", ErrInvalidInput)
+	}
+	return s.store.VerifyProviderConnection(ctx, actor.TenantID, connectionID, actor.ID, strings.TrimSpace(req.Reason))
+}
+
+func (s *ControlService) RevokeProviderConnection(ctx context.Context, actor authz.Actor, connectionID string, req ProviderConnectionStateRequest) (domain.ProviderConnection, error) {
+	if !authz.Can(actor, "sources:write", actor.TenantID) {
+		return domain.ProviderConnection{}, ErrForbidden
+	}
+	if strings.TrimSpace(connectionID) == "" || strings.TrimSpace(req.Reason) == "" {
+		return domain.ProviderConnection{}, fmt.Errorf("%w: connection_id and reason are required", ErrInvalidInput)
+	}
+	return s.store.RevokeProviderConnection(ctx, actor.TenantID, connectionID, actor.ID, strings.TrimSpace(req.Reason))
+}
+
+func (s *ControlService) DryRunReconciliation(ctx context.Context, actor authz.Actor, req ReconciliationJobRequest) (domain.ReconciliationJob, error) {
+	if !authz.Can(actor, "replay:read", actor.TenantID) {
+		return domain.ReconciliationJob{}, ErrForbidden
+	}
+	if err := validateReconciliationJobRequest(&req, false); err != nil {
+		return domain.ReconciliationJob{}, err
+	}
+	req.DryRun = true
+	return s.store.DryRunReconciliation(ctx, actor.TenantID, req)
+}
+
+func (s *ControlService) CreateReconciliationJob(ctx context.Context, actor authz.Actor, req ReconciliationJobRequest) (domain.ReconciliationJob, error) {
+	if !authz.Can(actor, "replay:write", actor.TenantID) {
+		return domain.ReconciliationJob{}, ErrForbidden
+	}
+	if err := validateReconciliationJobRequest(&req, true); err != nil {
+		return domain.ReconciliationJob{}, err
+	}
+	return s.store.CreateReconciliationJob(ctx, actor.TenantID, actor.ID, req)
+}
+
+func (s *ControlService) ListReconciliationJobs(ctx context.Context, actor authz.Actor, limit int) ([]domain.ReconciliationJob, error) {
+	if !authz.Can(actor, "replay:read", actor.TenantID) {
+		return nil, ErrForbidden
+	}
+	return s.store.ListReconciliationJobs(ctx, actor.TenantID, normalizeLimit(limit))
+}
+
+func (s *ControlService) GetReconciliationJob(ctx context.Context, actor authz.Actor, jobID string) (domain.ReconciliationJob, error) {
+	if !authz.Can(actor, "replay:read", actor.TenantID) {
+		return domain.ReconciliationJob{}, ErrForbidden
+	}
+	if strings.TrimSpace(jobID) == "" {
+		return domain.ReconciliationJob{}, fmt.Errorf("%w: job_id is required", ErrInvalidInput)
+	}
+	return s.store.GetReconciliationJob(ctx, actor.TenantID, jobID)
+}
+
+func (s *ControlService) ListReconciliationItems(ctx context.Context, actor authz.Actor, jobID string, limit int) ([]domain.ReconciliationItem, error) {
+	if !authz.Can(actor, "replay:read", actor.TenantID) {
+		return nil, ErrForbidden
+	}
+	if strings.TrimSpace(jobID) == "" {
+		return nil, fmt.Errorf("%w: job_id is required", ErrInvalidInput)
+	}
+	return s.store.ListReconciliationItems(ctx, actor.TenantID, jobID, normalizeLimit(limit))
+}
+
+func (s *ControlService) CancelReconciliationJob(ctx context.Context, actor authz.Actor, jobID string, req ProviderConnectionStateRequest) (domain.ReconciliationJob, error) {
+	if !authz.Can(actor, "replay:write", actor.TenantID) {
+		return domain.ReconciliationJob{}, ErrForbidden
+	}
+	if strings.TrimSpace(jobID) == "" || strings.TrimSpace(req.Reason) == "" {
+		return domain.ReconciliationJob{}, fmt.Errorf("%w: job_id and reason are required", ErrInvalidInput)
+	}
+	return s.store.CancelReconciliationJob(ctx, actor.TenantID, jobID, actor.ID, strings.TrimSpace(req.Reason))
+}
+
 func (s *ControlService) CreateAuditExport(ctx context.Context, actor authz.Actor, req CreateAuditExportRequest) (domain.EvidenceExport, error) {
 	if !authz.Can(actor, "audit:read", actor.TenantID) {
 		return domain.EvidenceExport{}, ErrForbidden
@@ -1050,15 +1190,67 @@ func normalizeLimit(limit int) int {
 
 func validateRetentionPolicyInput(resourceType string, retentionDays int, state string) error {
 	switch resourceType {
-	case domain.RetentionResourceRawPayload, domain.RetentionResourceAuditEvent, domain.RetentionResourceNormalized, domain.RetentionResourceDeliveryPayload:
+	case domain.RetentionResourceRawPayload, domain.RetentionResourceAuditEvent, domain.RetentionResourceNormalized, domain.RetentionResourceDeliveryPayload, domain.RetentionResourceProviderAPI:
 	default:
-		return fmt.Errorf("%w: resource_type must be raw_payload, audit_event, normalized_envelope_data, or delivery_payload", ErrInvalidInput)
+		return fmt.Errorf("%w: resource_type must be raw_payload, audit_event, normalized_envelope_data, delivery_payload, or provider_api_evidence", ErrInvalidInput)
 	}
 	if retentionDays <= 0 || retentionDays > 3650 {
 		return fmt.Errorf("%w: retention_days must be between 1 and 3650", ErrInvalidInput)
 	}
 	if state != domain.StateActive && state != domain.StateDisabled {
 		return fmt.Errorf("%w: state must be active or disabled", ErrInvalidInput)
+	}
+	return nil
+}
+
+func validateProviderConnectionRequest(req *CreateProviderConnectionRequest) error {
+	req.Name = strings.TrimSpace(req.Name)
+	req.Provider = strings.ToLower(strings.TrimSpace(req.Provider))
+	req.CredentialType = strings.TrimSpace(req.CredentialType)
+	req.Credential = strings.TrimSpace(req.Credential)
+	if req.CredentialType == "" {
+		req.CredentialType = "api_key"
+	}
+	if req.Name == "" || req.Provider == "" || req.Credential == "" {
+		return fmt.Errorf("%w: name, provider, and credential are required", ErrInvalidInput)
+	}
+	switch req.Provider {
+	case "stripe", "github", "shopify", "slack":
+	default:
+		return fmt.Errorf("%w: provider must be stripe, github, shopify, or slack", ErrInvalidInput)
+	}
+	if req.CredentialType != "api_key" && req.CredentialType != "bearer_token" {
+		return fmt.Errorf("%w: credential_type must be api_key or bearer_token", ErrInvalidInput)
+	}
+	if req.Config == nil {
+		req.Config = map[string]string{}
+	}
+	for key, value := range req.Config {
+		trimmedKey := strings.TrimSpace(key)
+		if trimmedKey == "" {
+			return fmt.Errorf("%w: config keys must be non-empty", ErrInvalidInput)
+		}
+		delete(req.Config, key)
+		req.Config[trimmedKey] = strings.TrimSpace(value)
+	}
+	return nil
+}
+
+func validateReconciliationJobRequest(req *ReconciliationJobRequest, requireReason bool) error {
+	req.ConnectionID = strings.TrimSpace(req.ConnectionID)
+	req.ScopeObjectID = strings.TrimSpace(req.ScopeObjectID)
+	req.Reason = strings.TrimSpace(req.Reason)
+	if req.ConnectionID == "" {
+		return fmt.Errorf("%w: connection_id is required", ErrInvalidInput)
+	}
+	if requireReason && req.Reason == "" {
+		return fmt.Errorf("%w: reason is required", ErrInvalidInput)
+	}
+	if !req.WindowStart.IsZero() && !req.WindowEnd.IsZero() && req.WindowStart.After(req.WindowEnd) {
+		return fmt.Errorf("%w: window_start must be before window_end", ErrInvalidInput)
+	}
+	if req.RouteRecovered && !req.CaptureMissing {
+		return fmt.Errorf("%w: route_recovered requires capture_missing", ErrInvalidInput)
 	}
 	return nil
 }

@@ -43,7 +43,7 @@ func Normalize(input NormalizeInput) (NormalizedEnvelope, error) {
 	if adapter == "" {
 		adapter = strings.ToLower(strings.TrimSpace(input.Provider))
 	}
-	if !input.Verified && adapter != "generic-unsafe" {
+	if !input.Verified && input.VerifyReason != domain.VerificationReasonProviderAPIReconcile && adapter != "generic-unsafe" {
 		return NormalizedEnvelope{}, ErrUnverifiedNormalization
 	}
 	var raw map[string]any

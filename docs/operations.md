@@ -106,6 +106,55 @@ work. Replay jobs can be paused, resumed, or canceled through the API/CLI.
 Paused jobs keep durable outbox work uncompleted until they are resumed.
 Dead-letter entries can be released one at a time or in bounded bulk batches.
 
+## Provider Reconciliation
+
+Provider reconciliation jobs are implemented for cases where a provider API can
+show provider-side event or delivery evidence that may not exist locally.
+Provider API credentials are stored in `provider_connections` through the same
+envelope encryption interface used for webhook and endpoint secrets. API and
+CLI responses expose only `credential_type`, a redacted `credential_hint`,
+provider name, state, timestamps, and provider-specific configuration metadata.
+
+Create and verify connections with `/v1/provider-connections` or
+`whcp provider-connections`. Create reconciliation jobs with
+`/v1/reconciliation-jobs` or `whcp reconciliation-jobs`. Job creation and
+cancelation require replay/recovery write permission and a reason. Reads require
+replay read permission. Jobs and items are tenant-scoped.
+
+Implemented provider behavior checked on May 25, 2026:
+
+- Stripe event reconciliation uses the Events API. Stripe documents event
+  list/retrieve access for events going back up to 30 days:
+  https://docs.stripe.com/api/events/list and
+  https://docs.stripe.com/api/events
+- GitHub repository webhook reconciliation uses repository webhook deliveries
+  and redelivery attempts:
+  https://docs.github.com/en/rest/repos/webhooks and
+  https://docs.github.com/en/webhooks/testing-and-troubleshooting-webhooks/viewing-webhook-deliveries
+- Shopify is represented as capability/gap evidence only. Shopify recommends
+  reconciliation jobs by polling relevant resources with `updated_at` filters,
+  but generic missed-webhook payload recovery is topic-specific:
+  https://shopify.dev/docs/apps/build/webhooks
+- Slack is represented as capability/gap evidence only. Slack Events API
+  delivery is best-effort with bounded retries and does not provide a generic
+  missed-event recovery feed in this implementation:
+  https://docs.slack.dev/apis/events-api/
+
+Reconciliation item outcomes are `matched`, `missing`, `captured`,
+`redelivery_requested`, `unrecoverable`, and `failed`. Missing Stripe events
+and GitHub delivery payloads are captured only when `capture_missing=true` and
+the provider API returned a recoverable payload body. Recovered events use
+`verification_reason=provider_api_reconciliation`; they are not marked as
+signed webhook deliveries. They route only when `route_recovered=true`, and the
+durable recovered event capture commits before any delivery work is created.
+
+Provider API call evidence is stored in `provider_api_evidence` with request
+method, redacted request URL, response status, response hash, size, storage
+status, and optional response body. Provider API response bodies are sensitive
+payload data and require `events:raw` through export body inclusion controls.
+Provider tokens are not written to audit events, job items, logs, UI tables, or
+export metadata.
+
 Endpoint health is derived from recorded delivery attempts. Repeated failures
 open a lightweight endpoint circuit and delay further delivery attempts for a
 short cooling period; delivery-time SSRF validation still runs for every
@@ -191,6 +240,9 @@ types are:
 - `delivery_payload`: deletes stored outbound delivery payload bodies while
   preserving delivery ids, hashes, transformation evidence, attempts, and audit
   rows.
+- `provider_api_evidence`: deletes stored provider API response bodies while
+  preserving reconciliation jobs, gap items, request metadata, hashes, sizes,
+  and audit rows.
 - `audit_event`: deletes audit rows after the policy age.
 
 The worker applies active policies in bounded batches and records
@@ -202,10 +254,12 @@ write audit events.
 `POST /v1/audit-events:export` creates a tenant-scoped `tar.gz` bundle
 synchronously for this implementation slice. The bundle contains
 `manifest.json`, `audit_events.jsonl`, `payload_evidence.jsonl`, and optional
-`timelines.jsonl` and `raw_payloads.jsonl`. Payload evidence includes
-normalized envelope metadata, delivery payload metadata, and hashes. Raw payload
-bodies are included only with `include_raw_payloads=true` when the actor has
-both `audit:read` and `events:raw`. Normalized and delivery payload bodies are
+`timelines.jsonl` and `raw_payloads.jsonl`. Reconciliation evidence is included
+in `reconciliation_evidence.jsonl`. Payload evidence includes normalized
+envelope metadata, delivery payload metadata, provider API evidence metadata,
+and hashes. Raw payload bodies are included only with
+`include_raw_payloads=true` when the actor has both `audit:read` and
+`events:raw`. Normalized, delivery payload, and provider API response bodies are
 included only with `include_payload_bodies=true` and the same permissions.
 Actors without `events:raw` cannot see or download raw- or payload-body
 inclusive exports.
@@ -221,7 +275,8 @@ and verification workflows remain a later v2 feature.
 metrics without tenant labels. `/v1/ops/metrics` exposes tenant-scoped JSON
 metrics for authenticated operators, including pending outbox count, oldest
 outbox age, delivery states, replay states, open DLQ count, quarantine count,
-and open endpoint circuits.
+open endpoint circuits, reconciliation job states, and reconciliation item
+outcomes.
 
 ## SSRF Protection
 

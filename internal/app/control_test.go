@@ -302,19 +302,95 @@ func TestControlServiceValidatesTransformationOperations(t *testing.T) {
 	}
 }
 
+func TestControlServiceProviderConnectionsScopeAndRedactCredentials(t *testing.T) {
+	store := &fakeControlStore{}
+	svc := NewControlService(store, ssrf.Validator{Resolver: ssrf.StaticResolver{}})
+	actor := authz.Actor{ID: "usr_1", TenantID: "ten_a", Role: authz.RoleDeveloper, Scopes: []string{"sources:write", "sources:read"}}
+
+	conn, err := svc.CreateProviderConnection(context.Background(), actor, CreateProviderConnectionRequest{
+		Name:       "Stripe prod",
+		Provider:   "stripe",
+		Credential: "sk_test_secret",
+		Config:     map[string]string{" source_id ": " src_1 "},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if store.providerConnectionTenantID != "ten_a" {
+		t.Fatalf("connection create was not tenant-scoped: %q", store.providerConnectionTenantID)
+	}
+	if store.providerConnectionReq.Credential != "sk_test_secret" {
+		t.Fatal("credential did not reach persistence boundary for encryption")
+	}
+	if conn.CredentialHint == "" || conn.CredentialHint == "sk_test_secret" {
+		t.Fatalf("credential metadata was not redacted: %+v", conn)
+	}
+}
+
+func TestControlServiceProviderConnectionMutationRequiresSourcesWrite(t *testing.T) {
+	store := &fakeControlStore{}
+	svc := NewControlService(store, ssrf.Validator{Resolver: ssrf.StaticResolver{}})
+	actor := authz.Actor{ID: "usr_1", TenantID: "ten_a", Role: authz.RoleDeveloper, Scopes: []string{"sources:read"}}
+
+	_, err := svc.CreateProviderConnection(context.Background(), actor, CreateProviderConnectionRequest{Name: "GitHub", Provider: "github", Credential: "token"})
+	if err != ErrForbidden {
+		t.Fatalf("expected forbidden create, got %v", err)
+	}
+	_, err = svc.RevokeProviderConnection(context.Background(), actor, "pcn_1", ProviderConnectionStateRequest{Reason: "offboard"})
+	if err != ErrForbidden {
+		t.Fatalf("expected forbidden revoke, got %v", err)
+	}
+}
+
+func TestControlServiceReconciliationRequiresReasonAndScopesTenant(t *testing.T) {
+	store := &fakeControlStore{}
+	svc := NewControlService(store, ssrf.Validator{Resolver: ssrf.StaticResolver{}})
+	actor := authz.Actor{ID: "usr_1", TenantID: "ten_a", Role: authz.RoleDeveloper, Scopes: []string{"replay:write", "replay:read"}}
+
+	_, err := svc.CreateReconciliationJob(context.Background(), actor, ReconciliationJobRequest{ConnectionID: "pcn_1", CaptureMissing: true})
+	if !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("expected missing reason validation, got %v", err)
+	}
+	_, err = svc.CreateReconciliationJob(context.Background(), actor, ReconciliationJobRequest{ConnectionID: "pcn_1", RouteRecovered: true, Reason: "recover"})
+	if !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("expected route_recovered validation, got %v", err)
+	}
+	job, err := svc.CreateReconciliationJob(context.Background(), actor, ReconciliationJobRequest{ConnectionID: "pcn_1", CaptureMissing: true, RouteRecovered: true, Reason: "recover"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if store.reconciliationTenantID != "ten_a" || job.TenantID != "ten_a" {
+		t.Fatalf("reconciliation job was not tenant scoped: store=%q job=%q", store.reconciliationTenantID, job.TenantID)
+	}
+}
+
+func TestControlServiceReconciliationReadRequiresReplayRead(t *testing.T) {
+	store := &fakeControlStore{}
+	svc := NewControlService(store, ssrf.Validator{Resolver: ssrf.StaticResolver{}})
+	actor := authz.Actor{ID: "usr_1", TenantID: "ten_a", Role: authz.RoleSupport, Scopes: []string{"events:read"}}
+
+	_, err := svc.ListReconciliationJobs(context.Background(), actor, 50)
+	if err != ErrForbidden {
+		t.Fatalf("expected forbidden reconciliation list, got %v", err)
+	}
+}
+
 type fakeControlStore struct {
-	eventTenantID          string
-	auditExportTenantID    string
-	auditExport            domain.EvidenceExport
-	auditExportDownloaded  bool
-	auditExports           []domain.EvidenceExport
-	apiKeyInput            APIKeyCreateInput
-	eventSchema            domain.EventSchema
-	schemaTenantID         string
-	retryPolicyTenantID    string
-	normalizedTenantID     string
-	normalizedMetadataOnly bool
-	transformationTenantID string
+	eventTenantID              string
+	auditExportTenantID        string
+	auditExport                domain.EvidenceExport
+	auditExportDownloaded      bool
+	auditExports               []domain.EvidenceExport
+	apiKeyInput                APIKeyCreateInput
+	eventSchema                domain.EventSchema
+	schemaTenantID             string
+	retryPolicyTenantID        string
+	normalizedTenantID         string
+	normalizedMetadataOnly     bool
+	transformationTenantID     string
+	providerConnectionTenantID string
+	providerConnectionReq      CreateProviderConnectionRequest
+	reconciliationTenantID     string
 }
 
 func (f *fakeControlStore) CreateAPIKey(_ context.Context, input APIKeyCreateInput) (domain.APIKey, error) {
@@ -453,6 +529,43 @@ func (f *fakeControlStore) UpdateRetentionPolicy(_ context.Context, tenantID, po
 		days = *req.RetentionDays
 	}
 	return domain.RetentionPolicy{ID: policyID, TenantID: tenantID, RetentionDays: days, CreatedBy: actorID}, nil
+}
+func (f *fakeControlStore) CreateProviderConnection(_ context.Context, tenantID, actorID string, req CreateProviderConnectionRequest) (domain.ProviderConnection, error) {
+	f.providerConnectionTenantID = tenantID
+	f.providerConnectionReq = req
+	return domain.ProviderConnection{ID: "pcn_1", TenantID: tenantID, Name: req.Name, Provider: req.Provider, State: domain.ProviderConnectionStateActive, CredentialType: req.CredentialType, CredentialHint: "sk_...cret", Config: req.Config, CreatedBy: actorID}, nil
+}
+func (f *fakeControlStore) ListProviderConnections(context.Context, string, int) ([]domain.ProviderConnection, error) {
+	return nil, nil
+}
+func (f *fakeControlStore) GetProviderConnection(context.Context, string, string) (domain.ProviderConnection, error) {
+	return domain.ProviderConnection{}, nil
+}
+func (f *fakeControlStore) VerifyProviderConnection(context.Context, string, string, string, string) (domain.ProviderConnection, error) {
+	return domain.ProviderConnection{}, nil
+}
+func (f *fakeControlStore) RevokeProviderConnection(context.Context, string, string, string, string) (domain.ProviderConnection, error) {
+	return domain.ProviderConnection{}, nil
+}
+func (f *fakeControlStore) DryRunReconciliation(_ context.Context, tenantID string, req ReconciliationJobRequest) (domain.ReconciliationJob, error) {
+	f.reconciliationTenantID = tenantID
+	return domain.ReconciliationJob{ID: "rec_dry", TenantID: tenantID, ConnectionID: req.ConnectionID, DryRun: true}, nil
+}
+func (f *fakeControlStore) CreateReconciliationJob(_ context.Context, tenantID, actorID string, req ReconciliationJobRequest) (domain.ReconciliationJob, error) {
+	f.reconciliationTenantID = tenantID
+	return domain.ReconciliationJob{ID: "rec_1", TenantID: tenantID, ConnectionID: req.ConnectionID, State: domain.ReconciliationJobStateScheduled, CaptureMissing: req.CaptureMissing, RouteRecovered: req.RouteRecovered, CreatedBy: actorID}, nil
+}
+func (f *fakeControlStore) ListReconciliationJobs(context.Context, string, int) ([]domain.ReconciliationJob, error) {
+	return nil, nil
+}
+func (f *fakeControlStore) GetReconciliationJob(context.Context, string, string) (domain.ReconciliationJob, error) {
+	return domain.ReconciliationJob{}, nil
+}
+func (f *fakeControlStore) ListReconciliationItems(context.Context, string, string, int) ([]domain.ReconciliationItem, error) {
+	return nil, nil
+}
+func (f *fakeControlStore) CancelReconciliationJob(context.Context, string, string, string, string) (domain.ReconciliationJob, error) {
+	return domain.ReconciliationJob{}, nil
 }
 func (f *fakeControlStore) CreateAuditExport(_ context.Context, tenantID, actorID string, req CreateAuditExportRequest) (domain.EvidenceExport, error) {
 	return domain.EvidenceExport{ID: "exp_1", TenantID: tenantID, IncludeRawPayloads: req.IncludeRawPayloads, IncludePayloadBodies: req.IncludePayloadBodies, CreatedBy: actorID}, nil

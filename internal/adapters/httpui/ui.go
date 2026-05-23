@@ -54,6 +54,7 @@ var indexTemplate = template.Must(template.New("index").Parse(`<!doctype html>
   <script>
     const resources = [
       ["sources", "/v1/sources"],
+      ["provider connections", "/v1/provider-connections"],
       ["endpoints", "/v1/endpoints"],
       ["subscriptions", "/v1/subscriptions"],
       ["transformations", "/v1/transformations"],
@@ -63,6 +64,7 @@ var indexTemplate = template.Must(template.New("index").Parse(`<!doctype html>
       ["events", "/v1/events"],
       ["deliveries", "/v1/deliveries"],
       ["replay", "/v1/replay-jobs"],
+      ["reconciliation", "/v1/reconciliation-jobs"],
       ["dead letter", "/v1/dead-letter"],
       ["quarantine", "/v1/quarantine"],
       ["audit", "/v1/audit-events"],
@@ -131,6 +133,12 @@ var indexTemplate = template.Must(template.New("index").Parse(`<!doctype html>
       if (name === "deliveries") {
         keys = ["id", "event_id", "endpoint_id", "state", "adapter_version_id", "normalized_envelope_id", "transformation_version_id", "delivery_payload_sha256"];
       }
+      if (name === "provider connections") {
+        keys = ["id", "name", "provider", "state", "credential_type", "credential_hint", "verified_at", "updated_at"];
+      }
+      if (name === "reconciliation") {
+        keys = ["id", "connection_id", "provider", "state", "total_items", "missing_items", "captured_items", "redelivered_items"];
+      }
       const table = document.createElement("table");
       const head = document.createElement("tr");
       for (const key of keys) {
@@ -151,6 +159,11 @@ var indexTemplate = template.Must(template.New("index").Parse(`<!doctype html>
       if (name === "audit exports") {
         const th = document.createElement("th");
         th.textContent = "download";
+        head.append(th);
+      }
+      if (name === "reconciliation") {
+        const th = document.createElement("th");
+        th.textContent = "items";
         head.append(th);
       }
       table.append(head);
@@ -188,6 +201,16 @@ var indexTemplate = template.Must(template.New("index").Parse(`<!doctype html>
             const button = document.createElement("button");
             button.textContent = "Download";
             button.onclick = () => downloadExport(row.id);
+            td.append(button);
+          }
+          tr.append(td);
+        }
+        if (name === "reconciliation") {
+          const td = document.createElement("td");
+          if (row.id) {
+            const button = document.createElement("button");
+            button.textContent = "Items";
+            button.onclick = () => showReconciliationItems(row.id);
             td.append(button);
           }
           tr.append(td);
@@ -235,6 +258,18 @@ var indexTemplate = template.Must(template.New("index").Parse(`<!doctype html>
         URL.revokeObjectURL(link.href);
       } catch (error) {
         status.textContent = "Download failed";
+      }
+    }
+
+    async function showReconciliationItems(id) {
+      try {
+        const body = await request("/v1/reconciliation-jobs/" + encodeURIComponent(id) + "/items");
+        raw.hidden = false;
+        raw.textContent = JSON.stringify(body, null, 2);
+      } catch (error) {
+        raw.hidden = false;
+        raw.textContent = JSON.stringify(error, null, 2);
+        status.textContent = "Reconciliation items read failed";
       }
     }
   </script>
