@@ -1,0 +1,33 @@
+{{- if .Values.migrate.enabled }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "webhookery.fullname" . }}-migrate
+  labels:
+    {{- include "webhookery.labels" . | nindent 4 }}
+    app.kubernetes.io/component: migrate
+spec:
+  template:
+    metadata:
+      labels:
+        {{- include "webhookery.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: migrate
+    spec:
+      restartPolicy: OnFailure
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: migrate
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args: ["migrate", "-dir", "migrations", "up"]
+          envFrom:
+            - configMapRef:
+                name: {{ include "webhookery.fullname" . }}-config
+            - secretRef:
+                name: {{ include "webhookery.secretName" . }}
+          securityContext:
+            {{- toYaml .Values.containerSecurityContext | nindent 12 }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+{{- end }}

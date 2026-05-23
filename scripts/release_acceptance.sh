@@ -9,7 +9,9 @@ make fast-check
 test -f Dockerfile
 test -f docker-compose.yml
 test -f deploy/kubernetes/kustomization.yaml
+test -f deploy/helm/webhookery/Chart.yaml
 grep -q "runAsNonRoot: true" deploy/kubernetes/api-deployment.yaml
+grep -q "runAsNonRoot: true" deploy/helm/webhookery/values.yaml
 test -f .env.example
 test -f .api.env.example
 test -f collections/postman/webhookery.postman_collection.json

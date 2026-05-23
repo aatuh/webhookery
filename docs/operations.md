@@ -26,6 +26,12 @@ or PostgreSQL. Use `deploy/kubernetes/secret.example.yaml` only as a template,
 then create the real `webhookery-secrets` Secret through the cluster's normal
 secret-management workflow.
 
+The Helm chart under `deploy/helm/webhookery` deploys the same API, worker,
+scheduler, and optional migration-job shape. It also expects external
+PostgreSQL and optional object storage. By default it references an existing
+Kubernetes Secret for sensitive values; `secret.create=true` is intended for
+operator-supplied values files, not committed secrets.
+
 The project makes no FIPS/NIST/CMVP certification claim.
 
 ## Backup And Restore

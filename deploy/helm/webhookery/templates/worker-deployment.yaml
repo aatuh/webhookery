@@ -1,0 +1,35 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "webhookery.fullname" . }}-worker
+  labels:
+    {{- include "webhookery.labels" . | nindent 4 }}
+    app.kubernetes.io/component: worker
+spec:
+  replicas: {{ .Values.replicaCount.worker }}
+  selector:
+    matchLabels:
+      {{- include "webhookery.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: worker
+  template:
+    metadata:
+      labels:
+        {{- include "webhookery.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: worker
+    spec:
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: worker
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args: ["worker"]
+          envFrom:
+            - configMapRef:
+                name: {{ include "webhookery.fullname" . }}-config
+            - secretRef:
+                name: {{ include "webhookery.secretName" . }}
+          securityContext:
+            {{- toYaml .Values.containerSecurityContext | nindent 12 }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}

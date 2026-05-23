@@ -1,0 +1,53 @@
+replicaCount:
+  api: 1
+  worker: 1
+  scheduler: 1
+
+image:
+  repository: webhookery
+  tag: latest
+  pullPolicy: IfNotPresent
+
+service:
+  type: ClusterIP
+  port: 8080
+
+config:
+  environment: production
+  httpAddr: ":8080"
+  logLevel: info
+  enableUI: "false"
+  rawStorageMode: postgres
+  objectStorageEndpoint: ""
+  objectStorageBucket: ""
+  objectStorageRegion: ""
+  objectStorageUseSSL: "true"
+  bootstrapTenantID: ten_bootstrap
+  bootstrapAPIKeyPrefix: ""
+
+secret:
+  create: false
+  name: webhookery-secrets
+  stringData:
+    WEBHOOKERY_DATABASE_URL: ""
+    WEBHOOKERY_MASTER_KEY_BASE64: ""
+    WEBHOOKERY_OBJECT_STORAGE_ACCESS_KEY: ""
+    WEBHOOKERY_OBJECT_STORAGE_SECRET_KEY: ""
+    WEBHOOKERY_BOOTSTRAP_API_KEY_HASH: ""
+
+migrate:
+  enabled: true
+
+resources: {}
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 10001
+  runAsGroup: 10001
+  fsGroup: 10001
+
+containerSecurityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop: ["ALL"]

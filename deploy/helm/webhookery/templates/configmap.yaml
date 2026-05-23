@@ -1,0 +1,18 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "webhookery.fullname" . }}-config
+  labels:
+    {{- include "webhookery.labels" . | nindent 4 }}
+data:
+  WEBHOOKERY_ENVIRONMENT: {{ .Values.config.environment | quote }}
+  WEBHOOKERY_HTTP_ADDR: {{ .Values.config.httpAddr | quote }}
+  WEBHOOKERY_LOG_LEVEL: {{ .Values.config.logLevel | quote }}
+  WEBHOOKERY_ENABLE_UI: {{ .Values.config.enableUI | quote }}
+  WEBHOOKERY_RAW_STORAGE_MODE: {{ .Values.config.rawStorageMode | quote }}
+  WEBHOOKERY_OBJECT_STORAGE_ENDPOINT: {{ .Values.config.objectStorageEndpoint | quote }}
+  WEBHOOKERY_OBJECT_STORAGE_BUCKET: {{ .Values.config.objectStorageBucket | quote }}
+  WEBHOOKERY_OBJECT_STORAGE_REGION: {{ .Values.config.objectStorageRegion | quote }}
+  WEBHOOKERY_OBJECT_STORAGE_USE_SSL: {{ .Values.config.objectStorageUseSSL | quote }}
+  WEBHOOKERY_BOOTSTRAP_TENANT_ID: {{ .Values.config.bootstrapTenantID | quote }}
+  WEBHOOKERY_BOOTSTRAP_API_KEY_PREFIX: {{ .Values.config.bootstrapAPIKeyPrefix | quote }}

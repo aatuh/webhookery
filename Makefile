@@ -57,8 +57,12 @@ deployment-profile-check: ## Check deployment profile evidence and non-claims
 	@grep -q "no FIPS/NIST/CMVP certification" docs/operations.md
 	@test -f deploy/kubernetes/kustomization.yaml
 	@test -f deploy/kubernetes/secret.example.yaml
+	@test -f deploy/helm/webhookery/Chart.yaml
+	@test -f deploy/helm/webhookery/values.yaml
 	@grep -q "runAsNonRoot: true" deploy/kubernetes/api-deployment.yaml
+	@grep -q "runAsNonRoot: true" deploy/helm/webhookery/values.yaml
 	@grep -q "WEBHOOKERY_DATABASE_URL" deploy/kubernetes/secret.example.yaml
+	@grep -q "WEBHOOKERY_DATABASE_URL" deploy/helm/webhookery/values.yaml
 	@test -x scripts/release_acceptance.sh
 	@test -x scripts/backup_postgres.sh
 	@test -x scripts/restore_postgres.sh

@@ -66,6 +66,7 @@ go run ./cmd/whcp replay-jobs approve --replay-job-id rpl_... --reason "approved
 go run ./cmd/whcp ops metrics --api-key "$WEBHOOKERY_API_KEY"
 scripts/backup_postgres.sh backups
 WEBHOOKERY_RESTORE_CONFIRM=restore scripts/restore_postgres.sh backups/webhookery-20260525T000000Z.dump
+helm lint deploy/helm/webhookery
 make release-acceptance
 make collections-check
 ```
