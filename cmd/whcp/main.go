@@ -125,7 +125,7 @@ func runAPI() error {
 		EnableUI: cfg.EnableUI,
 		Health:   store.Health,
 	})
-	httpServer := &http.Server{Addr: cfg.HTTPAddr, Handler: server.Routes(), ReadHeaderTimeout: 5 * time.Second}
+	httpServer := &http.Server{Addr: cfg.HTTPAddr, Handler: server.Routes(), ReadHeaderTimeout: 5 * time.Second, MaxHeaderBytes: 64 << 10}
 	errCh := make(chan error, 1)
 	go func() {
 		slog.Info("starting api", "addr", cfg.HTTPAddr)

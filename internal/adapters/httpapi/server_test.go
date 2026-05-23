@@ -3,6 +3,7 @@ package httpapi
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -98,6 +99,52 @@ func TestSlackChallengeExtraction(t *testing.T) {
 	}
 	if slackChallenge([]byte(`{"type":"event_callback","challenge":"abc123"}`)) != "" {
 		t.Fatal("non-url-verification payload must not be treated as challenge")
+	}
+}
+
+func TestIngressRejectsOversizedHeaderBeforeCapture(t *testing.T) {
+	store := &trackingIngestStore{}
+	server := NewServer(ServerConfig{
+		Control: NewNoopControl(),
+		Ingest:  app.NewIngestService(store, app.SystemClock{}),
+		Auth:    app.NewStaticAuthenticator("token", authz.Actor{ID: "usr_1", TenantID: "ten_1", Role: authz.RoleAdmin, Scopes: []string{"*"}}),
+		OpenAPI: []byte("openapi: 3.1.0\n"),
+	})
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/v1/ingest/ten_1/src_1", strings.NewReader(`{}`))
+	req.Header.Set("X-Oversized", strings.Repeat("a", maxHeaderValueBytes+1))
+
+	server.Routes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusRequestHeaderFieldsTooLarge {
+		t.Fatalf("expected 431, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if store.called {
+		t.Fatal("oversized headers must be rejected before ingest store lookup")
+	}
+}
+
+func TestIngressRejectsTooManyHeadersBeforeCapture(t *testing.T) {
+	store := &trackingIngestStore{}
+	server := NewServer(ServerConfig{
+		Control: NewNoopControl(),
+		Ingest:  app.NewIngestService(store, app.SystemClock{}),
+		Auth:    app.NewStaticAuthenticator("token", authz.Actor{ID: "usr_1", TenantID: "ten_1", Role: authz.RoleAdmin, Scopes: []string{"*"}}),
+		OpenAPI: []byte("openapi: 3.1.0\n"),
+	})
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/v1/ingest/ten_1/src_1", strings.NewReader(`{}`))
+	for i := 0; i <= maxHeaderPairs; i++ {
+		req.Header.Set(fmt.Sprintf("X-Many-%03d", i), "a")
+	}
+
+	server.Routes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusRequestHeaderFieldsTooLarge {
+		t.Fatalf("expected 431, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if store.called {
+		t.Fatal("excessive headers must be rejected before ingest store lookup")
 	}
 }
 
@@ -226,6 +273,23 @@ func (fakeIngestStore) FindSourceByProviderPath(context.Context, string, string)
 	return domain.Source{}, app.ErrNotFound
 }
 func (fakeIngestStore) CaptureInbound(context.Context, app.CaptureInboundInput) (app.CaptureInboundResult, error) {
+	return app.CaptureInboundResult{}, nil
+}
+
+type trackingIngestStore struct {
+	called bool
+}
+
+func (f *trackingIngestStore) FindSource(context.Context, string, string) (domain.Source, error) {
+	f.called = true
+	return domain.Source{}, app.ErrNotFound
+}
+func (f *trackingIngestStore) FindSourceByProviderPath(context.Context, string, string) (domain.Source, error) {
+	f.called = true
+	return domain.Source{}, app.ErrNotFound
+}
+func (f *trackingIngestStore) CaptureInbound(context.Context, app.CaptureInboundInput) (app.CaptureInboundResult, error) {
+	f.called = true
 	return app.CaptureInboundResult{}, nil
 }
 

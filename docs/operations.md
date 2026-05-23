@@ -132,7 +132,10 @@ production-style operation.
 Inbound provider endpoints may return success only after raw body bytes,
 headers, request metadata, verification result, event metadata, dedupe result,
 and durable outbox work are committed. A downstream delivery success is never
-implied by inbound 2xx.
+implied by inbound 2xx. The API rejects ingress requests above the 2 MiB body
+limit with HTTP 413 and requests with more than 128 header pairs, more than
+64 KiB of header name/value bytes, or any single header value above 8 KiB with
+HTTP 431 before source lookup or capture work starts.
 
 Provider-specific behavior checked on May 25, 2026:
 

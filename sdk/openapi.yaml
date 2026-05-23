@@ -762,6 +762,8 @@ paths:
           description: Invalid signature.
         "413":
           description: Payload too large.
+        "431":
+          description: Request headers too large.
         "503":
           description: Durable storage unavailable before acknowledgement.
   /v1/ingest/stripe/{source_id}:
@@ -770,30 +772,40 @@ paths:
       responses:
         "200":
           description: Accepted after durable capture.
+        "431":
+          description: Request headers too large.
   /v1/ingest/github/{source_id}:
     post:
       summary: GitHub webhook ingestion
       responses:
         "200":
           description: Accepted after durable capture.
+        "431":
+          description: Request headers too large.
   /v1/ingest/shopify/{source_id}:
     post:
       summary: Shopify webhook ingestion
       responses:
         "200":
           description: Accepted after durable capture.
+        "431":
+          description: Request headers too large.
   /v1/ingest/slack/{source_id}:
     post:
       summary: Slack webhook ingestion
       responses:
         "200":
           description: Accepted after durable capture.
+        "431":
+          description: Request headers too large.
   /v1/ingest/cloudevents/{source_id}:
     post:
       summary: CloudEvents webhook ingestion
       responses:
         "200":
           description: Accepted after durable capture for binary or structured CloudEvents envelopes.
+        "431":
+          description: Request headers too large.
   /v1/deliveries:
     get:
       summary: List deliveries

@@ -21,7 +21,12 @@ import (
 	"webhookery/internal/problem"
 )
 
-const maxIngressBodyBytes = 2 << 20
+const (
+	maxIngressBodyBytes = 2 << 20
+	maxHeaderBytes      = 64 << 10
+	maxHeaderPairs      = 128
+	maxHeaderValueBytes = 8 << 10
+)
 
 type ServerConfig struct {
 	Control  *app.ControlService
@@ -42,6 +47,7 @@ func NewServer(cfg ServerConfig) *Server {
 
 func (s *Server) Routes() http.Handler {
 	r := chi.NewRouter()
+	r.Use(rejectOversizedHeaders)
 	r.Get("/healthz", s.health)
 	r.Get("/readyz", s.ready)
 	r.Get("/metrics", s.prometheusMetrics)
@@ -1238,6 +1244,40 @@ func readLimitedBody(w http.ResponseWriter, r *http.Request, max int64) ([]byte,
 		return nil, false
 	}
 	return body, true
+}
+
+func rejectOversizedHeaders(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !requestHeadersWithinLimits(w, r) {
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+func requestHeadersWithinLimits(w http.ResponseWriter, r *http.Request) bool {
+	var pairs int
+	var total int
+	for name, values := range r.Header {
+		if len(values) == 0 {
+			pairs++
+			total += len(name)
+			if pairs > maxHeaderPairs || total > maxHeaderBytes {
+				writeProblem(w, problem.New(http.StatusRequestHeaderFieldsTooLarge, "headers_too_large", "Headers too large", "The request headers exceed the configured limit.", requestID(r), false))
+				return false
+			}
+			continue
+		}
+		for _, value := range values {
+			pairs++
+			total += len(name) + len(value)
+			if len(value) > maxHeaderValueBytes || pairs > maxHeaderPairs || total > maxHeaderBytes {
+				writeProblem(w, problem.New(http.StatusRequestHeaderFieldsTooLarge, "headers_too_large", "Headers too large", "The request headers exceed the configured limit.", requestID(r), false))
+				return false
+			}
+		}
+	}
+	return true
 }
 
 func headers(h http.Header) []domain.HeaderPair {
