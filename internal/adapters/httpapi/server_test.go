@@ -236,6 +236,20 @@ func TestProviderConnectionCreateRequiresSourcesWrite(t *testing.T) {
 	}
 }
 
+func TestSourceUpdateRequiresSourcesWrite(t *testing.T) {
+	server := testServerWithActor(authz.Actor{ID: "usr_1", TenantID: "ten_1", Role: authz.RoleDeveloper, Scopes: []string{"sources:read"}})
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPatch, "/v1/sources/src_1", bytes.NewBufferString(`{"name":"renamed","reason":"rename"}`))
+	req.Header.Set("Authorization", "Bearer token")
+	req.Header.Set("Content-Type", "application/json")
+
+	server.Routes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("expected 403, got %d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
 func TestReconciliationCreateRequiresReplayWrite(t *testing.T) {
 	server := testServerWithActor(authz.Actor{ID: "usr_1", TenantID: "ten_1", Role: authz.RoleSupport, Scopes: []string{"replay:read"}})
 	rec := httptest.NewRecorder()
@@ -322,6 +336,15 @@ func (noopControlStore) CreateSource(context.Context, domain.Source) (domain.Sou
 }
 func (noopControlStore) ListSources(context.Context, string, int) ([]domain.Source, error) {
 	return nil, nil
+}
+func (noopControlStore) GetSource(context.Context, string, string) (domain.Source, error) {
+	return domain.Source{}, nil
+}
+func (noopControlStore) UpdateSource(context.Context, string, string, string, app.UpdateSourceRequest) (domain.Source, error) {
+	return domain.Source{}, nil
+}
+func (noopControlStore) DeleteSource(context.Context, string, string, string, string) (domain.Source, error) {
+	return domain.Source{}, nil
 }
 func (noopControlStore) RotateSourceSecret(context.Context, string, string, string, app.RotateSourceSecretRequest) (domain.SourceSecretVersion, error) {
 	return domain.SourceSecretVersion{}, nil

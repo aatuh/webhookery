@@ -34,6 +34,70 @@ func TestControlServiceScopesEventReadsToActorTenant(t *testing.T) {
 	}
 }
 
+func TestControlServiceScopesSourceReadsToActorTenant(t *testing.T) {
+	store := &fakeControlStore{}
+	svc := NewControlService(store, ssrf.Validator{Resolver: ssrf.StaticResolver{}})
+	actor := authz.Actor{ID: "usr_1", TenantID: "ten_a", Role: authz.RoleDeveloper, Scopes: []string{"sources:read"}}
+
+	_, err := svc.GetSource(context.Background(), actor, "src_123")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if store.sourceTenantID != "ten_a" || store.sourceID != "src_123" {
+		t.Fatalf("expected tenant-scoped source read, got tenant=%q source=%q", store.sourceTenantID, store.sourceID)
+	}
+}
+
+func TestControlServiceSourceMutationRequiresSourcesWrite(t *testing.T) {
+	store := &fakeControlStore{}
+	svc := NewControlService(store, ssrf.Validator{Resolver: ssrf.StaticResolver{}})
+	actor := authz.Actor{ID: "usr_1", TenantID: "ten_a", Role: authz.RoleDeveloper, Scopes: []string{"sources:read"}}
+	name := "renamed"
+
+	_, err := svc.UpdateSource(context.Background(), actor, "src_123", UpdateSourceRequest{Name: &name, Reason: "rename"})
+	if err != ErrForbidden {
+		t.Fatalf("expected forbidden source update, got %v", err)
+	}
+	_, err = svc.DeleteSource(context.Background(), actor, "src_123", StateChangeRequest{Reason: "retire"})
+	if err != ErrForbidden {
+		t.Fatalf("expected forbidden source delete, got %v", err)
+	}
+	if store.sourceTenantID != "" {
+		t.Fatal("source store must not be called before authorization")
+	}
+}
+
+func TestControlServiceUpdateSourceRequiresReasonAndValidState(t *testing.T) {
+	store := &fakeControlStore{}
+	svc := NewControlService(store, ssrf.Validator{Resolver: ssrf.StaticResolver{}})
+	actor := authz.Actor{ID: "usr_1", TenantID: "ten_a", Role: authz.RoleAdmin, Scopes: []string{"sources:write"}}
+	state := "deleted"
+
+	_, err := svc.UpdateSource(context.Background(), actor, "src_123", UpdateSourceRequest{State: &state, Reason: "retire"})
+	if !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("expected invalid source state, got %v", err)
+	}
+	state = domain.StateDisabled
+	_, err = svc.UpdateSource(context.Background(), actor, "src_123", UpdateSourceRequest{State: &state})
+	if !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("expected missing reason error, got %v", err)
+	}
+}
+
+func TestControlServiceDeleteSourceDisablesWithReason(t *testing.T) {
+	store := &fakeControlStore{}
+	svc := NewControlService(store, ssrf.Validator{Resolver: ssrf.StaticResolver{}})
+	actor := authz.Actor{ID: "usr_1", TenantID: "ten_a", Role: authz.RoleAdmin, Scopes: []string{"sources:write"}}
+
+	_, err := svc.DeleteSource(context.Background(), actor, "src_123", StateChangeRequest{Reason: "retire old webhook"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if store.sourceTenantID != "ten_a" || store.sourceID != "src_123" || store.sourceReason != "retire old webhook" {
+		t.Fatalf("expected tenant-scoped source delete, tenant=%q source=%q reason=%q", store.sourceTenantID, store.sourceID, store.sourceReason)
+	}
+}
+
 func TestControlServiceRequiresRawPayloadScope(t *testing.T) {
 	store := &fakeControlStore{}
 	svc := NewControlService(store, ssrf.Validator{Resolver: ssrf.StaticResolver{}})
@@ -534,6 +598,9 @@ type fakeControlStore struct {
 	retryPolicyTenantID        string
 	normalizedTenantID         string
 	normalizedMetadataOnly     bool
+	sourceTenantID             string
+	sourceID                   string
+	sourceReason               string
 	transformationTenantID     string
 	providerConnectionTenantID string
 	providerConnectionReq      CreateProviderConnectionRequest
@@ -561,6 +628,31 @@ func (f *fakeControlStore) CreateSource(context.Context, domain.Source) (domain.
 }
 func (f *fakeControlStore) ListSources(context.Context, string, int) ([]domain.Source, error) {
 	return nil, nil
+}
+func (f *fakeControlStore) GetSource(_ context.Context, tenantID, sourceID string) (domain.Source, error) {
+	f.sourceTenantID = tenantID
+	f.sourceID = sourceID
+	return domain.Source{ID: sourceID, TenantID: tenantID, Name: "Source", Provider: "github", Adapter: "github", State: domain.StateActive}, nil
+}
+func (f *fakeControlStore) UpdateSource(_ context.Context, tenantID, sourceID, actorID string, req UpdateSourceRequest) (domain.Source, error) {
+	f.sourceTenantID = tenantID
+	f.sourceID = sourceID
+	f.sourceReason = req.Reason
+	state := domain.StateActive
+	if req.State != nil {
+		state = *req.State
+	}
+	name := "Source"
+	if req.Name != nil {
+		name = *req.Name
+	}
+	return domain.Source{ID: sourceID, TenantID: tenantID, Name: name, Provider: "github", Adapter: "github", State: state}, nil
+}
+func (f *fakeControlStore) DeleteSource(_ context.Context, tenantID, sourceID, actorID, reason string) (domain.Source, error) {
+	f.sourceTenantID = tenantID
+	f.sourceID = sourceID
+	f.sourceReason = reason
+	return domain.Source{ID: sourceID, TenantID: tenantID, Name: "Source", Provider: "github", Adapter: "github", State: domain.StateDisabled}, nil
 }
 func (f *fakeControlStore) CreateEndpoint(_ context.Context, endpoint domain.Endpoint) (domain.Endpoint, error) {
 	f.endpoint = endpoint

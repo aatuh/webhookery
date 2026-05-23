@@ -64,6 +64,9 @@ func (s *Server) Routes() http.Handler {
 			r.Post("/api-keys/{api_key_id}:revoke", s.revokeAPIKey)
 			r.Get("/sources", s.listSources)
 			r.Post("/sources", s.createSource)
+			r.Get("/sources/{source_id}", s.getSource)
+			r.Patch("/sources/{source_id}", s.updateSource)
+			r.Delete("/sources/{source_id}", s.deleteSource)
 			r.Post("/sources/{source_id}/secrets:rotate", s.rotateSourceSecret)
 			r.Get("/provider-connections", s.listProviderConnections)
 			r.Post("/provider-connections", s.createProviderConnection)
@@ -251,6 +254,41 @@ func (s *Server) listSources(w http.ResponseWriter, r *http.Request) {
 		out = append(out, publicSource(item))
 	}
 	writeJSON(w, http.StatusOK, page(out))
+}
+
+func (s *Server) getSource(w http.ResponseWriter, r *http.Request) {
+	item, err := s.cfg.Control.GetSource(r.Context(), actorFrom(r), chi.URLParam(r, "source_id"))
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, publicSource(item))
+}
+
+func (s *Server) updateSource(w http.ResponseWriter, r *http.Request) {
+	var req app.UpdateSourceRequest
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	item, err := s.cfg.Control.UpdateSource(r.Context(), actorFrom(r), chi.URLParam(r, "source_id"), req)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, publicSource(item))
+}
+
+func (s *Server) deleteSource(w http.ResponseWriter, r *http.Request) {
+	var req app.StateChangeRequest
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	item, err := s.cfg.Control.DeleteSource(r.Context(), actorFrom(r), chi.URLParam(r, "source_id"), req)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, publicSource(item))
 }
 
 func (s *Server) createProviderConnection(w http.ResponseWriter, r *http.Request) {

@@ -110,6 +110,12 @@ include `Webhook-Signature-Key-Id` plus `Webhook-Signature-Key-Version` headers
 so receivers can audit which key version signed a request. Plaintext secret
 values are not returned by API, CLI, or UI responses.
 
+Source reads, updates, and deletes are tenant-scoped. `DELETE /v1/sources/{id}`
+and `whcp sources delete` disable the source instead of deleting historical
+events, receipts, raw payload metadata, or audit evidence. Disabled sources are
+rejected before capture and routing; re-enable by patching the source state
+back to `active` with a reason.
+
 Endpoints may also be created with a PEM client certificate and private key for
 outbound mTLS. The API accepts `mtls_client_cert_pem` and
 `mtls_client_key_pem` together, validates that they form a client certificate

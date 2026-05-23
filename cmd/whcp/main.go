@@ -271,7 +271,7 @@ func runEvents(args []string) error {
 
 func runSources(args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: whcp sources <create|rotate-secret>")
+		return fmt.Errorf("usage: whcp sources <list|get|create|update|delete|rotate-secret>")
 	}
 	fs := flag.NewFlagSet("sources "+args[0], flag.ContinueOnError)
 	baseURL := fs.String("base-url", "http://localhost:8080", "API base URL")
@@ -280,22 +280,47 @@ func runSources(args []string) error {
 	providerName := fs.String("provider", "", "provider")
 	secret := fs.String("secret", "", "verification secret")
 	sourceID := fs.String("source-id", "", "source id")
+	state := fs.String("state", "", "source state")
 	graceHours := fs.Int("grace-hours", 72, "old secret grace period in hours")
-	reason := fs.String("reason", "", "rotation reason")
+	reason := fs.String("reason", "", "change reason")
 	if err := fs.Parse(args[1:]); err != nil {
 		return err
 	}
 	switch args[0] {
+	case "list":
+		return getJSON(*baseURL, *apiKey, "/v1/sources")
+	case "get":
+		if strings.TrimSpace(*sourceID) == "" {
+			return fmt.Errorf("source-id is required")
+		}
+		return getJSON(*baseURL, *apiKey, "/v1/sources/"+url.PathEscape(*sourceID))
 	case "create":
 		body := map[string]string{"name": *name, "provider": *providerName, "verification_secret": *secret}
 		return postJSON(*baseURL, *apiKey, "/v1/sources", body)
+	case "update":
+		if strings.TrimSpace(*sourceID) == "" {
+			return fmt.Errorf("source-id is required")
+		}
+		body := map[string]string{"reason": *reason}
+		if strings.TrimSpace(*name) != "" {
+			body["name"] = *name
+		}
+		if strings.TrimSpace(*state) != "" {
+			body["state"] = *state
+		}
+		return patchJSON(*baseURL, *apiKey, "/v1/sources/"+url.PathEscape(*sourceID), body)
+	case "delete":
+		if strings.TrimSpace(*sourceID) == "" {
+			return fmt.Errorf("source-id is required")
+		}
+		return deleteJSON(*baseURL, *apiKey, "/v1/sources/"+url.PathEscape(*sourceID), map[string]string{"reason": *reason})
 	case "rotate-secret":
 		if strings.TrimSpace(*sourceID) == "" {
 			return fmt.Errorf("source-id is required")
 		}
 		return postJSON(*baseURL, *apiKey, "/v1/sources/"+url.PathEscape(*sourceID)+"/secrets:rotate", map[string]any{"new_secret": *secret, "grace_period_hours": *graceHours, "reason": *reason})
 	default:
-		return fmt.Errorf("usage: whcp sources <create|rotate-secret>")
+		return fmt.Errorf("usage: whcp sources <list|get|create|update|delete|rotate-secret>")
 	}
 }
 
@@ -1125,6 +1150,32 @@ func patchJSON(baseURL, apiKey, path string, body any) error {
 	}
 	// #nosec G107,G704 -- CLI connects only to the operator-supplied Webhookery API URL after scheme/host validation.
 	req, err := http.NewRequest(http.MethodPatch, endpoint, bytes.NewReader(raw))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+apiKey)
+	req.Header.Set("Content-Type", "application/json")
+	// #nosec G704 -- operator-supplied CLI API URL; not reachable from untrusted remote input.
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	_, err = io.Copy(os.Stdout, resp.Body)
+	return err
+}
+
+func deleteJSON(baseURL, apiKey, path string, body any) error {
+	raw, err := json.Marshal(body)
+	if err != nil {
+		return err
+	}
+	endpoint, err := apiEndpoint(baseURL, path)
+	if err != nil {
+		return err
+	}
+	// #nosec G107,G704 -- CLI connects only to the operator-supplied Webhookery API URL after scheme/host validation.
+	req, err := http.NewRequest(http.MethodDelete, endpoint, bytes.NewReader(raw))
 	if err != nil {
 		return err
 	}

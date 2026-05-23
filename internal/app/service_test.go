@@ -114,6 +114,31 @@ func TestIngestInternalProducerCreatesNormalizedEnvelope(t *testing.T) {
 	}
 }
 
+func TestIngestRejectsDisabledSourceBeforeCapture(t *testing.T) {
+	store := &fakeStore{source: domain.Source{
+		ID:                 "src_123",
+		TenantID:           "ten_123",
+		Provider:           "github",
+		Adapter:            "github",
+		State:              domain.StateDisabled,
+		VerificationSecret: []byte("secret"),
+	}}
+	svc := NewIngestService(store, fixedClock(time.Unix(1_700_000_000, 0)))
+
+	_, err := svc.Ingest(context.Background(), IngestRequest{
+		TenantID: "ten_123",
+		SourceID: "src_123",
+		Provider: "github",
+		RawBody:  []byte(`{"id":"evt_123"}`),
+	})
+	if !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("expected disabled source rejection, got %v", err)
+	}
+	if store.captured {
+		t.Fatal("disabled source must not capture or route inbound payloads")
+	}
+}
+
 func TestIngestStorageFailureDoesNotAccept(t *testing.T) {
 	store := &fakeStore{
 		source: domain.Source{ID: "src_123", TenantID: "ten_123", Provider: "github", Adapter: "github", State: domain.StateActive, VerificationSecret: []byte("secret")},

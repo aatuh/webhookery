@@ -101,13 +101,95 @@ paths:
       responses:
         "200":
           description: Paginated source list.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SourcePage"
     post:
       summary: Create inbound source
       security:
         - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateSourceRequest"
       responses:
         "201":
           description: Source created.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Source"
+  /v1/sources/{source_id}:
+    get:
+      summary: Get inbound source
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: source_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Source metadata without plaintext secrets.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Source"
+        "404":
+          description: Source not found in this tenant.
+    patch:
+      summary: Update inbound source metadata or state
+      description: Updates mutable source metadata. Verification secrets are rotated through the dedicated rotate endpoint and are never returned.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: source_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateSourceRequest"
+      responses:
+        "200":
+          description: Updated source metadata.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Source"
+    delete:
+      summary: Disable inbound source
+      description: Disables the source without deleting historical evidence.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: source_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ReasonRequest"
+      responses:
+        "200":
+          description: Disabled source metadata.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Source"
   /v1/sources/{source_id}/secrets:rotate:
     post:
       summary: Rotate source verification secret
@@ -1583,6 +1665,66 @@ components:
           nullable: true
         has_more:
           type: boolean
+    Source:
+      type: object
+      required: [id, tenant_id, name, provider, adapter, state]
+      properties:
+        id:
+          type: string
+        tenant_id:
+          type: string
+        name:
+          type: string
+        provider:
+          type: string
+        adapter:
+          type: string
+        state:
+          type: string
+          enum: [active, disabled]
+    SourcePage:
+      type: object
+      required: [data, has_more]
+      properties:
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/Source"
+        next_cursor:
+          type: string
+          nullable: true
+        has_more:
+          type: boolean
+    CreateSourceRequest:
+      type: object
+      required: [name, provider]
+      additionalProperties: false
+      properties:
+        name:
+          type: string
+          minLength: 1
+        provider:
+          type: string
+          minLength: 1
+        adapter:
+          type: string
+        verification_secret:
+          type: string
+          description: Required except for internal trusted producer sources. Never returned.
+    UpdateSourceRequest:
+      type: object
+      required: [reason]
+      additionalProperties: false
+      properties:
+        name:
+          type: string
+          minLength: 1
+        state:
+          type: string
+          enum: [active, disabled]
+        reason:
+          type: string
+          minLength: 1
     RotateSourceSecretRequest:
       type: object
       required: [new_secret, reason]

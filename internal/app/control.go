@@ -29,6 +29,9 @@ type ControlStore interface {
 	RevokeAPIKey(ctx context.Context, tenantID, apiKeyID, actorID, reason string) (domain.APIKey, error)
 	CreateSource(ctx context.Context, source domain.Source) (domain.Source, error)
 	ListSources(ctx context.Context, tenantID string, limit int) ([]domain.Source, error)
+	GetSource(ctx context.Context, tenantID, sourceID string) (domain.Source, error)
+	UpdateSource(ctx context.Context, tenantID, sourceID, actorID string, req UpdateSourceRequest) (domain.Source, error)
+	DeleteSource(ctx context.Context, tenantID, sourceID, actorID, reason string) (domain.Source, error)
 	CreateEndpoint(ctx context.Context, endpoint domain.Endpoint) (domain.Endpoint, error)
 	ListEndpoints(ctx context.Context, tenantID string, limit int) ([]domain.Endpoint, error)
 	TestEndpoint(ctx context.Context, tenantID, endpointID, actorID, reason string) (domain.Delivery, error)
@@ -119,6 +122,12 @@ type CreateSourceRequest struct {
 	Provider           string `json:"provider"`
 	Adapter            string `json:"adapter"`
 	VerificationSecret string `json:"verification_secret"`
+}
+
+type UpdateSourceRequest struct {
+	Name   *string `json:"name,omitempty"`
+	State  *string `json:"state,omitempty"`
+	Reason string  `json:"reason"`
 }
 
 type APIKeyCreateInput struct {
@@ -469,6 +478,53 @@ func (s *ControlService) ListSources(ctx context.Context, actor authz.Actor, lim
 		return nil, ErrForbidden
 	}
 	return s.store.ListSources(ctx, actor.TenantID, normalizeLimit(limit))
+}
+
+func (s *ControlService) GetSource(ctx context.Context, actor authz.Actor, sourceID string) (domain.Source, error) {
+	if !authz.Can(actor, "sources:read", actor.TenantID) {
+		return domain.Source{}, ErrForbidden
+	}
+	if strings.TrimSpace(sourceID) == "" {
+		return domain.Source{}, fmt.Errorf("%w: source_id is required", ErrInvalidInput)
+	}
+	return s.store.GetSource(ctx, actor.TenantID, sourceID)
+}
+
+func (s *ControlService) UpdateSource(ctx context.Context, actor authz.Actor, sourceID string, req UpdateSourceRequest) (domain.Source, error) {
+	if !authz.Can(actor, "sources:write", actor.TenantID) {
+		return domain.Source{}, ErrForbidden
+	}
+	if strings.TrimSpace(sourceID) == "" || strings.TrimSpace(req.Reason) == "" {
+		return domain.Source{}, fmt.Errorf("%w: source_id and reason are required", ErrInvalidInput)
+	}
+	if req.Name == nil && req.State == nil {
+		return domain.Source{}, fmt.Errorf("%w: at least one source field is required", ErrInvalidInput)
+	}
+	if req.Name != nil {
+		name := strings.TrimSpace(*req.Name)
+		if name == "" {
+			return domain.Source{}, fmt.Errorf("%w: name cannot be empty", ErrInvalidInput)
+		}
+		req.Name = &name
+	}
+	if req.State != nil {
+		state := strings.TrimSpace(*req.State)
+		if state != domain.StateActive && state != domain.StateDisabled {
+			return domain.Source{}, fmt.Errorf("%w: source state must be active or disabled", ErrInvalidInput)
+		}
+		req.State = &state
+	}
+	return s.store.UpdateSource(ctx, actor.TenantID, sourceID, actor.ID, req)
+}
+
+func (s *ControlService) DeleteSource(ctx context.Context, actor authz.Actor, sourceID string, req StateChangeRequest) (domain.Source, error) {
+	if !authz.Can(actor, "sources:write", actor.TenantID) {
+		return domain.Source{}, ErrForbidden
+	}
+	if strings.TrimSpace(sourceID) == "" || strings.TrimSpace(req.Reason) == "" {
+		return domain.Source{}, fmt.Errorf("%w: source_id and reason are required", ErrInvalidInput)
+	}
+	return s.store.DeleteSource(ctx, actor.TenantID, sourceID, actor.ID, req.Reason)
 }
 
 func (s *ControlService) CreateEndpoint(ctx context.Context, actor authz.Actor, req CreateEndpointRequest) (domain.Endpoint, ssrf.Result, error) {

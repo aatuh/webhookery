@@ -447,6 +447,74 @@ func (s *Store) ListSources(ctx context.Context, tenantID string, limit int) ([]
 	return out, rows.Err()
 }
 
+func (s *Store) GetSource(ctx context.Context, tenantID, sourceID string) (domain.Source, error) {
+	row := s.pool.QueryRow(ctx, `SELECT id, tenant_id, name, provider, adapter, state, created_at FROM sources WHERE tenant_id=$1 AND id=$2`, tenantID, sourceID)
+	item, err := scanSource(row)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return domain.Source{}, app.ErrNotFound
+	}
+	return item, err
+}
+
+func (s *Store) UpdateSource(ctx context.Context, tenantID, sourceID, actorID string, req app.UpdateSourceRequest) (domain.Source, error) {
+	return s.updateSource(ctx, tenantID, sourceID, actorID, req, "source.updated")
+}
+
+func (s *Store) DeleteSource(ctx context.Context, tenantID, sourceID, actorID, reason string) (domain.Source, error) {
+	state := domain.StateDisabled
+	return s.updateSource(ctx, tenantID, sourceID, actorID, app.UpdateSourceRequest{State: &state, Reason: reason}, "source.disabled")
+}
+
+func (s *Store) updateSource(ctx context.Context, tenantID, sourceID, actorID string, req app.UpdateSourceRequest, action string) (domain.Source, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return domain.Source{}, err
+	}
+	defer rollback(ctx, tx)
+	current, err := scanSource(tx.QueryRow(ctx, `SELECT id, tenant_id, name, provider, adapter, state, created_at FROM sources WHERE tenant_id=$1 AND id=$2 FOR UPDATE`, tenantID, sourceID))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return domain.Source{}, app.ErrNotFound
+	}
+	if err != nil {
+		return domain.Source{}, err
+	}
+	if req.Name != nil {
+		current.Name = *req.Name
+	}
+	if req.State != nil {
+		current.State = *req.State
+	}
+	if err := tx.QueryRow(ctx, `
+		UPDATE sources
+		SET name=$3, state=$4
+		WHERE tenant_id=$1 AND id=$2
+		RETURNING id, tenant_id, name, provider, adapter, state, created_at`,
+		tenantID, sourceID, current.Name, current.State,
+	).Scan(&current.ID, &current.TenantID, &current.Name, &current.Provider, &current.Adapter, &current.State, &current.CreatedAt); err != nil {
+		return domain.Source{}, err
+	}
+	version, err := s.nextConfigVersion(ctx, tx, tenantID, domain.ConfigResourceSource, sourceID)
+	if err != nil {
+		return domain.Source{}, err
+	}
+	if _, err := s.insertConfigVersion(ctx, tx, tenantID, domain.ConfigResourceSource, sourceID, version, map[string]any{
+		"id":       current.ID,
+		"name":     current.Name,
+		"provider": current.Provider,
+		"adapter":  current.Adapter,
+		"state":    current.State,
+	}, actorID); err != nil {
+		return domain.Source{}, err
+	}
+	if _, err := recordAuditEventTx(ctx, tx, auditEventInput{TenantID: tenantID, ActorID: actorID, Action: action, Resource: "source", ResourceID: sourceID, Reason: req.Reason}); err != nil {
+		return domain.Source{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return domain.Source{}, err
+	}
+	return current, nil
+}
+
 func (s *Store) FindSource(ctx context.Context, tenantID, sourceID string) (domain.Source, error) {
 	return s.findSource(ctx, `WHERE tenant_id=$1 AND id=$2`, tenantID, sourceID)
 }
@@ -4201,6 +4269,12 @@ func scanAuditChainEntry(row rowScanner) (domain.AuditChainEntry, error) {
 	return item, err
 }
 
+func scanSource(row rowScanner) (domain.Source, error) {
+	var item domain.Source
+	err := row.Scan(&item.ID, &item.TenantID, &item.Name, &item.Provider, &item.Adapter, &item.State, &item.CreatedAt)
+	return item, err
+}
+
 func (s *Store) auditEventsForExport(ctx context.Context, tenantID string, from, to time.Time) ([]domain.AuditEvent, error) {
 	query := `SELECT id, tenant_id, actor_id, action, resource, resource_id, reason, occurred_at FROM audit_events WHERE tenant_id=$1`
 	args := []any{tenantID}
@@ -5471,6 +5545,17 @@ func (s *Store) insertConfigVersion(ctx context.Context, tx pgx.Tx, tenantID, re
 		mustID("cfg"), tenantID, resourceType, resourceID, version, hash, string(raw), actorID,
 	)
 	return hash, err
+}
+
+func (s *Store) nextConfigVersion(ctx context.Context, tx pgx.Tx, tenantID, resourceType, resourceID string) (int, error) {
+	var version int
+	err := tx.QueryRow(ctx, `
+		SELECT COALESCE(max(version),0)+1
+		FROM config_versions
+		WHERE tenant_id=$1 AND resource_type=$2 AND resource_id=$3`,
+		tenantID, resourceType, resourceID,
+	).Scan(&version)
+	return version, err
 }
 
 func scheduledDeliveryAt(index, rateLimitPerMinute int) time.Time {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 
@@ -101,6 +102,9 @@ func (s *IngestService) IngestProviderPath(ctx context.Context, providerName, so
 }
 
 func (s *IngestService) capture(ctx context.Context, source domain.Source, req IngestRequest) (IngestResult, error) {
+	if source.State != "" && source.State != domain.StateActive {
+		return IngestResult{}, fmt.Errorf("%w: source is not active", ErrInvalidInput)
+	}
 	now := s.clock.Now()
 	adapter, ok := s.registry.Adapter(source.Adapter)
 	if !ok {
