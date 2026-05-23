@@ -103,6 +103,7 @@ func (s *Server) Routes() http.Handler {
 			r.Post("/event-types", s.createEventType)
 			r.Get("/event-types/{event_type}/schemas", s.listEventSchemas)
 			r.Post("/event-types/{event_type}/schemas", s.createEventSchema)
+			r.Get("/event-types/{event_type}/schemas/{schema_version}", s.getEventSchema)
 			r.Post("/event-types/{event_type}/schemas/{schema_version}:validate", s.validateEventSchema)
 			r.Post("/event-types/{event_type}/schemas/{schema_version}:check-compatibility", s.checkEventSchemaCompatibility)
 			r.Get("/events", s.listEvents)
@@ -724,6 +725,15 @@ func (s *Server) listEventSchemas(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, page(items))
+}
+
+func (s *Server) getEventSchema(w http.ResponseWriter, r *http.Request) {
+	item, err := s.cfg.Control.GetEventSchema(r.Context(), actorFrom(r), chi.URLParam(r, "event_type"), chi.URLParam(r, "schema_version"))
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, item)
 }
 
 func (s *Server) validateEventSchema(w http.ResponseWriter, r *http.Request) {

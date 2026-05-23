@@ -1073,6 +1073,16 @@ func (s *ControlService) ListEventSchemas(ctx context.Context, actor authz.Actor
 	return s.store.ListEventSchemas(ctx, actor.TenantID, eventType, normalizeLimit(limit))
 }
 
+func (s *ControlService) GetEventSchema(ctx context.Context, actor authz.Actor, eventType, version string) (domain.EventSchema, error) {
+	if !authz.Can(actor, "schemas:read", actor.TenantID) {
+		return domain.EventSchema{}, ErrForbidden
+	}
+	if strings.TrimSpace(eventType) == "" || strings.TrimSpace(version) == "" {
+		return domain.EventSchema{}, fmt.Errorf("%w: event_type and schema_version are required", ErrInvalidInput)
+	}
+	return s.store.GetEventSchema(ctx, actor.TenantID, eventType, version)
+}
+
 func (s *ControlService) ValidateEventSchema(ctx context.Context, actor authz.Actor, eventType, version string, req ValidateSchemaRequest) (SchemaValidationResult, error) {
 	if !authz.Can(actor, "schemas:read", actor.TenantID) {
 		return SchemaValidationResult{}, ErrForbidden

@@ -148,6 +148,11 @@ instead of rewriting it in place. `DELETE /v1/retry-policies/{id}` disables
 future use of the referenced policy row while retaining delivery and audit
 evidence that already points at it.
 
+Event type and event schema reads are tenant-scoped under the schemas
+permission family. Operators can list event types, list schemas for an event
+type, and fetch a specific schema version through both API and CLI before
+running validation or compatibility checks.
+
 Endpoints may also be created with a PEM client certificate and private key for
 outbound mTLS. The API accepts `mtls_client_cert_pem` and
 `mtls_client_key_pem` together, validates that they form a client certificate

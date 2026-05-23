@@ -1034,7 +1034,7 @@ func runRetention(args []string) error {
 
 func runSchemas(args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: whcp schemas <event-type-create|schema-create|validate|check-compat>")
+		return fmt.Errorf("usage: whcp schemas <event-type-create|event-type-list|schema-create|schema-list|schema-get|validate|check-compat>")
 	}
 	fs := flag.NewFlagSet("schemas "+args[0], flag.ContinueOnError)
 	baseURL := fs.String("base-url", "http://localhost:8080", "API base URL")
@@ -1051,12 +1051,24 @@ func runSchemas(args []string) error {
 	switch args[0] {
 	case "event-type-create":
 		return postJSON(*baseURL, *apiKey, "/v1/event-types", map[string]string{"name": *name, "description": *description})
+	case "event-type-list":
+		return getJSON(*baseURL, *apiKey, "/v1/event-types")
 	case "schema-create":
 		body, err := os.ReadFile(*schemaPath) // #nosec G304,G703 -- CLI reads an operator-selected schema file.
 		if err != nil {
 			return err
 		}
 		return postJSON(*baseURL, *apiKey, "/v1/event-types/"+url.PathEscape(*name)+"/schemas", map[string]string{"version": *version, "schema": string(body)})
+	case "schema-list":
+		if strings.TrimSpace(*name) == "" {
+			return fmt.Errorf("name is required")
+		}
+		return getJSON(*baseURL, *apiKey, "/v1/event-types/"+url.PathEscape(*name)+"/schemas")
+	case "schema-get":
+		if strings.TrimSpace(*name) == "" || strings.TrimSpace(*version) == "" {
+			return fmt.Errorf("name and version are required")
+		}
+		return getJSON(*baseURL, *apiKey, "/v1/event-types/"+url.PathEscape(*name)+"/schemas/"+url.PathEscape(*version))
 	case "validate":
 		body, err := os.ReadFile(*payloadPath) // #nosec G304,G703 -- CLI reads an operator-selected payload file.
 		if err != nil {
@@ -1070,7 +1082,7 @@ func runSchemas(args []string) error {
 		}
 		return postJSON(*baseURL, *apiKey, "/v1/event-types/"+url.PathEscape(*name)+"/schemas/"+url.PathEscape(*version)+":check-compatibility", map[string]string{"new_schema": string(body)})
 	default:
-		return fmt.Errorf("usage: whcp schemas <event-type-create|schema-create|validate|check-compat>")
+		return fmt.Errorf("usage: whcp schemas <event-type-create|event-type-list|schema-create|schema-list|schema-get|validate|check-compat>")
 	}
 }
 

@@ -931,6 +931,10 @@ paths:
       responses:
         "200":
           description: Paginated event type list.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EventTypePage"
     post:
       summary: Create event type
       security:
@@ -938,6 +942,10 @@ paths:
       responses:
         "201":
           description: Event type created.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EventType"
   /v1/event-types/{event_type}/schemas:
     get:
       summary: List schemas for event type
@@ -952,6 +960,10 @@ paths:
       responses:
         "200":
           description: Paginated schema list.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EventSchemaPage"
     post:
       summary: Create schema for event type
       security:
@@ -965,6 +977,35 @@ paths:
       responses:
         "201":
           description: Schema created.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EventSchema"
+  /v1/event-types/{event_type}/schemas/{schema_version}:
+    get:
+      summary: Get schema for event type
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: event_type
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: schema_version
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Event schema metadata and JSON schema text.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EventSchema"
+        "404":
+          description: Schema not found in this tenant.
   /v1/event-types/{event_type}/schemas/{schema_version}:validate:
     post:
       summary: Validate payload against schema
@@ -2369,6 +2410,66 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/Route"
+        next_cursor:
+          type: string
+          nullable: true
+        has_more:
+          type: boolean
+    EventType:
+      type: object
+      required: [name, tenant_id, description, state, created_at]
+      properties:
+        name:
+          type: string
+        tenant_id:
+          type: string
+        description:
+          type: string
+        state:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+    EventTypePage:
+      type: object
+      required: [data, has_more]
+      properties:
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/EventType"
+        next_cursor:
+          type: string
+          nullable: true
+        has_more:
+          type: boolean
+    EventSchema:
+      type: object
+      required: [id, tenant_id, event_type, version, schema, state, created_at]
+      properties:
+        id:
+          type: string
+        tenant_id:
+          type: string
+        event_type:
+          type: string
+        version:
+          type: string
+        schema:
+          type: string
+        state:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+    EventSchemaPage:
+      type: object
+      required: [data, has_more]
+      properties:
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/EventSchema"
         next_cursor:
           type: string
           nullable: true

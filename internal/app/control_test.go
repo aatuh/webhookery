@@ -34,6 +34,20 @@ func TestControlServiceScopesEventReadsToActorTenant(t *testing.T) {
 	}
 }
 
+func TestControlServiceScopesEventSchemaReadsToActorTenant(t *testing.T) {
+	store := &fakeControlStore{}
+	svc := NewControlService(store, ssrf.Validator{Resolver: ssrf.StaticResolver{}})
+	actor := authz.Actor{ID: "usr_1", TenantID: "ten_a", Role: authz.RoleDeveloper, Scopes: []string{"schemas:read"}}
+
+	_, err := svc.GetEventSchema(context.Background(), actor, "invoice.paid", "2026-05-01")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if store.schemaTenantID != "ten_a" {
+		t.Fatalf("expected tenant-scoped schema read, got %q", store.schemaTenantID)
+	}
+}
+
 func TestControlServiceScopesSourceReadsToActorTenant(t *testing.T) {
 	store := &fakeControlStore{}
 	svc := NewControlService(store, ssrf.Validator{Resolver: ssrf.StaticResolver{}})
