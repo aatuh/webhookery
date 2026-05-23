@@ -50,3 +50,19 @@ func TestJSONLinesAddsOneLinePerItem(t *testing.T) {
 		t.Fatalf("unexpected jsonl %q", string(lines))
 	}
 }
+
+func TestVerifyTarGzipBundleChecksManifestFiles(t *testing.T) {
+	bundle, err := BuildTarGzipBundle(Manifest{ExportID: "exp_1", TenantID: "ten_1", CreatedAt: time.Unix(123, 0).UTC()}, map[string][]byte{
+		"audit_events.jsonl": []byte("{\"id\":\"aud_1\"}\n"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := VerifyTarGzipBundle(bundle.Bytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.Valid || result.CheckedFiles != 1 || result.ManifestSHA256 != bundle.ManifestSHA256 {
+		t.Fatalf("unexpected verification result: %+v", result)
+	}
+}

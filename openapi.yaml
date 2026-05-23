@@ -1161,6 +1161,90 @@ paths:
       responses:
         "200":
           description: Paginated audit event list.
+  /v1/audit-chain/head:
+    get:
+      summary: Get audit chain head
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Current tenant audit chain head and anchor metadata.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuditChainHead"
+  /v1/audit-chain:verify:
+    post:
+      summary: Verify audit chain continuity
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AuditChainVerifyRequest"
+      responses:
+        "200":
+          description: Verification result for the requested tenant chain range.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuditChainVerification"
+  /v1/audit-chain:anchor:
+    post:
+      summary: Anchor a verified audit chain range
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AuditChainAnchorRequest"
+      responses:
+        "201":
+          description: Anchor created.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuditChainAnchor"
+        "403":
+          description: Actor lacks security:write.
+  /v1/audit-chain/anchors:
+    get:
+      summary: List audit chain anchors
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: Paginated audit chain anchors.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuditChainAnchorPage"
+  /v1/audit-chain/anchors/{anchor_id}:
+    get:
+      summary: Get audit chain anchor
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: anchor_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Audit chain anchor metadata.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuditChainAnchor"
+        "404":
+          description: Anchor not found.
   /v1/audit-events:export:
     post:
       summary: Create audit evidence export
@@ -2171,6 +2255,137 @@ components:
         reason:
           type: string
           maxLength: 500
+    AuditChainVerifyRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        from_sequence:
+          type: integer
+          minimum: 0
+        to_sequence:
+          type: integer
+          minimum: 0
+    AuditChainAnchorRequest:
+      type: object
+      required: [reason]
+      additionalProperties: false
+      properties:
+        from_sequence:
+          type: integer
+          minimum: 0
+        to_sequence:
+          type: integer
+          minimum: 0
+        reason:
+          type: string
+          minLength: 1
+          maxLength: 500
+    AuditChainHead:
+      type: object
+      required: [tenant_id, sequence, chain_hash, unchained_events]
+      properties:
+        tenant_id:
+          type: string
+        sequence:
+          type: integer
+        chain_hash:
+          type: string
+        last_audit_event_id:
+          type: string
+        unchained_events:
+          type: integer
+        last_anchored_at:
+          type: string
+          format: date-time
+        last_anchor_id:
+          type: string
+        last_anchor_sequence:
+          type: integer
+        updated_at:
+          type: string
+          format: date-time
+    AuditChainVerification:
+      type: object
+      required: [tenant_id, valid, from_sequence, to_sequence, checked_entries, retained_entries, failures, verified_at]
+      properties:
+        tenant_id:
+          type: string
+        valid:
+          type: boolean
+        from_sequence:
+          type: integer
+        to_sequence:
+          type: integer
+        checked_entries:
+          type: integer
+        retained_entries:
+          type: integer
+        start_chain_hash:
+          type: string
+        end_chain_hash:
+          type: string
+        failures:
+          type: array
+          items:
+            $ref: "#/components/schemas/AuditChainFailure"
+        verified_at:
+          type: string
+          format: date-time
+    AuditChainFailure:
+      type: object
+      required: [sequence, kind]
+      properties:
+        sequence:
+          type: integer
+        audit_event_id:
+          type: string
+        kind:
+          type: string
+          enum: [missing_previous_entry, missing_entry, unsupported_canonicalization_version, previous_hash_mismatch, missing_audit_event, event_hash_mismatch, chain_hash_mismatch]
+        detail:
+          type: string
+    AuditChainAnchor:
+      type: object
+      required: [id, tenant_id, from_sequence, to_sequence, chain_hash, manifest_sha256, storage_backend, created_by, reason, created_at]
+      properties:
+        id:
+          type: string
+        tenant_id:
+          type: string
+        from_sequence:
+          type: integer
+        to_sequence:
+          type: integer
+        chain_hash:
+          type: string
+        manifest_sha256:
+          type: string
+        storage_backend:
+          type: string
+          enum: [postgres, s3]
+        object_bucket:
+          type: string
+        object_key:
+          type: string
+        created_by:
+          type: string
+        reason:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+    AuditChainAnchorPage:
+      type: object
+      properties:
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/AuditChainAnchor"
+        next_cursor:
+          type: string
+          nullable: true
+        has_more:
+          type: boolean
     EvidenceExport:
       type: object
       required: [id, tenant_id, state, include_raw_payloads, include_timelines, include_payload_bodies, format, storage_backend, sha256, manifest_sha256, size_bytes, created_by, created_at]

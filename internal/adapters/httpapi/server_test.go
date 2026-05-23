@@ -180,6 +180,20 @@ func TestReconciliationCreateRequiresReplayWrite(t *testing.T) {
 	}
 }
 
+func TestAuditChainAnchorRequiresSecurityWrite(t *testing.T) {
+	server := testServerWithActor(authz.Actor{ID: "usr_1", TenantID: "ten_1", Role: authz.RoleAuditor, Scopes: []string{"audit:read"}})
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/v1/audit-chain:anchor", bytes.NewBufferString(`{"reason":"daily"}`))
+	req.Header.Set("Authorization", "Bearer token")
+	req.Header.Set("Content-Type", "application/json")
+
+	server.Routes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("expected 403, got %d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
 type fakeIngestStore struct{}
 
 func (fakeIngestStore) FindSource(context.Context, string, string) (domain.Source, error) {

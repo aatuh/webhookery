@@ -4,6 +4,9 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
+
+	"webhookery/internal/evidence"
 )
 
 func TestWritePrivateFileUsesPrivatePermissions(t *testing.T) {
@@ -41,5 +44,27 @@ func TestWritePrivateFileRejectsSymlink(t *testing.T) {
 	}
 	if string(body) != "old" {
 		t.Fatalf("target was modified through symlink: %q", string(body))
+	}
+}
+
+func TestVerifyEvidenceBundleFileRequiresExplicitFile(t *testing.T) {
+	if err := verifyEvidenceBundleFile(""); err == nil {
+		t.Fatal("expected missing file path error")
+	}
+}
+
+func TestVerifyEvidenceBundleFileAcceptsValidBundle(t *testing.T) {
+	bundle, err := evidence.BuildTarGzipBundle(evidence.Manifest{ExportID: "exp_1", TenantID: "ten_1", CreatedAt: time.Unix(1, 0).UTC()}, map[string][]byte{
+		"audit_events.jsonl": []byte("{}\n"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "bundle.tar.gz")
+	if err := os.WriteFile(path, bundle.Bytes, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := verifyEvidenceBundleFile(path); err != nil {
+		t.Fatal(err)
 	}
 }

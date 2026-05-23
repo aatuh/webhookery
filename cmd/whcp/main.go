@@ -26,6 +26,7 @@ import (
 	"webhookery/internal/authz"
 	"webhookery/internal/config"
 	"webhookery/internal/domain"
+	"webhookery/internal/evidence"
 	"webhookery/internal/provider"
 	"webhookery/internal/ssrf"
 	"webhookery/internal/transform"
@@ -679,7 +680,7 @@ func runOps(args []string) error {
 
 func runAudit(args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: whcp audit <export|export-status|download>")
+		return fmt.Errorf("usage: whcp audit <export|export-status|download|chain-head|verify-chain|anchor|anchors|verify-bundle>")
 	}
 	fs := flag.NewFlagSet("audit "+args[0], flag.ContinueOnError)
 	baseURL := fs.String("base-url", "http://localhost:8080", "API base URL")
@@ -692,6 +693,10 @@ func runAudit(args []string) error {
 	includeTimelines := fs.Bool("include-timelines", false, "include event, receipt, delivery, and audit timelines")
 	reason := fs.String("reason", "", "operator reason")
 	output := fs.String("output", "", "download output path")
+	filePath := fs.String("file", "", "local evidence bundle path")
+	anchorID := fs.String("anchor-id", "", "audit chain anchor id")
+	fromSequence := fs.Int64("from-sequence", 0, "optional audit chain start sequence")
+	toSequence := fs.Int64("to-sequence", 0, "optional audit chain end sequence")
 	if err := fs.Parse(args[1:]); err != nil {
 		return err
 	}
@@ -723,8 +728,21 @@ func runAudit(args []string) error {
 			return fmt.Errorf("export-id is required")
 		}
 		return downloadAuditExport(*baseURL, *apiKey, *exportID, *output)
+	case "chain-head":
+		return getJSON(*baseURL, *apiKey, "/v1/audit-chain/head")
+	case "verify-chain":
+		return postJSON(*baseURL, *apiKey, "/v1/audit-chain:verify", map[string]any{"from_sequence": *fromSequence, "to_sequence": *toSequence})
+	case "anchor":
+		return postJSON(*baseURL, *apiKey, "/v1/audit-chain:anchor", map[string]any{"from_sequence": *fromSequence, "to_sequence": *toSequence, "reason": *reason})
+	case "anchors":
+		if strings.TrimSpace(*anchorID) != "" {
+			return getJSON(*baseURL, *apiKey, "/v1/audit-chain/anchors/"+url.PathEscape(*anchorID))
+		}
+		return getJSON(*baseURL, *apiKey, "/v1/audit-chain/anchors")
+	case "verify-bundle":
+		return verifyEvidenceBundleFile(*filePath)
 	default:
-		return fmt.Errorf("usage: whcp audit <export|export-status|download>")
+		return fmt.Errorf("usage: whcp audit <export|export-status|download|chain-head|verify-chain|anchor|anchors|verify-bundle>")
 	}
 }
 
@@ -1057,6 +1075,21 @@ func downloadAuditExport(baseURL, apiKey, exportID, outputPath string) error {
 		return err
 	}
 	return writePrivateFile(outputPath, body)
+}
+
+func verifyEvidenceBundleFile(path string) error {
+	if strings.TrimSpace(path) == "" {
+		return fmt.Errorf("file is required")
+	}
+	body, err := os.ReadFile(path) // #nosec G304,G703 -- CLI verifies an operator-selected local evidence bundle.
+	if err != nil {
+		return err
+	}
+	result, err := evidence.VerifyTarGzipBundle(body)
+	if err != nil {
+		return err
+	}
+	return json.NewEncoder(os.Stdout).Encode(result)
 }
 
 func exportRawPayload(baseURL, apiKey, eventID, outputPath string) error {

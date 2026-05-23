@@ -120,6 +120,11 @@ func (s *Server) Routes() http.Handler {
 			r.Post("/quarantine/{entry_id}:approve", s.approveQuarantine)
 			r.Post("/quarantine/{entry_id}:reject", s.rejectQuarantine)
 			r.Get("/audit-events", s.listAuditEvents)
+			r.Get("/audit-chain/head", s.getAuditChainHead)
+			r.Post("/audit-chain:verify", s.verifyAuditChain)
+			r.Post("/audit-chain:anchor", s.createAuditChainAnchor)
+			r.Get("/audit-chain/anchors", s.listAuditChainAnchors)
+			r.Get("/audit-chain/anchors/{anchor_id}", s.getAuditChainAnchor)
 			r.Post("/audit-events:export", s.createAuditExport)
 			r.Get("/audit-exports", s.listAuditExports)
 			r.Get("/audit-exports/{export_id}", s.getAuditExport)
@@ -1026,6 +1031,59 @@ func (s *Server) listAuditEvents(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, page(items))
+}
+
+func (s *Server) getAuditChainHead(w http.ResponseWriter, r *http.Request) {
+	item, err := s.cfg.Control.GetAuditChainHead(r.Context(), actorFrom(r))
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, item)
+}
+
+func (s *Server) verifyAuditChain(w http.ResponseWriter, r *http.Request) {
+	var req app.AuditChainVerifyRequest
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	item, err := s.cfg.Control.VerifyAuditChain(r.Context(), actorFrom(r), req)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, item)
+}
+
+func (s *Server) createAuditChainAnchor(w http.ResponseWriter, r *http.Request) {
+	var req app.AuditChainAnchorRequest
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	item, err := s.cfg.Control.CreateAuditChainAnchor(r.Context(), actorFrom(r), req)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, item)
+}
+
+func (s *Server) listAuditChainAnchors(w http.ResponseWriter, r *http.Request) {
+	items, err := s.cfg.Control.ListAuditChainAnchors(r.Context(), actorFrom(r), queryLimit(r))
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, page(items))
+}
+
+func (s *Server) getAuditChainAnchor(w http.ResponseWriter, r *http.Request) {
+	item, err := s.cfg.Control.GetAuditChainAnchor(r.Context(), actorFrom(r), chi.URLParam(r, "anchor_id"))
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, item)
 }
 
 func (s *Server) createAuditExport(w http.ResponseWriter, r *http.Request) {
