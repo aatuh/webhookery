@@ -250,6 +250,20 @@ func TestSourceUpdateRequiresSourcesWrite(t *testing.T) {
 	}
 }
 
+func TestEndpointUpdateRequiresEndpointsWrite(t *testing.T) {
+	server := testServerWithActor(authz.Actor{ID: "usr_1", TenantID: "ten_1", Role: authz.RoleDeveloper, Scopes: []string{"endpoints:read"}})
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPatch, "/v1/endpoints/end_1", bytes.NewBufferString(`{"name":"renamed","reason":"rename"}`))
+	req.Header.Set("Authorization", "Bearer token")
+	req.Header.Set("Content-Type", "application/json")
+
+	server.Routes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("expected 403, got %d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
 func TestReconciliationCreateRequiresReplayWrite(t *testing.T) {
 	server := testServerWithActor(authz.Actor{ID: "usr_1", TenantID: "ten_1", Role: authz.RoleSupport, Scopes: []string{"replay:read"}})
 	rec := httptest.NewRecorder()
@@ -354,6 +368,15 @@ func (noopControlStore) CreateEndpoint(context.Context, domain.Endpoint) (domain
 }
 func (noopControlStore) ListEndpoints(context.Context, string, int) ([]domain.Endpoint, error) {
 	return nil, nil
+}
+func (noopControlStore) GetEndpoint(context.Context, string, string) (domain.Endpoint, error) {
+	return domain.Endpoint{}, nil
+}
+func (noopControlStore) UpdateEndpoint(context.Context, string, string, string, app.UpdateEndpointRequest) (domain.Endpoint, error) {
+	return domain.Endpoint{}, nil
+}
+func (noopControlStore) DeleteEndpoint(context.Context, string, string, string, string) (domain.Endpoint, error) {
+	return domain.Endpoint{}, nil
 }
 func (noopControlStore) TestEndpoint(context.Context, string, string, string, string) (domain.Delivery, error) {
 	return domain.Delivery{}, nil

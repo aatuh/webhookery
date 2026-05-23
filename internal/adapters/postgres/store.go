@@ -651,20 +651,96 @@ func (s *Store) CreateEndpoint(ctx context.Context, endpoint domain.Endpoint) (d
 }
 
 func (s *Store) ListEndpoints(ctx context.Context, tenantID string, limit int) ([]domain.Endpoint, error) {
-	rows, err := s.pool.Query(ctx, `SELECT id, tenant_id, name, url, state, retry_policy_id, mtls_enabled, mtls_cert_subject, circuit_state, failure_count, COALESCE(disabled_until, 'epoch'::timestamptz), created_at FROM endpoints WHERE tenant_id=$1 ORDER BY created_at DESC LIMIT $2`, tenantID, limit)
+	rows, err := s.pool.Query(ctx, `SELECT id, tenant_id, name, url, state, COALESCE(retry_policy_id, ''), mtls_enabled, mtls_cert_subject, circuit_state, failure_count, COALESCE(disabled_until, 'epoch'::timestamptz), created_at FROM endpoints WHERE tenant_id=$1 ORDER BY created_at DESC LIMIT $2`, tenantID, limit)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 	var out []domain.Endpoint
 	for rows.Next() {
-		var item domain.Endpoint
-		if err := rows.Scan(&item.ID, &item.TenantID, &item.Name, &item.URL, &item.State, &item.RetryPolicyID, &item.MTLSEnabled, &item.MTLSCertSubject, &item.CircuitState, &item.FailureCount, &item.DisabledUntil, &item.CreatedAt); err != nil {
+		item, err := scanEndpoint(rows)
+		if err != nil {
 			return nil, err
 		}
 		out = append(out, item)
 	}
 	return out, rows.Err()
+}
+
+func (s *Store) GetEndpoint(ctx context.Context, tenantID, endpointID string) (domain.Endpoint, error) {
+	row := s.pool.QueryRow(ctx, `SELECT id, tenant_id, name, url, state, COALESCE(retry_policy_id, ''), mtls_enabled, mtls_cert_subject, circuit_state, failure_count, COALESCE(disabled_until, 'epoch'::timestamptz), created_at FROM endpoints WHERE tenant_id=$1 AND id=$2`, tenantID, endpointID)
+	item, err := scanEndpoint(row)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return domain.Endpoint{}, app.ErrNotFound
+	}
+	return item, err
+}
+
+func (s *Store) UpdateEndpoint(ctx context.Context, tenantID, endpointID, actorID string, req app.UpdateEndpointRequest) (domain.Endpoint, error) {
+	return s.updateEndpoint(ctx, tenantID, endpointID, actorID, req, "endpoint.updated")
+}
+
+func (s *Store) DeleteEndpoint(ctx context.Context, tenantID, endpointID, actorID, reason string) (domain.Endpoint, error) {
+	state := domain.StateDisabled
+	return s.updateEndpoint(ctx, tenantID, endpointID, actorID, app.UpdateEndpointRequest{State: &state, Reason: reason}, "endpoint.disabled")
+}
+
+func (s *Store) updateEndpoint(ctx context.Context, tenantID, endpointID, actorID string, req app.UpdateEndpointRequest, action string) (domain.Endpoint, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return domain.Endpoint{}, err
+	}
+	defer rollback(ctx, tx)
+	current, err := scanEndpoint(tx.QueryRow(ctx, `SELECT id, tenant_id, name, url, state, COALESCE(retry_policy_id, ''), mtls_enabled, mtls_cert_subject, circuit_state, failure_count, COALESCE(disabled_until, 'epoch'::timestamptz), created_at FROM endpoints WHERE tenant_id=$1 AND id=$2 FOR UPDATE`, tenantID, endpointID))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return domain.Endpoint{}, app.ErrNotFound
+	}
+	if err != nil {
+		return domain.Endpoint{}, err
+	}
+	if req.Name != nil {
+		current.Name = *req.Name
+	}
+	if req.URL != nil {
+		current.URL = *req.URL
+	}
+	if req.State != nil {
+		current.State = *req.State
+	}
+	if req.RetryPolicyID != nil {
+		current.RetryPolicyID = *req.RetryPolicyID
+	}
+	if err := tx.QueryRow(ctx, `
+		UPDATE endpoints
+		SET name=$3, url=$4, state=$5, retry_policy_id=$6
+		WHERE tenant_id=$1 AND id=$2
+		RETURNING id, tenant_id, name, url, state, COALESCE(retry_policy_id, ''), mtls_enabled, mtls_cert_subject, circuit_state, failure_count, COALESCE(disabled_until, 'epoch'::timestamptz), created_at`,
+		tenantID, endpointID, current.Name, current.URL, current.State, current.RetryPolicyID,
+	).Scan(&current.ID, &current.TenantID, &current.Name, &current.URL, &current.State, &current.RetryPolicyID, &current.MTLSEnabled, &current.MTLSCertSubject, &current.CircuitState, &current.FailureCount, &current.DisabledUntil, &current.CreatedAt); err != nil {
+		return domain.Endpoint{}, err
+	}
+	version, err := s.nextConfigVersion(ctx, tx, tenantID, domain.ConfigResourceEndpoint, endpointID)
+	if err != nil {
+		return domain.Endpoint{}, err
+	}
+	if _, err := s.insertConfigVersion(ctx, tx, tenantID, domain.ConfigResourceEndpoint, endpointID, version, map[string]any{
+		"id":                current.ID,
+		"name":              current.Name,
+		"url":               current.URL,
+		"state":             current.State,
+		"retry_policy_id":   current.RetryPolicyID,
+		"mtls_enabled":      current.MTLSEnabled,
+		"mtls_cert_subject": current.MTLSCertSubject,
+	}, actorID); err != nil {
+		return domain.Endpoint{}, err
+	}
+	if _, err := recordAuditEventTx(ctx, tx, auditEventInput{TenantID: tenantID, ActorID: actorID, Action: action, Resource: "endpoint", ResourceID: endpointID, Reason: req.Reason}); err != nil {
+		return domain.Endpoint{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return domain.Endpoint{}, err
+	}
+	return current, nil
 }
 
 func (s *Store) TestEndpoint(ctx context.Context, tenantID, endpointID, actorID, reason string) (domain.Delivery, error) {
@@ -4272,6 +4348,12 @@ func scanAuditChainEntry(row rowScanner) (domain.AuditChainEntry, error) {
 func scanSource(row rowScanner) (domain.Source, error) {
 	var item domain.Source
 	err := row.Scan(&item.ID, &item.TenantID, &item.Name, &item.Provider, &item.Adapter, &item.State, &item.CreatedAt)
+	return item, err
+}
+
+func scanEndpoint(row rowScanner) (domain.Endpoint, error) {
+	var item domain.Endpoint
+	err := row.Scan(&item.ID, &item.TenantID, &item.Name, &item.URL, &item.State, &item.RetryPolicyID, &item.MTLSEnabled, &item.MTLSCertSubject, &item.CircuitState, &item.FailureCount, &item.DisabledUntil, &item.CreatedAt)
 	return item, err
 }
 

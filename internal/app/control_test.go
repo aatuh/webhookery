@@ -98,6 +98,71 @@ func TestControlServiceDeleteSourceDisablesWithReason(t *testing.T) {
 	}
 }
 
+func TestControlServiceScopesEndpointReadsToActorTenant(t *testing.T) {
+	store := &fakeControlStore{}
+	svc := NewControlService(store, ssrf.Validator{Resolver: ssrf.StaticResolver{}})
+	actor := authz.Actor{ID: "usr_1", TenantID: "ten_a", Role: authz.RoleDeveloper, Scopes: []string{"endpoints:read"}}
+
+	_, err := svc.GetEndpoint(context.Background(), actor, "end_123")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if store.endpointTenantID != "ten_a" || store.endpointID != "end_123" {
+		t.Fatalf("expected tenant-scoped endpoint read, got tenant=%q endpoint=%q", store.endpointTenantID, store.endpointID)
+	}
+}
+
+func TestControlServiceEndpointMutationRequiresEndpointsWrite(t *testing.T) {
+	store := &fakeControlStore{}
+	svc := NewControlService(store, ssrf.Validator{Resolver: ssrf.StaticResolver{}})
+	actor := authz.Actor{ID: "usr_1", TenantID: "ten_a", Role: authz.RoleDeveloper, Scopes: []string{"endpoints:read"}}
+	name := "receiver"
+
+	_, _, err := svc.UpdateEndpoint(context.Background(), actor, "end_123", UpdateEndpointRequest{Name: &name, Reason: "rename"})
+	if err != ErrForbidden {
+		t.Fatalf("expected forbidden endpoint update, got %v", err)
+	}
+	_, err = svc.DeleteEndpoint(context.Background(), actor, "end_123", StateChangeRequest{Reason: "retire"})
+	if err != ErrForbidden {
+		t.Fatalf("expected forbidden endpoint delete, got %v", err)
+	}
+	if store.endpointTenantID != "" {
+		t.Fatal("endpoint store must not be called before authorization")
+	}
+}
+
+func TestControlServiceUpdateEndpointValidatesURL(t *testing.T) {
+	store := &fakeControlStore{}
+	svc := NewControlService(store, ssrf.Validator{Resolver: ssrf.StaticResolver{"receiver.example": []netip.Addr{netip.MustParseAddr("93.184.216.34")}}})
+	actor := authz.Actor{ID: "usr_1", TenantID: "ten_a", Role: authz.RoleAdmin, Scopes: []string{"endpoints:write"}}
+	rawURL := "https://receiver.example/webhook"
+
+	_, ssrfResult, err := svc.UpdateEndpoint(context.Background(), actor, "end_123", UpdateEndpointRequest{URL: &rawURL, Reason: "move receiver"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ssrfResult.Allowed {
+		t.Fatalf("expected URL validation result to allow update, got %+v", ssrfResult)
+	}
+	if store.endpoint.URL != rawURL || store.endpointTenantID != "ten_a" {
+		t.Fatalf("expected endpoint update to reach store, endpoint=%+v tenant=%q", store.endpoint, store.endpointTenantID)
+	}
+}
+
+func TestControlServiceDeleteEndpointDisablesWithReason(t *testing.T) {
+	store := &fakeControlStore{}
+	svc := NewControlService(store, ssrf.Validator{Resolver: ssrf.StaticResolver{}})
+	actor := authz.Actor{ID: "usr_1", TenantID: "ten_a", Role: authz.RoleAdmin, Scopes: []string{"endpoints:write"}}
+
+	_, err := svc.DeleteEndpoint(context.Background(), actor, "end_123", StateChangeRequest{Reason: "retire old receiver"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if store.endpointTenantID != "ten_a" || store.endpointID != "end_123" || store.endpointReason != "retire old receiver" {
+		t.Fatalf("expected tenant-scoped endpoint delete, tenant=%q endpoint=%q reason=%q", store.endpointTenantID, store.endpointID, store.endpointReason)
+	}
+}
+
 func TestControlServiceRequiresRawPayloadScope(t *testing.T) {
 	store := &fakeControlStore{}
 	svc := NewControlService(store, ssrf.Validator{Resolver: ssrf.StaticResolver{}})
@@ -601,6 +666,9 @@ type fakeControlStore struct {
 	sourceTenantID             string
 	sourceID                   string
 	sourceReason               string
+	endpointTenantID           string
+	endpointID                 string
+	endpointReason             string
 	transformationTenantID     string
 	providerConnectionTenantID string
 	providerConnectionReq      CreateProviderConnectionRequest
@@ -664,6 +732,38 @@ func (f *fakeControlStore) TestEndpoint(context.Context, string, string, string,
 }
 func (f *fakeControlStore) ListEndpoints(context.Context, string, int) ([]domain.Endpoint, error) {
 	return nil, nil
+}
+func (f *fakeControlStore) GetEndpoint(_ context.Context, tenantID, endpointID string) (domain.Endpoint, error) {
+	f.endpointTenantID = tenantID
+	f.endpointID = endpointID
+	return domain.Endpoint{ID: endpointID, TenantID: tenantID, Name: "Receiver", URL: "https://receiver.example/webhook", State: domain.StateActive}, nil
+}
+func (f *fakeControlStore) UpdateEndpoint(_ context.Context, tenantID, endpointID, actorID string, req UpdateEndpointRequest) (domain.Endpoint, error) {
+	f.endpointTenantID = tenantID
+	f.endpointID = endpointID
+	f.endpointReason = req.Reason
+	if f.endpoint.ID == "" {
+		f.endpoint = domain.Endpoint{ID: endpointID, TenantID: tenantID, Name: "Receiver", URL: "https://receiver.example/webhook", State: domain.StateActive}
+	}
+	if req.Name != nil {
+		f.endpoint.Name = *req.Name
+	}
+	if req.URL != nil {
+		f.endpoint.URL = *req.URL
+	}
+	if req.State != nil {
+		f.endpoint.State = *req.State
+	}
+	if req.RetryPolicyID != nil {
+		f.endpoint.RetryPolicyID = *req.RetryPolicyID
+	}
+	return f.endpoint, nil
+}
+func (f *fakeControlStore) DeleteEndpoint(_ context.Context, tenantID, endpointID, actorID, reason string) (domain.Endpoint, error) {
+	f.endpointTenantID = tenantID
+	f.endpointID = endpointID
+	f.endpointReason = reason
+	return domain.Endpoint{ID: endpointID, TenantID: tenantID, Name: "Receiver", URL: "https://receiver.example/webhook", State: domain.StateDisabled}, nil
 }
 func (f *fakeControlStore) CreateSubscription(context.Context, domain.Subscription) (domain.Subscription, error) {
 	return domain.Subscription{}, nil

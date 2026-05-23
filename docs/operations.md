@@ -116,6 +116,16 @@ events, receipts, raw payload metadata, or audit evidence. Disabled sources are
 rejected before capture and routing; re-enable by patching the source state
 back to `active` with a reason.
 
+Endpoint reads, updates, and deletes are tenant-scoped. `PATCH
+/v1/endpoints/{id}` and `whcp endpoints update` can change endpoint metadata,
+state, URL, and retry policy references with an operator reason. URL changes
+rerun the same SSRF policy used at creation before metadata is committed.
+`DELETE /v1/endpoints/{id}` and `whcp endpoints delete` disable future delivery
+claims without deleting historical deliveries, attempts, payload snapshots, or
+audit evidence. Endpoint signing secrets and mTLS key material are managed
+through their dedicated rotation/create paths and are never returned by these
+metadata APIs.
+
 Endpoints may also be created with a PEM client certificate and private key for
 outbound mTLS. The API accepts `mtls_client_cert_pem` and
 `mtls_client_key_pem` together, validates that they form a client certificate

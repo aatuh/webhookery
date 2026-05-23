@@ -321,6 +321,10 @@ paths:
       responses:
         "200":
           description: Paginated endpoint list.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EndpointPage"
     post:
       summary: Create outbound endpoint
       security:
@@ -334,6 +338,76 @@ paths:
       responses:
         "201":
           description: Endpoint created after SSRF validation.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Endpoint"
+  /v1/endpoints/{endpoint_id}:
+    get:
+      summary: Get outbound endpoint
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: endpoint_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Endpoint metadata without secret or mTLS key material.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Endpoint"
+        "404":
+          description: Endpoint not found in this tenant.
+    patch:
+      summary: Update outbound endpoint metadata, URL, retry policy, or state
+      description: URL updates rerun the SSRF policy before persistence. Signing secrets and mTLS key material are managed through dedicated endpoints.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: endpoint_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateEndpointRequest"
+      responses:
+        "200":
+          description: Updated endpoint metadata.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Endpoint"
+        "422":
+          description: Endpoint URL blocked by SSRF policy.
+    delete:
+      summary: Disable outbound endpoint
+      description: Disables future delivery claims without deleting historical deliveries, attempts, or evidence.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: endpoint_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ReasonRequest"
+      responses:
+        "200":
+          description: Disabled endpoint metadata.
           content:
             application/json:
               schema:
@@ -1772,6 +1846,26 @@ components:
         mtls_client_key_pem:
           type: string
           description: PEM client private key. Required with mtls_client_cert_pem, encrypted at rest, and never returned by the API.
+    UpdateEndpointRequest:
+      type: object
+      required: [reason]
+      additionalProperties: false
+      properties:
+        name:
+          type: string
+          minLength: 1
+        url:
+          type: string
+          format: uri
+        state:
+          type: string
+          enum: [active, disabled]
+        retry_policy_id:
+          type: string
+          description: Optional retry policy reference. Use an empty string to clear an existing policy.
+        reason:
+          type: string
+          minLength: 1
     Endpoint:
       type: object
       required: [id, tenant_id, name, url, state, mtls_enabled, created_at]
@@ -1797,6 +1891,19 @@ components:
         created_at:
           type: string
           format: date-time
+    EndpointPage:
+      type: object
+      required: [data, has_more]
+      properties:
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/Endpoint"
+        next_cursor:
+          type: string
+          nullable: true
+        has_more:
+          type: boolean
     SourceSecretVersion:
       type: object
       properties:

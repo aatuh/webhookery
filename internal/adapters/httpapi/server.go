@@ -75,6 +75,9 @@ func (s *Server) Routes() http.Handler {
 			r.Post("/provider-connections/{connection_id}:revoke", s.revokeProviderConnection)
 			r.Get("/endpoints", s.listEndpoints)
 			r.Post("/endpoints", s.createEndpoint)
+			r.Get("/endpoints/{endpoint_id}", s.getEndpoint)
+			r.Patch("/endpoints/{endpoint_id}", s.updateEndpoint)
+			r.Delete("/endpoints/{endpoint_id}", s.deleteEndpoint)
 			r.Post("/endpoints:validate-url", s.validateEndpointURL)
 			r.Post("/endpoints/{endpoint_id}:test", s.testEndpoint)
 			r.Post("/endpoints/{endpoint_id}/secrets:rotate", s.rotateEndpointSecret)
@@ -385,6 +388,45 @@ func (s *Server) listEndpoints(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, page(items))
+}
+
+func (s *Server) getEndpoint(w http.ResponseWriter, r *http.Request) {
+	item, err := s.cfg.Control.GetEndpoint(r.Context(), actorFrom(r), chi.URLParam(r, "endpoint_id"))
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, item)
+}
+
+func (s *Server) updateEndpoint(w http.ResponseWriter, r *http.Request) {
+	var req app.UpdateEndpointRequest
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	item, validation, err := s.cfg.Control.UpdateEndpoint(r.Context(), actorFrom(r), chi.URLParam(r, "endpoint_id"), req)
+	if err != nil {
+		if len(validation.BlockedReasons) > 0 {
+			writeJSON(w, http.StatusUnprocessableEntity, validation)
+			return
+		}
+		s.writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, item)
+}
+
+func (s *Server) deleteEndpoint(w http.ResponseWriter, r *http.Request) {
+	var req app.StateChangeRequest
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	item, err := s.cfg.Control.DeleteEndpoint(r.Context(), actorFrom(r), chi.URLParam(r, "endpoint_id"), req)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, item)
 }
 
 func (s *Server) testEndpoint(w http.ResponseWriter, r *http.Request) {

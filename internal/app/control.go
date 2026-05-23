@@ -34,6 +34,9 @@ type ControlStore interface {
 	DeleteSource(ctx context.Context, tenantID, sourceID, actorID, reason string) (domain.Source, error)
 	CreateEndpoint(ctx context.Context, endpoint domain.Endpoint) (domain.Endpoint, error)
 	ListEndpoints(ctx context.Context, tenantID string, limit int) ([]domain.Endpoint, error)
+	GetEndpoint(ctx context.Context, tenantID, endpointID string) (domain.Endpoint, error)
+	UpdateEndpoint(ctx context.Context, tenantID, endpointID, actorID string, req UpdateEndpointRequest) (domain.Endpoint, error)
+	DeleteEndpoint(ctx context.Context, tenantID, endpointID, actorID, reason string) (domain.Endpoint, error)
 	TestEndpoint(ctx context.Context, tenantID, endpointID, actorID, reason string) (domain.Delivery, error)
 	CreateSubscription(ctx context.Context, subscription domain.Subscription) (domain.Subscription, error)
 	ListSubscriptions(ctx context.Context, tenantID string, limit int) ([]domain.Subscription, error)
@@ -160,6 +163,14 @@ type CreateEndpointRequest struct {
 	RetryPolicyID     string `json:"retry_policy_id,omitempty"`
 	MTLSClientCertPEM string `json:"mtls_client_cert_pem,omitempty"`
 	MTLSClientKeyPEM  string `json:"mtls_client_key_pem,omitempty"`
+}
+
+type UpdateEndpointRequest struct {
+	Name          *string `json:"name,omitempty"`
+	URL           *string `json:"url,omitempty"`
+	State         *string `json:"state,omitempty"`
+	RetryPolicyID *string `json:"retry_policy_id,omitempty"`
+	Reason        string  `json:"reason"`
 }
 
 type TestEndpointRequest struct {
@@ -565,6 +576,70 @@ func (s *ControlService) ListEndpoints(ctx context.Context, actor authz.Actor, l
 		return nil, ErrForbidden
 	}
 	return s.store.ListEndpoints(ctx, actor.TenantID, normalizeLimit(limit))
+}
+
+func (s *ControlService) GetEndpoint(ctx context.Context, actor authz.Actor, endpointID string) (domain.Endpoint, error) {
+	if !authz.Can(actor, "endpoints:read", actor.TenantID) {
+		return domain.Endpoint{}, ErrForbidden
+	}
+	if strings.TrimSpace(endpointID) == "" {
+		return domain.Endpoint{}, fmt.Errorf("%w: endpoint_id is required", ErrInvalidInput)
+	}
+	return s.store.GetEndpoint(ctx, actor.TenantID, endpointID)
+}
+
+func (s *ControlService) UpdateEndpoint(ctx context.Context, actor authz.Actor, endpointID string, req UpdateEndpointRequest) (domain.Endpoint, ssrf.Result, error) {
+	if !authz.Can(actor, "endpoints:write", actor.TenantID) {
+		return domain.Endpoint{}, ssrf.Result{}, ErrForbidden
+	}
+	if strings.TrimSpace(endpointID) == "" || strings.TrimSpace(req.Reason) == "" {
+		return domain.Endpoint{}, ssrf.Result{}, fmt.Errorf("%w: endpoint_id and reason are required", ErrInvalidInput)
+	}
+	if req.Name == nil && req.URL == nil && req.State == nil && req.RetryPolicyID == nil {
+		return domain.Endpoint{}, ssrf.Result{}, fmt.Errorf("%w: at least one endpoint field is required", ErrInvalidInput)
+	}
+	if req.Name != nil {
+		name := strings.TrimSpace(*req.Name)
+		if name == "" {
+			return domain.Endpoint{}, ssrf.Result{}, fmt.Errorf("%w: name cannot be empty", ErrInvalidInput)
+		}
+		req.Name = &name
+	}
+	var result ssrf.Result
+	if req.URL != nil {
+		rawURL := strings.TrimSpace(*req.URL)
+		if rawURL == "" {
+			return domain.Endpoint{}, ssrf.Result{}, fmt.Errorf("%w: url cannot be empty", ErrInvalidInput)
+		}
+		result = s.ssrfValidator.Validate(ctx, rawURL, ssrf.DefaultPolicy())
+		if !result.Allowed {
+			return domain.Endpoint{}, result, fmt.Errorf("%w: endpoint_url_blocked", ErrInvalidInput)
+		}
+		req.URL = &result.NormalizedURL
+	}
+	if req.State != nil {
+		state := strings.TrimSpace(*req.State)
+		if state != domain.StateActive && state != domain.StateDisabled {
+			return domain.Endpoint{}, result, fmt.Errorf("%w: endpoint state must be active or disabled", ErrInvalidInput)
+		}
+		req.State = &state
+	}
+	if req.RetryPolicyID != nil {
+		retryPolicyID := strings.TrimSpace(*req.RetryPolicyID)
+		req.RetryPolicyID = &retryPolicyID
+	}
+	endpoint, err := s.store.UpdateEndpoint(ctx, actor.TenantID, endpointID, actor.ID, req)
+	return endpoint, result, err
+}
+
+func (s *ControlService) DeleteEndpoint(ctx context.Context, actor authz.Actor, endpointID string, req StateChangeRequest) (domain.Endpoint, error) {
+	if !authz.Can(actor, "endpoints:write", actor.TenantID) {
+		return domain.Endpoint{}, ErrForbidden
+	}
+	if strings.TrimSpace(endpointID) == "" || strings.TrimSpace(req.Reason) == "" {
+		return domain.Endpoint{}, fmt.Errorf("%w: endpoint_id and reason are required", ErrInvalidInput)
+	}
+	return s.store.DeleteEndpoint(ctx, actor.TenantID, endpointID, actor.ID, req.Reason)
 }
 
 func (s *ControlService) TestEndpoint(ctx context.Context, actor authz.Actor, endpointID string, req TestEndpointRequest) (domain.Delivery, error) {

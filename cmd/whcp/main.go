@@ -374,7 +374,7 @@ func runProviderConnections(args []string) error {
 
 func runEndpoints(args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: whcp endpoints <validate-url|create|test|rotate-secret>")
+		return fmt.Errorf("usage: whcp endpoints <list|get|validate-url|create|update|delete|test|rotate-secret>")
 	}
 	fs := flag.NewFlagSet("endpoints "+args[0], flag.ContinueOnError)
 	baseURL := fs.String("base-url", "http://localhost:8080", "API base URL")
@@ -382,6 +382,7 @@ func runEndpoints(args []string) error {
 	rawURL := fs.String("url", "", "endpoint URL")
 	name := fs.String("name", "", "endpoint name")
 	endpointID := fs.String("endpoint-id", "", "endpoint id")
+	state := fs.String("state", "", "endpoint state")
 	reason := fs.String("reason", "", "operator reason")
 	retryPolicyID := fs.String("retry-policy-id", "", "retry policy id")
 	mtlsClientCertFile := fs.String("mtls-client-cert-file", "", "PEM client certificate for endpoint mTLS")
@@ -391,6 +392,13 @@ func runEndpoints(args []string) error {
 		return err
 	}
 	switch args[0] {
+	case "list":
+		return getJSON(*baseURL, *apiKey, "/v1/endpoints")
+	case "get":
+		if strings.TrimSpace(*endpointID) == "" {
+			return fmt.Errorf("endpoint-id is required")
+		}
+		return getJSON(*baseURL, *apiKey, "/v1/endpoints/"+url.PathEscape(*endpointID))
 	case "validate-url":
 		return postJSON(*baseURL, *apiKey, "/v1/endpoints:validate-url", map[string]string{"url": *rawURL})
 	case "create":
@@ -404,12 +412,41 @@ func runEndpoints(args []string) error {
 			body["mtls_client_key_pem"] = key
 		}
 		return postJSON(*baseURL, *apiKey, "/v1/endpoints", body)
+	case "update":
+		if strings.TrimSpace(*endpointID) == "" {
+			return fmt.Errorf("endpoint-id is required")
+		}
+		body := map[string]string{"reason": *reason}
+		if strings.TrimSpace(*name) != "" {
+			body["name"] = *name
+		}
+		if strings.TrimSpace(*rawURL) != "" {
+			body["url"] = *rawURL
+		}
+		if strings.TrimSpace(*state) != "" {
+			body["state"] = *state
+		}
+		if strings.TrimSpace(*retryPolicyID) != "" {
+			body["retry_policy_id"] = *retryPolicyID
+		}
+		return patchJSON(*baseURL, *apiKey, "/v1/endpoints/"+url.PathEscape(*endpointID), body)
+	case "delete":
+		if strings.TrimSpace(*endpointID) == "" {
+			return fmt.Errorf("endpoint-id is required")
+		}
+		return deleteJSON(*baseURL, *apiKey, "/v1/endpoints/"+url.PathEscape(*endpointID), map[string]string{"reason": *reason})
 	case "test":
+		if strings.TrimSpace(*endpointID) == "" {
+			return fmt.Errorf("endpoint-id is required")
+		}
 		return postJSON(*baseURL, *apiKey, "/v1/endpoints/"+url.PathEscape(*endpointID)+":test", map[string]string{"reason": *reason})
 	case "rotate-secret":
+		if strings.TrimSpace(*endpointID) == "" {
+			return fmt.Errorf("endpoint-id is required")
+		}
 		return postJSON(*baseURL, *apiKey, "/v1/endpoints/"+url.PathEscape(*endpointID)+"/secrets:rotate", map[string]any{"grace_period_hours": *graceHours, "reason": *reason})
 	default:
-		return fmt.Errorf("usage: whcp endpoints <validate-url|create|test|rotate-secret>")
+		return fmt.Errorf("usage: whcp endpoints <list|get|validate-url|create|update|delete|test|rotate-secret>")
 	}
 }
 
