@@ -77,24 +77,27 @@ failures, and moved to the dead-letter table after terminal failure.
 Worker leases are refreshed in PostgreSQL when outbox or delivery work is
 claimed.
 
-Routes are snapshotted in `route_versions` and decisions attach
-`route_version_id` to delivery evidence. Retry policies are tenant-scoped,
-versioned resources; endpoints and routes can reference a policy, and
-deliveries retain the selected `retry_policy_id`. If no policy is selected, the
-implemented default remains 12 attempts over a 72-hour maximum with full-jitter
-exponential backoff between 10 seconds and 6 hours.
+Routes are snapshotted in `route_versions`, subscriptions are snapshotted in
+`subscription_versions`, and decisions attach `route_version_id` or
+`subscription_version_id` to delivery evidence. Retry policies are
+tenant-scoped, versioned resources; endpoints and routes can reference a
+policy, and deliveries retain the selected `retry_policy_id`. If no policy is
+selected, the implemented default remains 12 attempts over a 72-hour maximum
+with full-jitter exponential backoff between 10 seconds and 6 hours.
 
 Replay jobs create new delivery work linked to the original event or delivery.
 Replay never mutates the original event evidence.
 
 Replay jobs can be created with `config_mode=current` or
-`config_mode=original` and an optional `rate_limit_per_minute` scheduling hint.
-The current implementation records those replay controls on the replay job and
-replay items; event-level replay still uses current active routes when no
-original delivery route version exists. Replay jobs can be paused, resumed, or
-canceled through the API/CLI. Paused jobs keep durable outbox work uncompleted
-until they are resumed. Dead-letter entries can be released one at a time or in
-bounded bulk batches.
+`config_mode=original` and an optional `rate_limit_per_minute`. Current-mode
+event replay evaluates current active subscriptions and routes. Original-mode
+event replay clones the event's recorded non-replay delivery decisions and
+preserves their route, subscription, and retry policy evidence. Replay-created
+deliveries are marked with `replay_job_id`, scheduled according to the replay
+rate limit, and ordered behind live due deliveries when workers claim delivery
+work. Replay jobs can be paused, resumed, or canceled through the API/CLI.
+Paused jobs keep durable outbox work uncompleted until they are resumed.
+Dead-letter entries can be released one at a time or in bounded bulk batches.
 
 Endpoint health is derived from recorded delivery attempts. Repeated failures
 open a lightweight endpoint circuit and delay further delivery attempts for a
@@ -108,12 +111,12 @@ record.
 ## Reproducible Configuration
 
 `config_versions` records immutable JSON snapshots and hashes for sources,
-endpoints, routes, retry policies, schemas, and secret-version metadata when
-those resources are created or rotated through the implemented code paths.
-`route_versions` stores the route fields used for matching and delivery
-creation. This is a reproducibility foundation; it does not yet implement full
-adapter/transformation versioning, deterministic jitter seeds, or a
-hash-chained audit log.
+endpoints, subscriptions, routes, retry policies, schemas, and secret-version
+metadata when those resources are created or rotated through the implemented
+code paths. `route_versions` and `subscription_versions` store the fields used
+for matching and delivery creation. This is a reproducibility foundation; it
+does not yet implement full adapter/transformation versioning, deterministic
+jitter seeds, or a hash-chained audit log.
 
 Event schemas support a conservative JSON Schema subset for validation:
 `type`, `required`, object `properties`, and array `items`. Compatibility

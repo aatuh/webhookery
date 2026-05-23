@@ -31,11 +31,12 @@ const (
 	DedupeDuplicateSuppressed = "duplicate_suppressed"
 	DedupeCollision           = "collision"
 
-	ConfigResourceSource      = "source"
-	ConfigResourceEndpoint    = "endpoint"
-	ConfigResourceRoute       = "route"
-	ConfigResourceRetryPolicy = "retry_policy"
-	ConfigResourceSchema      = "event_schema"
+	ConfigResourceSource       = "source"
+	ConfigResourceEndpoint     = "endpoint"
+	ConfigResourceSubscription = "subscription"
+	ConfigResourceRoute        = "route"
+	ConfigResourceRetryPolicy  = "retry_policy"
+	ConfigResourceSchema       = "event_schema"
 
 	SecretStateActive   = "active"
 	SecretStatePrevious = "previous"
@@ -113,13 +114,15 @@ type APIKey struct {
 }
 
 type Subscription struct {
-	ID            string    `json:"id"`
-	TenantID      string    `json:"tenant_id"`
-	EndpointID    string    `json:"endpoint_id"`
-	EventTypes    []string  `json:"event_types"`
-	PayloadFormat string    `json:"payload_format"`
-	State         string    `json:"state"`
-	CreatedAt     time.Time `json:"created_at"`
+	ID              string    `json:"id"`
+	TenantID        string    `json:"tenant_id"`
+	EndpointID      string    `json:"endpoint_id"`
+	EventTypes      []string  `json:"event_types"`
+	PayloadFormat   string    `json:"payload_format"`
+	State           string    `json:"state"`
+	Version         int       `json:"version"`
+	ActiveVersionID string    `json:"active_version_id,omitempty"`
+	CreatedAt       time.Time `json:"created_at"`
 }
 
 type Route struct {
@@ -163,6 +166,20 @@ type RouteVersion struct {
 	State         string    `json:"state"`
 	CreatedBy     string    `json:"created_by"`
 	CreatedAt     time.Time `json:"created_at"`
+}
+
+type SubscriptionVersion struct {
+	ID             string    `json:"id"`
+	TenantID       string    `json:"tenant_id"`
+	SubscriptionID string    `json:"subscription_id"`
+	Version        int       `json:"version"`
+	ConfigHash     string    `json:"config_hash"`
+	EndpointID     string    `json:"endpoint_id"`
+	EventTypes     []string  `json:"event_types"`
+	PayloadFormat  string    `json:"payload_format"`
+	State          string    `json:"state"`
+	CreatedBy      string    `json:"created_by"`
+	CreatedAt      time.Time `json:"created_at"`
 }
 
 type RetryPolicy struct {
@@ -271,17 +288,19 @@ type Receipt struct {
 }
 
 type Delivery struct {
-	ID             string    `json:"id"`
-	TenantID       string    `json:"tenant_id"`
-	EventID        string    `json:"event_id"`
-	EndpointID     string    `json:"endpoint_id"`
-	RouteID        string    `json:"route_id,omitempty"`
-	RouteVersionID string    `json:"route_version_id,omitempty"`
-	SubscriptionID string    `json:"subscription_id,omitempty"`
-	RetryPolicyID  string    `json:"retry_policy_id,omitempty"`
-	State          string    `json:"state"`
-	AttemptCount   int       `json:"attempt_count"`
-	NextAttemptAt  time.Time `json:"next_attempt_at,omitempty"`
+	ID                    string    `json:"id"`
+	TenantID              string    `json:"tenant_id"`
+	EventID               string    `json:"event_id"`
+	EndpointID            string    `json:"endpoint_id"`
+	RouteID               string    `json:"route_id,omitempty"`
+	RouteVersionID        string    `json:"route_version_id,omitempty"`
+	SubscriptionID        string    `json:"subscription_id,omitempty"`
+	SubscriptionVersionID string    `json:"subscription_version_id,omitempty"`
+	RetryPolicyID         string    `json:"retry_policy_id,omitempty"`
+	ReplayJobID           string    `json:"replay_job_id,omitempty"`
+	State                 string    `json:"state"`
+	AttemptCount          int       `json:"attempt_count"`
+	NextAttemptAt         time.Time `json:"next_attempt_at,omitempty"`
 }
 
 type EndpointHealth struct {

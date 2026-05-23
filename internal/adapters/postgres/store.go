@@ -482,25 +482,47 @@ func (s *Store) CreateSubscription(ctx context.Context, subscription domain.Subs
 	if subscription.PayloadFormat == "" {
 		subscription.PayloadFormat = "canonical_json"
 	}
-	err := s.pool.QueryRow(ctx, `
-		INSERT INTO subscriptions(id, tenant_id, endpoint_id, event_types, payload_format, state)
-		VALUES($1,$2,$3,$4,$5,$6)
+	if subscription.Version == 0 {
+		subscription.Version = 1
+	}
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return domain.Subscription{}, err
+	}
+	defer rollback(ctx, tx)
+	err = tx.QueryRow(ctx, `
+		INSERT INTO subscriptions(id, tenant_id, endpoint_id, event_types, payload_format, state, version)
+		VALUES($1,$2,$3,$4,$5,$6,$7)
 		RETURNING created_at`,
-		subscription.ID, subscription.TenantID, subscription.EndpointID, subscription.EventTypes, subscription.PayloadFormat, subscription.State,
+		subscription.ID, subscription.TenantID, subscription.EndpointID, subscription.EventTypes, subscription.PayloadFormat, subscription.State, subscription.Version,
 	).Scan(&subscription.CreatedAt)
-	return subscription, err
+	if err != nil {
+		return domain.Subscription{}, err
+	}
+	version, err := s.insertSubscriptionVersion(ctx, tx, subscription, "")
+	if err != nil {
+		return domain.Subscription{}, err
+	}
+	subscription.ActiveVersionID = version.ID
+	if _, err := tx.Exec(ctx, `UPDATE subscriptions SET active_version_id=$1 WHERE tenant_id=$2 AND id=$3`, version.ID, subscription.TenantID, subscription.ID); err != nil {
+		return domain.Subscription{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return domain.Subscription{}, err
+	}
+	return subscription, nil
 }
 
 func (s *Store) ListSubscriptions(ctx context.Context, tenantID string, limit int) ([]domain.Subscription, error) {
-	rows, err := s.pool.Query(ctx, `SELECT id, tenant_id, endpoint_id, event_types, payload_format, state, created_at FROM subscriptions WHERE tenant_id=$1 ORDER BY created_at DESC LIMIT $2`, tenantID, limit)
+	rows, err := s.pool.Query(ctx, `SELECT id, tenant_id, endpoint_id, event_types, payload_format, state, version, active_version_id, created_at FROM subscriptions WHERE tenant_id=$1 ORDER BY created_at DESC LIMIT $2`, tenantID, limit)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 	var out []domain.Subscription
 	for rows.Next() {
-		var item domain.Subscription
-		if err := rows.Scan(&item.ID, &item.TenantID, &item.EndpointID, &item.EventTypes, &item.PayloadFormat, &item.State, &item.CreatedAt); err != nil {
+		item, err := scanSubscription(rows)
+		if err != nil {
 			return nil, err
 		}
 		out = append(out, item)
@@ -1136,7 +1158,13 @@ func (s *Store) ListEventTimeline(ctx context.Context, tenantID, eventID string,
 			SELECT 'receipt' AS kind, id AS ref_id, CASE WHEN verification_ok THEN 'verified' ELSE 'rejected' END AS state, verification_reason AS detail, received_at AS occurred_at
 			FROM provider_receipts WHERE tenant_id=$1 AND event_id=$2
 			UNION ALL
-			SELECT 'delivery' AS kind, id AS ref_id, state, endpoint_id || ' route_version=' || COALESCE(NULLIF(route_version_id,''),'none') || ' retry_policy=' || COALESCE(NULLIF(retry_policy_id,''),'default') AS detail, created_at AS occurred_at
+			SELECT 'delivery' AS kind, id AS ref_id, state,
+			       endpoint_id ||
+			       ' route_version=' || COALESCE(NULLIF(route_version_id,''),'none') ||
+			       ' subscription_version=' || COALESCE(NULLIF(subscription_version_id,''),'none') ||
+			       ' retry_policy=' || COALESCE(NULLIF(retry_policy_id,''),'default') ||
+			       ' replay_job=' || COALESCE(NULLIF(replay_job_id,''),'none') AS detail,
+			       created_at AS occurred_at
 			FROM deliveries WHERE tenant_id=$1 AND event_id=$2
 			UNION ALL
 			SELECT 'attempt' AS kind, id AS ref_id, state, failure_class AS detail, COALESCE(completed_at, started_at) AS occurred_at
@@ -1150,7 +1178,7 @@ func (s *Store) ListEventTimeline(ctx context.Context, tenantID, eventID string,
 }
 
 func (s *Store) ListDeliveries(ctx context.Context, tenantID string, limit int) ([]domain.Delivery, error) {
-	rows, err := s.pool.Query(ctx, `SELECT id, tenant_id, event_id, endpoint_id, COALESCE(route_id,''), COALESCE(route_version_id,''), COALESCE(subscription_id,''), COALESCE(retry_policy_id,''), state, attempt_count, COALESCE(next_attempt_at, 'epoch'::timestamptz) FROM deliveries WHERE tenant_id=$1 ORDER BY created_at DESC LIMIT $2`, tenantID, limit)
+	rows, err := s.pool.Query(ctx, `SELECT id, tenant_id, event_id, endpoint_id, COALESCE(route_id,''), COALESCE(route_version_id,''), COALESCE(subscription_id,''), COALESCE(subscription_version_id,''), COALESCE(retry_policy_id,''), COALESCE(replay_job_id,''), state, attempt_count, COALESCE(next_attempt_at, 'epoch'::timestamptz) FROM deliveries WHERE tenant_id=$1 ORDER BY created_at DESC LIMIT $2`, tenantID, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -1193,7 +1221,7 @@ func (s *Store) GetDeliveryAttempt(ctx context.Context, tenantID, attemptID stri
 }
 
 func (s *Store) RetryDelivery(ctx context.Context, tenantID, deliveryID, actorID, reason string) (domain.Delivery, error) {
-	row := s.pool.QueryRow(ctx, `UPDATE deliveries SET state='scheduled', next_attempt_at=now(), locked_by=NULL, lock_expires_at=NULL WHERE tenant_id=$1 AND id=$2 RETURNING id, tenant_id, event_id, endpoint_id, COALESCE(route_id,''), COALESCE(route_version_id,''), COALESCE(subscription_id,''), COALESCE(retry_policy_id,''), state, attempt_count, COALESCE(next_attempt_at, 'epoch'::timestamptz)`, tenantID, deliveryID)
+	row := s.pool.QueryRow(ctx, `UPDATE deliveries SET state='scheduled', next_attempt_at=now(), locked_by=NULL, lock_expires_at=NULL WHERE tenant_id=$1 AND id=$2 RETURNING id, tenant_id, event_id, endpoint_id, COALESCE(route_id,''), COALESCE(route_version_id,''), COALESCE(subscription_id,''), COALESCE(subscription_version_id,''), COALESCE(retry_policy_id,''), COALESCE(replay_job_id,''), state, attempt_count, COALESCE(next_attempt_at, 'epoch'::timestamptz)`, tenantID, deliveryID)
 	item, err := scanDelivery(row)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return domain.Delivery{}, app.ErrNotFound
@@ -1206,7 +1234,7 @@ func (s *Store) RetryDelivery(ctx context.Context, tenantID, deliveryID, actorID
 }
 
 func (s *Store) CancelDelivery(ctx context.Context, tenantID, deliveryID, actorID, reason string) (domain.Delivery, error) {
-	row := s.pool.QueryRow(ctx, `UPDATE deliveries SET state='canceled', locked_by=NULL, lock_expires_at=NULL WHERE tenant_id=$1 AND id=$2 AND state NOT IN ('succeeded','dead_lettered','canceled') RETURNING id, tenant_id, event_id, endpoint_id, COALESCE(route_id,''), COALESCE(route_version_id,''), COALESCE(subscription_id,''), COALESCE(retry_policy_id,''), state, attempt_count, COALESCE(next_attempt_at, 'epoch'::timestamptz)`, tenantID, deliveryID)
+	row := s.pool.QueryRow(ctx, `UPDATE deliveries SET state='canceled', locked_by=NULL, lock_expires_at=NULL WHERE tenant_id=$1 AND id=$2 AND state NOT IN ('succeeded','dead_lettered','canceled') RETURNING id, tenant_id, event_id, endpoint_id, COALESCE(route_id,''), COALESCE(route_version_id,''), COALESCE(subscription_id,''), COALESCE(subscription_version_id,''), COALESCE(retry_policy_id,''), COALESCE(replay_job_id,''), state, attempt_count, COALESCE(next_attempt_at, 'epoch'::timestamptz)`, tenantID, deliveryID)
 	item, err := scanDelivery(row)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return domain.Delivery{}, app.ErrNotFound
@@ -1690,8 +1718,25 @@ func (s *Store) DryRunReplay(ctx context.Context, tenantID string, req app.Repla
 	var count int
 	total := 0
 	if req.EventID != "" {
-		if err := s.pool.QueryRow(ctx, `SELECT count(*) FROM events WHERE tenant_id=$1 AND id=$2`, tenantID, req.EventID).Scan(&count); err != nil {
-			return app.ReplayDryRun{}, err
+		if req.ConfigMode == app.ReplayConfigOriginal {
+			if err := s.pool.QueryRow(ctx, `SELECT count(*) FROM deliveries WHERE tenant_id=$1 AND event_id=$2 AND COALESCE(replay_job_id,'')=''`, tenantID, req.EventID).Scan(&count); err != nil {
+				return app.ReplayDryRun{}, err
+			}
+		} else {
+			event, err := s.GetEvent(ctx, tenantID, req.EventID)
+			if err != nil {
+				return app.ReplayDryRun{}, err
+			}
+			if event.Verified {
+				if err := s.pool.QueryRow(ctx, `
+					SELECT
+						(SELECT count(*) FROM subscriptions s WHERE s.tenant_id=$1 AND s.state='active' AND $2 = ANY(s.event_types)) +
+						(SELECT count(*) FROM routes r WHERE r.tenant_id=$1 AND r.source_id=$3 AND r.state='active' AND $2 = ANY(r.event_types))`,
+					tenantID, event.Type, event.SourceID,
+				).Scan(&count); err != nil {
+					return app.ReplayDryRun{}, err
+				}
+			}
 		}
 		total += count
 	}
@@ -1702,8 +1747,8 @@ func (s *Store) DryRunReplay(ctx context.Context, tenantID string, req app.Repla
 		total += count
 	}
 	var warnings []string
-	if req.ConfigMode == app.ReplayConfigOriginal && req.EventID != "" {
-		warnings = append(warnings, "event replay with original config uses recorded delivery route versions when available and current active routes otherwise")
+	if req.ConfigMode == app.ReplayConfigOriginal && req.EventID != "" && total == 0 {
+		warnings = append(warnings, "original config event replay found no original delivery decisions")
 	}
 	if req.RateLimitPerMinute > 0 {
 		warnings = append(warnings, "rate limit applies to replay scheduling and does not change live delivery priority")
@@ -1851,6 +1896,16 @@ func (s *Store) ProcessOutbox(ctx context.Context, item worker.OutboxItem) error
 }
 
 func (s *Store) createDeliveriesForEvent(ctx context.Context, tenantID, eventID string) (int, error) {
+	return s.createDeliveriesForEventWithOptions(ctx, tenantID, eventID, deliveryCreationOptions{})
+}
+
+type deliveryCreationOptions struct {
+	ReplayJobID        string
+	ConfigMode         string
+	RateLimitPerMinute int
+}
+
+func (s *Store) createDeliveriesForEventWithOptions(ctx context.Context, tenantID, eventID string, opts deliveryCreationOptions) (int, error) {
 	event, err := s.GetEvent(ctx, tenantID, eventID)
 	if err != nil {
 		return 0, err
@@ -1866,7 +1921,7 @@ func (s *Store) createDeliveriesForEvent(ctx context.Context, tenantID, eventID 
 	created := 0
 
 	subRows, err := tx.Query(ctx, `
-		SELECT s.id, s.endpoint_id, COALESCE(NULLIF(e.retry_policy_id,''),'')
+		SELECT s.id, s.endpoint_id, s.active_version_id, COALESCE(NULLIF(e.retry_policy_id,''),'')
 		FROM subscriptions s
 		JOIN endpoints e ON e.tenant_id=s.tenant_id AND e.id=s.endpoint_id
 		WHERE s.tenant_id=$1 AND s.state='active' AND $2 = ANY(s.event_types)`, tenantID, event.Type)
@@ -1874,14 +1929,21 @@ func (s *Store) createDeliveriesForEvent(ctx context.Context, tenantID, eventID 
 		return 0, err
 	}
 	for subRows.Next() {
-		var subID, endpointID, retryPolicyID string
-		if err := subRows.Scan(&subID, &endpointID, &retryPolicyID); err != nil {
+		var subID, endpointID, subscriptionVersionID, retryPolicyID string
+		if err := subRows.Scan(&subID, &endpointID, &subscriptionVersionID, &retryPolicyID); err != nil {
 			subRows.Close()
 			return 0, err
 		}
-		if _, err := tx.Exec(ctx, `INSERT INTO deliveries(id, tenant_id, event_id, endpoint_id, subscription_id, retry_policy_id, state, next_attempt_at) VALUES($1,$2,$3,$4,$5,$6,'scheduled',now())`, mustID("del"), tenantID, eventID, endpointID, subID, retryPolicyID); err != nil {
+		deliveryID := mustID("del")
+		if _, err := tx.Exec(ctx, `INSERT INTO deliveries(id, tenant_id, event_id, endpoint_id, subscription_id, subscription_version_id, retry_policy_id, replay_job_id, state, next_attempt_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,'scheduled',$9)`, deliveryID, tenantID, eventID, endpointID, subID, subscriptionVersionID, retryPolicyID, opts.ReplayJobID, scheduledDeliveryAt(created, opts.RateLimitPerMinute)); err != nil {
 			subRows.Close()
 			return 0, err
+		}
+		if opts.ReplayJobID != "" {
+			if err := insertReplayDecisionEvidence(ctx, tx, tenantID, opts.ReplayJobID, eventID, "", deliveryID, opts.ConfigMode, "", subscriptionVersionID, retryPolicyID); err != nil {
+				subRows.Close()
+				return 0, err
+			}
 		}
 		created++
 	}
@@ -1905,9 +1967,16 @@ func (s *Store) createDeliveriesForEvent(ctx context.Context, tenantID, eventID 
 			routeRows.Close()
 			return 0, err
 		}
-		if _, err := tx.Exec(ctx, `INSERT INTO deliveries(id, tenant_id, event_id, endpoint_id, route_id, route_version_id, retry_policy_id, state, next_attempt_at) VALUES($1,$2,$3,$4,$5,$6,$7,'scheduled',now())`, mustID("del"), tenantID, eventID, endpointID, routeID, routeVersionID, retryPolicyID); err != nil {
+		deliveryID := mustID("del")
+		if _, err := tx.Exec(ctx, `INSERT INTO deliveries(id, tenant_id, event_id, endpoint_id, route_id, route_version_id, retry_policy_id, replay_job_id, state, next_attempt_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,'scheduled',$9)`, deliveryID, tenantID, eventID, endpointID, routeID, routeVersionID, retryPolicyID, opts.ReplayJobID, scheduledDeliveryAt(created, opts.RateLimitPerMinute)); err != nil {
 			routeRows.Close()
 			return 0, err
+		}
+		if opts.ReplayJobID != "" {
+			if err := insertReplayDecisionEvidence(ctx, tx, tenantID, opts.ReplayJobID, eventID, "", deliveryID, opts.ConfigMode, routeVersionID, "", retryPolicyID); err != nil {
+				routeRows.Close()
+				return 0, err
+			}
 		}
 		created++
 	}
@@ -1944,56 +2013,168 @@ func (s *Store) createReplayDeliveries(ctx context.Context, tenantID, replayJobI
 	}
 	created := 0
 	if req.EventID != "" {
-		count, err := s.createDeliveriesForEvent(ctx, tenantID, req.EventID)
-		if err != nil {
-			return err
-		}
-		created += count
-		if count > 0 {
-			if _, err := s.pool.Exec(ctx, `INSERT INTO replay_items(id, tenant_id, replay_job_id, event_id, state, config_mode, completed_at) VALUES($1,$2,$3,$4,'completed',$5,now())`, mustID("rpi"), tenantID, replayJobID, req.EventID, configMode); err != nil {
+		var count int
+		var err error
+		if configMode == app.ReplayConfigOriginal {
+			count, err = s.createDeliveriesFromOriginalEvent(ctx, tenantID, req.EventID, deliveryCreationOptions{ReplayJobID: replayJobID, ConfigMode: configMode, RateLimitPerMinute: rateLimitPerMinute})
+			if err != nil {
 				return err
 			}
-			if _, err := s.pool.Exec(ctx, `INSERT INTO replay_receipts(id, tenant_id, replay_job_id, event_id) VALUES($1,$2,$3,$4)`, mustID("rrc"), tenantID, replayJobID, req.EventID); err != nil {
+			created += count
+			if count == 0 {
+				if _, err := s.pool.Exec(ctx, `INSERT INTO replay_items(id, tenant_id, replay_job_id, event_id, state, config_mode, error, completed_at) VALUES($1,$2,$3,$4,'completed',$5,'no original deliveries found',now())`, mustID("rpi"), tenantID, replayJobID, req.EventID, configMode); err != nil {
+					return err
+				}
+			}
+		} else {
+			count, err = s.createDeliveriesForEventWithOptions(ctx, tenantID, req.EventID, deliveryCreationOptions{ReplayJobID: replayJobID, ConfigMode: configMode, RateLimitPerMinute: rateLimitPerMinute})
+			if err != nil {
 				return err
+			}
+			created += count
+			if count == 0 {
+				if _, err := s.pool.Exec(ctx, `INSERT INTO replay_items(id, tenant_id, replay_job_id, event_id, state, config_mode, error, completed_at) VALUES($1,$2,$3,$4,'completed',$5,'no current route or subscription matched',now())`, mustID("rpi"), tenantID, replayJobID, req.EventID, configMode); err != nil {
+					return err
+				}
 			}
 		}
 	}
 	if req.DeliveryID != "" {
-		count, newDeliveryID, routeVersionID, retryPolicyID, err := s.createDeliveryFromExisting(ctx, tenantID, req.DeliveryID)
+		count, newDeliveryID, routeVersionID, subscriptionVersionID, retryPolicyID, err := s.createDeliveryFromExisting(ctx, tenantID, req.DeliveryID, deliveryCreationOptions{ReplayJobID: replayJobID, ConfigMode: configMode, RateLimitPerMinute: rateLimitPerMinute})
 		if err != nil {
 			return err
 		}
 		created += count
 		if count > 0 {
-			if _, err := s.pool.Exec(ctx, `INSERT INTO replay_items(id, tenant_id, replay_job_id, original_delivery_id, new_delivery_id, state, config_mode, route_version_id, retry_policy_id, completed_at) VALUES($1,$2,$3,$4,$5,'completed',$6,$7,$8,now())`, mustID("rpi"), tenantID, replayJobID, req.DeliveryID, newDeliveryID, configMode, routeVersionID, retryPolicyID); err != nil {
+			if _, err := s.pool.Exec(ctx, `INSERT INTO replay_items(id, tenant_id, replay_job_id, original_delivery_id, new_delivery_id, state, config_mode, route_version_id, subscription_version_id, retry_policy_id, completed_at) VALUES($1,$2,$3,$4,$5,'completed',$6,$7,$8,$9,now())`, mustID("rpi"), tenantID, replayJobID, req.DeliveryID, newDeliveryID, configMode, routeVersionID, subscriptionVersionID, retryPolicyID); err != nil {
 				return err
 			}
-			if _, err := s.pool.Exec(ctx, `INSERT INTO replay_receipts(id, tenant_id, replay_job_id, delivery_id) VALUES($1,$2,$3,$4)`, mustID("rrc"), tenantID, replayJobID, req.DeliveryID); err != nil {
+			if _, err := s.pool.Exec(ctx, `INSERT INTO replay_receipts(id, tenant_id, replay_job_id, delivery_id, config_mode, route_version_id, subscription_version_id, retry_policy_id) VALUES($1,$2,$3,$4,$5,$6,$7,$8)`, mustID("rrc"), tenantID, replayJobID, req.DeliveryID, configMode, routeVersionID, subscriptionVersionID, retryPolicyID); err != nil {
 				return err
 			}
 		}
 	}
-	_, _ = rateLimitPerMinute, req.ConfigMode
 	_, err = s.pool.Exec(ctx, `UPDATE replay_jobs SET state='completed', processed_items=$3, completed_at=now() WHERE tenant_id=$1 AND id=$2 AND state <> 'canceled'`, tenantID, replayJobID, created)
 	return err
 }
 
-func (s *Store) createDeliveryFromExisting(ctx context.Context, tenantID, deliveryID string) (int, string, string, string, error) {
-	var eventID, endpointID, routeID, routeVersionID, subscriptionID, retryPolicyID string
-	err := s.pool.QueryRow(ctx, `SELECT event_id, endpoint_id, COALESCE(route_id,''), COALESCE(route_version_id,''), COALESCE(subscription_id,''), COALESCE(retry_policy_id,'') FROM deliveries WHERE tenant_id=$1 AND id=$2`, tenantID, deliveryID).
-		Scan(&eventID, &endpointID, &routeID, &routeVersionID, &subscriptionID, &retryPolicyID)
+func (s *Store) createDeliveryFromExisting(ctx context.Context, tenantID, deliveryID string, opts deliveryCreationOptions) (int, string, string, string, string, error) {
+	var eventID, endpointID, routeID, routeVersionID, subscriptionID, subscriptionVersionID, retryPolicyID string
+	err := s.pool.QueryRow(ctx, `SELECT event_id, endpoint_id, COALESCE(route_id,''), COALESCE(route_version_id,''), COALESCE(subscription_id,''), COALESCE(subscription_version_id,''), COALESCE(retry_policy_id,'') FROM deliveries WHERE tenant_id=$1 AND id=$2`, tenantID, deliveryID).
+		Scan(&eventID, &endpointID, &routeID, &routeVersionID, &subscriptionID, &subscriptionVersionID, &retryPolicyID)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return 0, "", "", "", app.ErrNotFound
+		return 0, "", "", "", "", app.ErrNotFound
 	}
 	if err != nil {
-		return 0, "", "", "", err
+		return 0, "", "", "", "", err
 	}
 	newDeliveryID := mustID("del")
-	_, err = s.pool.Exec(ctx, `INSERT INTO deliveries(id, tenant_id, event_id, endpoint_id, route_id, route_version_id, subscription_id, retry_policy_id, state, next_attempt_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,'scheduled',now())`, newDeliveryID, tenantID, eventID, endpointID, routeID, routeVersionID, subscriptionID, retryPolicyID)
+	_, err = s.pool.Exec(ctx, `INSERT INTO deliveries(id, tenant_id, event_id, endpoint_id, route_id, route_version_id, subscription_id, subscription_version_id, retry_policy_id, replay_job_id, state, next_attempt_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'scheduled',$11)`, newDeliveryID, tenantID, eventID, endpointID, routeID, routeVersionID, subscriptionID, subscriptionVersionID, retryPolicyID, opts.ReplayJobID, scheduledDeliveryAt(0, opts.RateLimitPerMinute))
 	if err != nil {
-		return 0, "", "", "", err
+		return 0, "", "", "", "", err
 	}
-	return 1, newDeliveryID, routeVersionID, retryPolicyID, nil
+	return 1, newDeliveryID, routeVersionID, subscriptionVersionID, retryPolicyID, nil
+}
+
+func (s *Store) createDeliveriesFromOriginalEvent(ctx context.Context, tenantID, eventID string, opts deliveryCreationOptions) (int, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT id, endpoint_id, COALESCE(route_id,''), COALESCE(route_version_id,''), COALESCE(subscription_id,''), COALESCE(subscription_version_id,''), COALESCE(retry_policy_id,'')
+		FROM deliveries
+		WHERE tenant_id=$1
+		  AND event_id=$2
+		  AND COALESCE(replay_job_id,'') = ''
+		ORDER BY created_at ASC, id ASC`,
+		tenantID, eventID,
+	)
+	if err != nil {
+		return 0, err
+	}
+	defer rows.Close()
+	type originalDelivery struct {
+		id                    string
+		endpointID            string
+		routeID               string
+		routeVersionID        string
+		subscriptionID        string
+		subscriptionVersionID string
+		retryPolicyID         string
+	}
+	var originals []originalDelivery
+	for rows.Next() {
+		var item originalDelivery
+		if err := rows.Scan(&item.id, &item.endpointID, &item.routeID, &item.routeVersionID, &item.subscriptionID, &item.subscriptionVersionID, &item.retryPolicyID); err != nil {
+			return 0, err
+		}
+		originals = append(originals, item)
+	}
+	if err := rows.Err(); err != nil {
+		return 0, err
+	}
+	if len(originals) == 0 {
+		return 0, nil
+	}
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return 0, err
+	}
+	defer rollback(ctx, tx)
+	for i, original := range originals {
+		newDeliveryID := mustID("del")
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO deliveries(id, tenant_id, event_id, endpoint_id, route_id, route_version_id, subscription_id, subscription_version_id, retry_policy_id, replay_job_id, state, next_attempt_at)
+			VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'scheduled',$11)`,
+			newDeliveryID, tenantID, eventID, original.endpointID, original.routeID, original.routeVersionID,
+			original.subscriptionID, original.subscriptionVersionID, original.retryPolicyID, opts.ReplayJobID,
+			scheduledDeliveryAt(i, opts.RateLimitPerMinute),
+		); err != nil {
+			return 0, err
+		}
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO replay_items(id, tenant_id, replay_job_id, event_id, original_delivery_id, new_delivery_id, state, config_mode, route_version_id, subscription_version_id, retry_policy_id, completed_at)
+			VALUES($1,$2,$3,$4,$5,$6,'completed',$7,$8,$9,$10,now())`,
+			mustID("rpi"), tenantID, opts.ReplayJobID, eventID, original.id, newDeliveryID, opts.ConfigMode,
+			original.routeVersionID, original.subscriptionVersionID, original.retryPolicyID,
+		); err != nil {
+			return 0, err
+		}
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO replay_receipts(id, tenant_id, replay_job_id, event_id, delivery_id, config_mode, route_version_id, subscription_version_id, retry_policy_id)
+			VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+			mustID("rrc"), tenantID, opts.ReplayJobID, eventID, original.id, opts.ConfigMode,
+			original.routeVersionID, original.subscriptionVersionID, original.retryPolicyID,
+		); err != nil {
+			return 0, err
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return 0, err
+	}
+	return len(originals), nil
+}
+
+func insertReplayDecisionEvidence(ctx context.Context, tx pgx.Tx, tenantID, replayJobID, eventID, originalDeliveryID, newDeliveryID, configMode, routeVersionID, subscriptionVersionID, retryPolicyID string) error {
+	if configMode == "" {
+		configMode = app.ReplayConfigCurrent
+	}
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO replay_items(id, tenant_id, replay_job_id, event_id, original_delivery_id, new_delivery_id, state, config_mode, route_version_id, subscription_version_id, retry_policy_id, completed_at)
+		VALUES($1,$2,$3,$4,$5,$6,'completed',$7,$8,$9,$10,now())`,
+		mustID("rpi"), tenantID, replayJobID, eventID, originalDeliveryID, newDeliveryID, configMode,
+		routeVersionID, subscriptionVersionID, retryPolicyID,
+	); err != nil {
+		return err
+	}
+	receiptDeliveryID := originalDeliveryID
+	if receiptDeliveryID == "" {
+		receiptDeliveryID = newDeliveryID
+	}
+	_, err := tx.Exec(ctx, `
+		INSERT INTO replay_receipts(id, tenant_id, replay_job_id, event_id, delivery_id, config_mode, route_version_id, subscription_version_id, retry_policy_id)
+		VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+		mustID("rrc"), tenantID, replayJobID, eventID, receiptDeliveryID, configMode,
+		routeVersionID, subscriptionVersionID, retryPolicyID,
+	)
+	return err
 }
 
 func (s *Store) ClaimDueDeliveries(ctx context.Context, workerID string, limit int) ([]worker.DeliveryItem, error) {
@@ -2015,7 +2196,7 @@ func (s *Store) ClaimDueDeliveries(ctx context.Context, workerID string, limit i
 			  AND d.next_attempt_at <= now()
 			  AND e.state='active'
 			  AND (e.disabled_until IS NULL OR e.disabled_until <= now())
-			ORDER BY d.next_attempt_at ASC
+			ORDER BY (COALESCE(d.replay_job_id,'') <> '') ASC, d.next_attempt_at ASC
 			LIMIT $2
 			FOR UPDATE SKIP LOCKED
 		)
@@ -2476,6 +2657,12 @@ func scanRoute(row rowScanner) (domain.Route, error) {
 	return item, err
 }
 
+func scanSubscription(row rowScanner) (domain.Subscription, error) {
+	var item domain.Subscription
+	err := row.Scan(&item.ID, &item.TenantID, &item.EndpointID, &item.EventTypes, &item.PayloadFormat, &item.State, &item.Version, &item.ActiveVersionID, &item.CreatedAt)
+	return item, err
+}
+
 func scanRouteVersion(row rowScanner) (domain.RouteVersion, error) {
 	var item domain.RouteVersion
 	err := row.Scan(&item.ID, &item.TenantID, &item.RouteID, &item.Version, &item.ConfigHash, &item.SourceID, &item.Name, &item.Priority, &item.EventTypes, &item.EndpointID, &item.RetryPolicyID, &item.State, &item.CreatedBy, &item.CreatedAt)
@@ -2490,7 +2677,7 @@ func scanRetryPolicy(row rowScanner) (domain.RetryPolicy, error) {
 
 func scanDelivery(row rowScanner) (domain.Delivery, error) {
 	var item domain.Delivery
-	err := row.Scan(&item.ID, &item.TenantID, &item.EventID, &item.EndpointID, &item.RouteID, &item.RouteVersionID, &item.SubscriptionID, &item.RetryPolicyID, &item.State, &item.AttemptCount, &item.NextAttemptAt)
+	err := row.Scan(&item.ID, &item.TenantID, &item.EventID, &item.EndpointID, &item.RouteID, &item.RouteVersionID, &item.SubscriptionID, &item.SubscriptionVersionID, &item.RetryPolicyID, &item.ReplayJobID, &item.State, &item.AttemptCount, &item.NextAttemptAt)
 	return item, err
 }
 
@@ -2549,6 +2736,40 @@ func (s *Store) insertRouteVersion(ctx context.Context, tx pgx.Tx, route domain.
 	return version, err
 }
 
+func (s *Store) insertSubscriptionVersion(ctx context.Context, tx pgx.Tx, subscription domain.Subscription, actorID string) (domain.SubscriptionVersion, error) {
+	version := domain.SubscriptionVersion{
+		ID:             mustID("sv"),
+		TenantID:       subscription.TenantID,
+		SubscriptionID: subscription.ID,
+		Version:        subscription.Version,
+		EndpointID:     subscription.EndpointID,
+		EventTypes:     append([]string(nil), subscription.EventTypes...),
+		PayloadFormat:  subscription.PayloadFormat,
+		State:          subscription.State,
+		CreatedBy:      actorID,
+	}
+	hash, err := s.insertConfigVersion(ctx, tx, subscription.TenantID, domain.ConfigResourceSubscription, subscription.ID, subscription.Version, map[string]any{
+		"subscription_id": subscription.ID,
+		"endpoint_id":     subscription.EndpointID,
+		"event_types":     subscription.EventTypes,
+		"payload_format":  subscription.PayloadFormat,
+		"state":           subscription.State,
+		"version":         subscription.Version,
+	}, actorID)
+	if err != nil {
+		return domain.SubscriptionVersion{}, err
+	}
+	version.ConfigHash = hash
+	err = tx.QueryRow(ctx, `
+		INSERT INTO subscription_versions(id, tenant_id, subscription_id, version, config_hash, endpoint_id, event_types, payload_format, state, created_by)
+		VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+		RETURNING created_at`,
+		version.ID, version.TenantID, version.SubscriptionID, version.Version, version.ConfigHash,
+		version.EndpointID, version.EventTypes, version.PayloadFormat, version.State, version.CreatedBy,
+	).Scan(&version.CreatedAt)
+	return version, err
+}
+
 func (s *Store) insertConfigVersion(ctx context.Context, tx pgx.Tx, tenantID, resourceType, resourceID string, version int, config any, actorID string) (string, error) {
 	raw, err := json.Marshal(config)
 	if err != nil {
@@ -2562,6 +2783,21 @@ func (s *Store) insertConfigVersion(ctx context.Context, tx pgx.Tx, tenantID, re
 		mustID("cfg"), tenantID, resourceType, resourceID, version, hash, string(raw), actorID,
 	)
 	return hash, err
+}
+
+func scheduledDeliveryAt(index, rateLimitPerMinute int) time.Time {
+	return time.Now().UTC().Add(replayScheduleDelay(index, rateLimitPerMinute))
+}
+
+func replayScheduleDelay(index, rateLimitPerMinute int) time.Duration {
+	if index <= 0 || rateLimitPerMinute <= 0 {
+		return 0
+	}
+	interval := time.Minute / time.Duration(rateLimitPerMinute)
+	if interval <= 0 {
+		return 0
+	}
+	return time.Duration(index) * interval
 }
 
 func (s *Store) retryPolicyForDelivery(ctx context.Context, tx pgx.Tx, tenantID, retryPolicyID string) (retry.Policy, error) {
