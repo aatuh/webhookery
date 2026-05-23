@@ -149,7 +149,10 @@ subscriptions and routes, creates delivery jobs, then claims scheduled
 deliveries. Delivery attempts are signed, recorded, retried on retryable
 failures, and moved to the dead-letter table after terminal failure.
 Worker leases are refreshed in PostgreSQL when outbox or delivery work is
-claimed.
+claimed. Outbox and delivery claim batches use a tenant-fair ordering in
+PostgreSQL: live route work is selected before replay and reconciliation work,
+live deliveries are selected before replay deliveries, and each priority class
+round-robins by tenant before taking additional work from the same tenant.
 
 Routes are snapshotted in `route_versions`, subscriptions are snapshotted in
 `subscription_versions`, and decisions attach `route_version_id` or

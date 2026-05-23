@@ -3046,16 +3046,31 @@ func (s *Store) ClaimOutbox(ctx context.Context, workerID string, limit int) ([]
 		return nil, err
 	}
 	rows, err := tx.Query(ctx, `
-		UPDATE outbox
-		SET state='in_progress', locked_by=$1, lock_expires_at=now() + interval '60 seconds'
-		WHERE id IN (
-			SELECT id FROM outbox
+		WITH candidates AS (
+			SELECT id, tenant_id, available_at,
+			       CASE kind WHEN 'route_event' THEN 0 WHEN 'replay_job' THEN 1 ELSE 2 END AS priority
+			FROM outbox
 			WHERE state='pending' AND available_at <= now()
-			ORDER BY available_at ASC
+		),
+		ranked AS (
+			SELECT id, tenant_id, available_at, priority,
+			       row_number() OVER (PARTITION BY priority, tenant_id ORDER BY available_at ASC, id ASC) AS tenant_rank
+			FROM candidates
+		),
+		claimed AS (
+			SELECT o.id
+			FROM outbox o
+			JOIN ranked r ON r.id=o.id
+			WHERE o.state='pending' AND o.available_at <= now()
+			ORDER BY r.priority ASC, r.tenant_rank ASC, r.available_at ASC, r.tenant_id ASC, r.id ASC
 			LIMIT $2
-			FOR UPDATE SKIP LOCKED
+			FOR UPDATE OF o SKIP LOCKED
 		)
-		RETURNING id, tenant_id, kind, resource_id`, workerID, limit)
+		UPDATE outbox o
+		SET state='in_progress', locked_by=$1, lock_expires_at=now() + interval '60 seconds'
+		FROM claimed
+		WHERE o.id=claimed.id
+		RETURNING o.id, o.tenant_id, o.kind, o.resource_id`, workerID, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -3965,20 +3980,39 @@ func (s *Store) ClaimDueDeliveries(ctx context.Context, workerID string, limit i
 		return nil, err
 	}
 	rows, err := tx.Query(ctx, `
-		UPDATE deliveries
-		SET state='in_progress', locked_by=$1, lock_expires_at=now() + interval '60 seconds'
-		WHERE id IN (
-			SELECT d.id FROM deliveries d
+		WITH candidates AS (
+			SELECT d.id, d.tenant_id, d.next_attempt_at,
+			       (COALESCE(d.replay_job_id,'') <> '') AS is_replay
+			FROM deliveries d
 			JOIN endpoints e ON e.tenant_id=d.tenant_id AND e.id=d.endpoint_id
 			WHERE d.state='scheduled'
 			  AND d.next_attempt_at <= now()
 			  AND e.state='active'
 			  AND (e.disabled_until IS NULL OR e.disabled_until <= now())
-			ORDER BY (COALESCE(d.replay_job_id,'') <> '') ASC, d.next_attempt_at ASC
+		),
+		ranked AS (
+			SELECT d.id, d.tenant_id, d.next_attempt_at, d.is_replay,
+			       row_number() OVER (PARTITION BY is_replay, d.tenant_id ORDER BY d.next_attempt_at ASC, d.id ASC) AS tenant_rank
+			FROM candidates d
+		),
+		claimed AS (
+			SELECT d.id
+			FROM deliveries d
+			JOIN ranked r ON r.id=d.id
+			JOIN endpoints e ON e.tenant_id=d.tenant_id AND e.id=d.endpoint_id
+			WHERE d.state='scheduled'
+			  AND d.next_attempt_at <= now()
+			  AND e.state='active'
+			  AND (e.disabled_until IS NULL OR e.disabled_until <= now())
+			ORDER BY r.is_replay ASC, r.tenant_rank ASC, r.next_attempt_at ASC, r.tenant_id ASC, r.id ASC
 			LIMIT $2
-			FOR UPDATE SKIP LOCKED
+			FOR UPDATE OF d SKIP LOCKED
 		)
-		RETURNING id, tenant_id, event_id, endpoint_id, attempt_count, COALESCE(retry_policy_id,''), COALESCE(retry_seed,'')`, workerID, limit)
+		UPDATE deliveries d
+		SET state='in_progress', locked_by=$1, lock_expires_at=now() + interval '60 seconds'
+		FROM claimed
+		WHERE d.id=claimed.id
+		RETURNING d.id, d.tenant_id, d.event_id, d.endpoint_id, d.attempt_count, COALESCE(d.retry_policy_id,''), COALESCE(d.retry_seed,'')`, workerID, limit)
 	if err != nil {
 		return nil, err
 	}
