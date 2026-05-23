@@ -3,6 +3,8 @@
 `sdk/openapi.yaml` is the committed SDK-ready OpenAPI source copied from the
 canonical root `openapi.yaml`. `pkg/client` contains a small Go client for
 producer event ingestion and audit-chain verification over the REST API.
+`sdk/python` contains a stdlib-only Python client for the same core control
+plane calls. Client errors do not include API key material.
 
 Operator request collections are committed under `collections/postman` and
 `collections/bruno`.

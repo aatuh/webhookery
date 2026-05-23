@@ -91,6 +91,8 @@ sdk-check: ## Validate committed SDK artifacts are present and aligned
 	@test -f sdk/README.md
 	@test -f pkg/client/client.go
 	@$(GO) test ./pkg/client
+	@test -f sdk/python/webhookery/__init__.py
+	@PYTHONPATH=sdk/python python3 -m unittest discover -s sdk/python/tests
 
 docs-check: ## Run non-mutating documentation-adjacent checks
 	@$(MAKE) openapi-check

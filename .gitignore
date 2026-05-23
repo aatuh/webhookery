@@ -12,3 +12,4 @@ dist/
 tmp/
 release-evidence/
 backups/
+__pycache__/
