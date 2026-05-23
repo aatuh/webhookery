@@ -1,0 +1,26 @@
+meta {
+  name: Ingest Generic Event
+  type: http
+  seq: 3
+}
+
+post {
+  url: {{base_url}}/v1/ingest/{{tenant_id}}/{{source_id}}
+  body: json
+  auth: none
+}
+
+headers {
+  Content-Type: application/json
+  X-Webhookery-Signature: t=replace,v1=replace
+}
+
+body:json {
+  {
+    "id": "evt_demo",
+    "type": "demo.created",
+    "data": {
+      "ok": true
+    }
+  }
+}

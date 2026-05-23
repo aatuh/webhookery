@@ -12,6 +12,8 @@ test -f deploy/kubernetes/kustomization.yaml
 grep -q "runAsNonRoot: true" deploy/kubernetes/api-deployment.yaml
 test -f .env.example
 test -f .api.env.example
+test -f collections/postman/webhookery.postman_collection.json
+test -f collections/bruno/Webhookery/bruno.json
 test -x scripts/backup_postgres.sh
 test -x scripts/restore_postgres.sh
 grep -q "backup_postgres.sh" docs/operations.md

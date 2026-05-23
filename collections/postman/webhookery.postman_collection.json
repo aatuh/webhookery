@@ -1,0 +1,72 @@
+{
+  "info": {
+    "name": "Webhookery",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+    "description": "Core Webhookery operator requests. Set base_url and api_key before using authenticated requests."
+  },
+  "variable": [
+    {"key": "base_url", "value": "http://localhost:8080"},
+    {"key": "api_key", "value": "dev-bootstrap-key"},
+    {"key": "tenant_id", "value": "ten_dev"},
+    {"key": "source_id", "value": "src_..."}
+  ],
+  "item": [
+    {
+      "name": "Readiness",
+      "request": {
+        "method": "GET",
+        "url": "{{base_url}}/readyz"
+      }
+    },
+    {
+      "name": "List Events",
+      "request": {
+        "method": "GET",
+        "header": [
+          {"key": "Authorization", "value": "Bearer {{api_key}}"}
+        ],
+        "url": "{{base_url}}/v1/events"
+      }
+    },
+    {
+      "name": "Ingest Generic Event",
+      "request": {
+        "method": "POST",
+        "header": [
+          {"key": "Content-Type", "value": "application/json"},
+          {"key": "X-Webhookery-Signature", "value": "t=replace,v1=replace"}
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\"id\":\"evt_demo\",\"type\":\"demo.created\",\"data\":{\"ok\":true}}"
+        },
+        "url": "{{base_url}}/v1/ingest/{{tenant_id}}/{{source_id}}"
+      }
+    },
+    {
+      "name": "Audit Chain Head",
+      "request": {
+        "method": "GET",
+        "header": [
+          {"key": "Authorization", "value": "Bearer {{api_key}}"}
+        ],
+        "url": "{{base_url}}/v1/audit-chain/head"
+      }
+    },
+    {
+      "name": "Verify Audit Chain",
+      "request": {
+        "method": "POST",
+        "header": [
+          {"key": "Authorization", "value": "Bearer {{api_key}}"},
+          {"key": "Content-Type", "value": "application/json"}
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{}"
+        },
+        "url": "{{base_url}}/v1/audit-chain:verify"
+      }
+    }
+  ]
+}

@@ -1,0 +1,19 @@
+meta {
+  name: Verify Audit Chain
+  type: http
+  seq: 5
+}
+
+post {
+  url: {{base_url}}/v1/audit-chain:verify
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{api_key}}
+}
+
+body:json {
+  {}
+}

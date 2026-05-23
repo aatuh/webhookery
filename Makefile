@@ -8,7 +8,7 @@ GOSEC_VERSION ?= v2.25.0
 GOVULNCHECK_VERSION ?= v1.2.0
 FUZZTIME ?= 5s
 
-.PHONY: help tools fmt lint vuln gosec test test-race coverage openapi-check test-vectors-check crypto-inventory deployment-profile-check fuzz-smoke sdk-generate sdk-check docs-check release-acceptance compose-up compose-down migrate postgres-integration-test redis-integration-test fast-check finalize clean
+.PHONY: help tools fmt lint vuln gosec test test-race coverage openapi-check test-vectors-check crypto-inventory deployment-profile-check collections-check fuzz-smoke sdk-generate sdk-check docs-check release-acceptance compose-up compose-down migrate postgres-integration-test redis-integration-test fast-check finalize clean
 
 help: ## Show help
 	@awk 'BEGIN {FS=":.*## "}; /^[a-zA-Z0-9_.-]+:.*## / { printf "  %-16s %s\n", $$1, $$2 }' $(MAKEFILE_LIST)
@@ -65,6 +65,13 @@ deployment-profile-check: ## Check deployment profile evidence and non-claims
 	@grep -q "backup_postgres.sh" docs/operations.md
 	@grep -q "restore_postgres.sh" docs/operations.md
 
+collections-check: ## Check committed API client collections
+	@test -f collections/postman/webhookery.postman_collection.json
+	@test -f collections/bruno/Webhookery/bruno.json
+	@grep -q "collection/v2.1.0/collection.json" collections/postman/webhookery.postman_collection.json
+	@grep -q "/v1/events" collections/bruno/Webhookery/events-list.bru
+	@grep -q "/v1/audit-chain:verify" collections/bruno/Webhookery/audit-chain-verify.bru
+
 fuzz-smoke: ## Run short CI-safe fuzz/property smoke tests
 	@$(GO) test ./internal/canonicaljson -run '^$$' -fuzz=Fuzz -fuzztime=$(FUZZTIME)
 	@$(GO) test ./internal/adapters/httpapi -run '^$$' -fuzz=Fuzz -fuzztime=$(FUZZTIME)
@@ -89,6 +96,7 @@ docs-check: ## Run non-mutating documentation-adjacent checks
 	@$(MAKE) sdk-check
 	@$(MAKE) crypto-inventory
 	@$(MAKE) deployment-profile-check
+	@$(MAKE) collections-check
 
 compose-up: ## Start local dependencies and API
 	@docker compose up --build
@@ -113,6 +121,7 @@ fast-check: ## Run non-mutating checks
 	@$(MAKE) test-vectors-check
 	@$(MAKE) crypto-inventory
 	@$(MAKE) deployment-profile-check
+	@$(MAKE) collections-check
 	@$(MAKE) sdk-check
 
 finalize: ## Thorough validity check
@@ -126,6 +135,7 @@ finalize: ## Thorough validity check
 	@$(MAKE) test-vectors-check
 	@$(MAKE) crypto-inventory
 	@$(MAKE) deployment-profile-check
+	@$(MAKE) collections-check
 	@$(MAKE) sdk-check
 
 clean: ## Clean local test artifacts

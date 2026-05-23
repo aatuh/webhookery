@@ -64,6 +64,7 @@ go run ./cmd/whcp ops metrics --api-key "$WEBHOOKERY_API_KEY"
 scripts/backup_postgres.sh backups
 WEBHOOKERY_RESTORE_CONFIRM=restore scripts/restore_postgres.sh backups/webhookery-20260525T000000Z.dump
 make release-acceptance
+make collections-check
 ```
 
 Set `WEBHOOKERY_ENABLE_UI=true` to expose the minimal operator console at `/`.
@@ -109,6 +110,8 @@ docker compose --profile object-storage up --build
 For Kubernetes, start from `deploy/kubernetes/README.md`. The manifests expect
 external PostgreSQL and a separately managed `webhookery-secrets` Secret; they
 do not install ingress, TLS, PostgreSQL, or object storage.
+
+Postman and Bruno request collections are committed under `collections/`.
 
 ## Security Promise
 
