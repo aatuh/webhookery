@@ -151,7 +151,15 @@ evidence that already points at it.
 Event type and event schema reads are tenant-scoped under the schemas
 permission family. Operators can list event types, list schemas for an event
 type, and fetch a specific schema version through both API and CLI before
-running validation or compatibility checks.
+running validation or compatibility checks. Event type lifecycle mutations
+require `schemas:write` and an operator reason; event type names are immutable,
+and delete moves the event type to `disabled` without deleting historical
+schema, config-version, delivery, or audit evidence. Event schema bodies and
+versions are immutable after creation. Schema lifecycle updates can move a
+schema through `active`, `deprecated`, and `retired`; delete moves the schema
+to `retired`. Schema state changes are tenant-scoped, audited, and recorded as
+new config versions so later validation and replay evidence can identify which
+schema state was in force.
 
 Endpoints may also be created with a PEM client certificate and private key for
 outbound mTLS. The API accepts `mtls_client_cert_pem` and

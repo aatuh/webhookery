@@ -1034,13 +1034,15 @@ func runRetention(args []string) error {
 
 func runSchemas(args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: whcp schemas <event-type-create|event-type-list|schema-create|schema-list|schema-get|validate|check-compat>")
+		return fmt.Errorf("usage: whcp schemas <event-type-create|event-type-list|event-type-get|event-type-update|event-type-delete|schema-create|schema-list|schema-get|schema-update|schema-delete|validate|check-compat>")
 	}
 	fs := flag.NewFlagSet("schemas "+args[0], flag.ContinueOnError)
 	baseURL := fs.String("base-url", "http://localhost:8080", "API base URL")
 	apiKey := fs.String("api-key", os.Getenv("WEBHOOKERY_API_KEY"), "API key")
 	name := fs.String("name", "", "event type name")
 	description := fs.String("description", "", "event type description")
+	state := fs.String("state", "", "event type or schema state")
+	reason := fs.String("reason", "", "operator reason")
 	version := fs.String("version", "", "schema version")
 	schemaPath := fs.String("schema-file", "", "JSON schema file")
 	payloadPath := fs.String("payload-file", "", "JSON payload file")
@@ -1053,6 +1055,28 @@ func runSchemas(args []string) error {
 		return postJSON(*baseURL, *apiKey, "/v1/event-types", map[string]string{"name": *name, "description": *description})
 	case "event-type-list":
 		return getJSON(*baseURL, *apiKey, "/v1/event-types")
+	case "event-type-get":
+		if strings.TrimSpace(*name) == "" {
+			return fmt.Errorf("name is required")
+		}
+		return getJSON(*baseURL, *apiKey, "/v1/event-types/"+url.PathEscape(*name))
+	case "event-type-update":
+		if strings.TrimSpace(*name) == "" {
+			return fmt.Errorf("name is required")
+		}
+		body := map[string]any{"reason": *reason}
+		if strings.TrimSpace(*description) != "" {
+			body["description"] = *description
+		}
+		if strings.TrimSpace(*state) != "" {
+			body["state"] = *state
+		}
+		return patchJSON(*baseURL, *apiKey, "/v1/event-types/"+url.PathEscape(*name), body)
+	case "event-type-delete":
+		if strings.TrimSpace(*name) == "" {
+			return fmt.Errorf("name is required")
+		}
+		return deleteJSON(*baseURL, *apiKey, "/v1/event-types/"+url.PathEscape(*name), map[string]string{"reason": *reason})
 	case "schema-create":
 		body, err := os.ReadFile(*schemaPath) // #nosec G304,G703 -- CLI reads an operator-selected schema file.
 		if err != nil {
@@ -1069,6 +1093,16 @@ func runSchemas(args []string) error {
 			return fmt.Errorf("name and version are required")
 		}
 		return getJSON(*baseURL, *apiKey, "/v1/event-types/"+url.PathEscape(*name)+"/schemas/"+url.PathEscape(*version))
+	case "schema-update":
+		if strings.TrimSpace(*name) == "" || strings.TrimSpace(*version) == "" {
+			return fmt.Errorf("name and version are required")
+		}
+		return patchJSON(*baseURL, *apiKey, "/v1/event-types/"+url.PathEscape(*name)+"/schemas/"+url.PathEscape(*version), map[string]string{"state": *state, "reason": *reason})
+	case "schema-delete":
+		if strings.TrimSpace(*name) == "" || strings.TrimSpace(*version) == "" {
+			return fmt.Errorf("name and version are required")
+		}
+		return deleteJSON(*baseURL, *apiKey, "/v1/event-types/"+url.PathEscape(*name)+"/schemas/"+url.PathEscape(*version), map[string]string{"reason": *reason})
 	case "validate":
 		body, err := os.ReadFile(*payloadPath) // #nosec G304,G703 -- CLI reads an operator-selected payload file.
 		if err != nil {
@@ -1082,7 +1116,7 @@ func runSchemas(args []string) error {
 		}
 		return postJSON(*baseURL, *apiKey, "/v1/event-types/"+url.PathEscape(*name)+"/schemas/"+url.PathEscape(*version)+":check-compatibility", map[string]string{"new_schema": string(body)})
 	default:
-		return fmt.Errorf("usage: whcp schemas <event-type-create|event-type-list|schema-create|schema-list|schema-get|validate|check-compat>")
+		return fmt.Errorf("usage: whcp schemas <event-type-create|event-type-list|event-type-get|event-type-update|event-type-delete|schema-create|schema-list|schema-get|schema-update|schema-delete|validate|check-compat>")
 	}
 }
 

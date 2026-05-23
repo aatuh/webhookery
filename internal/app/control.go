@@ -58,9 +58,14 @@ type ControlStore interface {
 	DeleteRetryPolicy(ctx context.Context, tenantID, retryPolicyID, actorID, reason string) (domain.RetryPolicy, error)
 	CreateEventType(ctx context.Context, eventType domain.EventType) (domain.EventType, error)
 	ListEventTypes(ctx context.Context, tenantID string, limit int) ([]domain.EventType, error)
+	GetEventType(ctx context.Context, tenantID, eventType string) (domain.EventType, error)
+	UpdateEventType(ctx context.Context, tenantID, eventType, actorID string, req UpdateEventTypeRequest) (domain.EventType, error)
+	DeleteEventType(ctx context.Context, tenantID, eventType, actorID, reason string) (domain.EventType, error)
 	CreateEventSchema(ctx context.Context, schema domain.EventSchema) (domain.EventSchema, error)
 	ListEventSchemas(ctx context.Context, tenantID, eventType string, limit int) ([]domain.EventSchema, error)
 	GetEventSchema(ctx context.Context, tenantID, eventType, version string) (domain.EventSchema, error)
+	UpdateEventSchema(ctx context.Context, tenantID, eventType, version, actorID string, req UpdateEventSchemaRequest) (domain.EventSchema, error)
+	DeleteEventSchema(ctx context.Context, tenantID, eventType, version, actorID, reason string) (domain.EventSchema, error)
 	RotateSourceSecret(ctx context.Context, tenantID, sourceID, actorID string, req RotateSourceSecretRequest) (domain.SourceSecretVersion, error)
 	RotateEndpointSecret(ctx context.Context, tenantID, endpointID, actorID string, req RotateEndpointSecretRequest) (domain.EndpointSecretVersion, error)
 	ListEvents(ctx context.Context, tenantID string, limit int) ([]domain.Event, error)
@@ -240,9 +245,20 @@ type CreateEventTypeRequest struct {
 	Description string `json:"description"`
 }
 
+type UpdateEventTypeRequest struct {
+	Description *string `json:"description,omitempty"`
+	State       *string `json:"state,omitempty"`
+	Reason      string  `json:"reason"`
+}
+
 type CreateEventSchemaRequest struct {
 	Version string `json:"version"`
 	Schema  string `json:"schema"`
+}
+
+type UpdateEventSchemaRequest struct {
+	State  *string `json:"state,omitempty"`
+	Reason string  `json:"reason"`
 }
 
 type ValidateSchemaRequest struct {
@@ -1032,6 +1048,8 @@ func (s *ControlService) CreateEventType(ctx context.Context, actor authz.Actor,
 	if !authz.Can(actor, "schemas:write", actor.TenantID) {
 		return domain.EventType{}, ErrForbidden
 	}
+	req.Name = strings.TrimSpace(req.Name)
+	req.Description = strings.TrimSpace(req.Description)
 	if req.Name == "" {
 		return domain.EventType{}, fmt.Errorf("%w: name is required", ErrInvalidInput)
 	}
@@ -1048,6 +1066,50 @@ func (s *ControlService) ListEventTypes(ctx context.Context, actor authz.Actor, 
 		return nil, ErrForbidden
 	}
 	return s.store.ListEventTypes(ctx, actor.TenantID, normalizeLimit(limit))
+}
+
+func (s *ControlService) GetEventType(ctx context.Context, actor authz.Actor, eventType string) (domain.EventType, error) {
+	if !authz.Can(actor, "schemas:read", actor.TenantID) {
+		return domain.EventType{}, ErrForbidden
+	}
+	if strings.TrimSpace(eventType) == "" {
+		return domain.EventType{}, fmt.Errorf("%w: event_type is required", ErrInvalidInput)
+	}
+	return s.store.GetEventType(ctx, actor.TenantID, eventType)
+}
+
+func (s *ControlService) UpdateEventType(ctx context.Context, actor authz.Actor, eventType string, req UpdateEventTypeRequest) (domain.EventType, error) {
+	if !authz.Can(actor, "schemas:write", actor.TenantID) {
+		return domain.EventType{}, ErrForbidden
+	}
+	if strings.TrimSpace(eventType) == "" || strings.TrimSpace(req.Reason) == "" {
+		return domain.EventType{}, fmt.Errorf("%w: event_type and reason are required", ErrInvalidInput)
+	}
+	if req.Description == nil && req.State == nil {
+		return domain.EventType{}, fmt.Errorf("%w: at least one event type field is required", ErrInvalidInput)
+	}
+	if req.Description != nil {
+		description := strings.TrimSpace(*req.Description)
+		req.Description = &description
+	}
+	if req.State != nil {
+		state := strings.TrimSpace(*req.State)
+		if state != domain.StateActive && state != domain.StateDisabled {
+			return domain.EventType{}, fmt.Errorf("%w: event type state must be active or disabled", ErrInvalidInput)
+		}
+		req.State = &state
+	}
+	return s.store.UpdateEventType(ctx, actor.TenantID, eventType, actor.ID, req)
+}
+
+func (s *ControlService) DeleteEventType(ctx context.Context, actor authz.Actor, eventType string, req StateChangeRequest) (domain.EventType, error) {
+	if !authz.Can(actor, "schemas:write", actor.TenantID) {
+		return domain.EventType{}, ErrForbidden
+	}
+	if strings.TrimSpace(eventType) == "" || strings.TrimSpace(req.Reason) == "" {
+		return domain.EventType{}, fmt.Errorf("%w: event_type and reason are required", ErrInvalidInput)
+	}
+	return s.store.DeleteEventType(ctx, actor.TenantID, eventType, actor.ID, req.Reason)
 }
 
 func (s *ControlService) CreateEventSchema(ctx context.Context, actor authz.Actor, eventType string, req CreateEventSchemaRequest) (domain.EventSchema, error) {
@@ -1081,6 +1143,34 @@ func (s *ControlService) GetEventSchema(ctx context.Context, actor authz.Actor, 
 		return domain.EventSchema{}, fmt.Errorf("%w: event_type and schema_version are required", ErrInvalidInput)
 	}
 	return s.store.GetEventSchema(ctx, actor.TenantID, eventType, version)
+}
+
+func (s *ControlService) UpdateEventSchema(ctx context.Context, actor authz.Actor, eventType, version string, req UpdateEventSchemaRequest) (domain.EventSchema, error) {
+	if !authz.Can(actor, "schemas:write", actor.TenantID) {
+		return domain.EventSchema{}, ErrForbidden
+	}
+	if strings.TrimSpace(eventType) == "" || strings.TrimSpace(version) == "" || strings.TrimSpace(req.Reason) == "" {
+		return domain.EventSchema{}, fmt.Errorf("%w: event_type, schema_version, and reason are required", ErrInvalidInput)
+	}
+	if req.State == nil {
+		return domain.EventSchema{}, fmt.Errorf("%w: at least one schema field is required", ErrInvalidInput)
+	}
+	state := strings.TrimSpace(*req.State)
+	if !validSchemaState(state) {
+		return domain.EventSchema{}, fmt.Errorf("%w: schema state must be active, deprecated, or retired", ErrInvalidInput)
+	}
+	req.State = &state
+	return s.store.UpdateEventSchema(ctx, actor.TenantID, eventType, version, actor.ID, req)
+}
+
+func (s *ControlService) DeleteEventSchema(ctx context.Context, actor authz.Actor, eventType, version string, req StateChangeRequest) (domain.EventSchema, error) {
+	if !authz.Can(actor, "schemas:write", actor.TenantID) {
+		return domain.EventSchema{}, ErrForbidden
+	}
+	if strings.TrimSpace(eventType) == "" || strings.TrimSpace(version) == "" || strings.TrimSpace(req.Reason) == "" {
+		return domain.EventSchema{}, fmt.Errorf("%w: event_type, schema_version, and reason are required", ErrInvalidInput)
+	}
+	return s.store.DeleteEventSchema(ctx, actor.TenantID, eventType, version, actor.ID, req.Reason)
 }
 
 func (s *ControlService) ValidateEventSchema(ctx context.Context, actor authz.Actor, eventType, version string, req ValidateSchemaRequest) (SchemaValidationResult, error) {
@@ -1858,6 +1948,15 @@ func normalizeEventTypes(eventTypes []string) []string {
 func validRouteState(state string) bool {
 	switch state {
 	case domain.StateDraft, domain.StateActive, domain.StateInactive:
+		return true
+	default:
+		return false
+	}
+}
+
+func validSchemaState(state string) bool {
+	switch state {
+	case domain.StateActive, domain.StateDeprecated, domain.StateRetired:
 		return true
 	default:
 		return false

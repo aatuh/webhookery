@@ -1549,6 +1549,61 @@ func (s *Store) ListEventTypes(ctx context.Context, tenantID string, limit int) 
 	return out, rows.Err()
 }
 
+func (s *Store) GetEventType(ctx context.Context, tenantID, eventType string) (domain.EventType, error) {
+	item, err := scanEventType(s.pool.QueryRow(ctx, `SELECT tenant_id, name, description, state, created_at FROM event_types WHERE tenant_id=$1 AND name=$2`, tenantID, eventType))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return domain.EventType{}, app.ErrNotFound
+	}
+	return item, err
+}
+
+func (s *Store) UpdateEventType(ctx context.Context, tenantID, eventType, actorID string, req app.UpdateEventTypeRequest) (domain.EventType, error) {
+	return s.updateEventType(ctx, tenantID, eventType, actorID, req, "event_type.updated")
+}
+
+func (s *Store) DeleteEventType(ctx context.Context, tenantID, eventType, actorID, reason string) (domain.EventType, error) {
+	state := domain.StateDisabled
+	return s.updateEventType(ctx, tenantID, eventType, actorID, app.UpdateEventTypeRequest{State: &state, Reason: reason}, "event_type.disabled")
+}
+
+func (s *Store) updateEventType(ctx context.Context, tenantID, eventType, actorID string, req app.UpdateEventTypeRequest, action string) (domain.EventType, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return domain.EventType{}, err
+	}
+	defer rollback(ctx, tx)
+	current, err := scanEventType(tx.QueryRow(ctx, `SELECT tenant_id, name, description, state, created_at FROM event_types WHERE tenant_id=$1 AND name=$2 FOR UPDATE`, tenantID, eventType))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return domain.EventType{}, app.ErrNotFound
+	}
+	if err != nil {
+		return domain.EventType{}, err
+	}
+	if req.Description != nil {
+		current.Description = *req.Description
+	}
+	if req.State != nil {
+		current.State = *req.State
+	}
+	current, err = scanEventType(tx.QueryRow(ctx, `
+		UPDATE event_types
+		SET description=$3, state=$4
+		WHERE tenant_id=$1 AND name=$2
+		RETURNING tenant_id, name, description, state, created_at`,
+		tenantID, eventType, current.Description, current.State,
+	))
+	if err != nil {
+		return domain.EventType{}, err
+	}
+	if _, err := recordAuditEventTx(ctx, tx, auditEventInput{TenantID: tenantID, ActorID: actorID, Action: action, Resource: "event_type", ResourceID: eventType, Reason: req.Reason}); err != nil {
+		return domain.EventType{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return domain.EventType{}, err
+	}
+	return current, nil
+}
+
 func (s *Store) CreateEventSchema(ctx context.Context, schema domain.EventSchema) (domain.EventSchema, error) {
 	if schema.ID == "" {
 		schema.ID = mustID("sch")
@@ -1592,8 +1647,8 @@ func (s *Store) ListEventSchemas(ctx context.Context, tenantID, eventType string
 	defer rows.Close()
 	var out []domain.EventSchema
 	for rows.Next() {
-		var item domain.EventSchema
-		if err := rows.Scan(&item.ID, &item.TenantID, &item.EventType, &item.Version, &item.Schema, &item.State, &item.CreatedAt); err != nil {
+		item, err := scanEventSchema(rows)
+		if err != nil {
 			return nil, err
 		}
 		out = append(out, item)
@@ -1602,13 +1657,68 @@ func (s *Store) ListEventSchemas(ctx context.Context, tenantID, eventType string
 }
 
 func (s *Store) GetEventSchema(ctx context.Context, tenantID, eventType, version string) (domain.EventSchema, error) {
-	var item domain.EventSchema
-	err := s.pool.QueryRow(ctx, `SELECT id, tenant_id, event_type, version, schema_json, state, created_at FROM event_schemas WHERE tenant_id=$1 AND event_type=$2 AND version=$3`, tenantID, eventType, version).
-		Scan(&item.ID, &item.TenantID, &item.EventType, &item.Version, &item.Schema, &item.State, &item.CreatedAt)
+	item, err := scanEventSchema(s.pool.QueryRow(ctx, `SELECT id, tenant_id, event_type, version, schema_json, state, created_at FROM event_schemas WHERE tenant_id=$1 AND event_type=$2 AND version=$3`, tenantID, eventType, version))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return domain.EventSchema{}, app.ErrNotFound
 	}
 	return item, err
+}
+
+func (s *Store) UpdateEventSchema(ctx context.Context, tenantID, eventType, version, actorID string, req app.UpdateEventSchemaRequest) (domain.EventSchema, error) {
+	return s.updateEventSchema(ctx, tenantID, eventType, version, actorID, req, "event_schema.updated")
+}
+
+func (s *Store) DeleteEventSchema(ctx context.Context, tenantID, eventType, version, actorID, reason string) (domain.EventSchema, error) {
+	state := domain.StateRetired
+	return s.updateEventSchema(ctx, tenantID, eventType, version, actorID, app.UpdateEventSchemaRequest{State: &state, Reason: reason}, "event_schema.retired")
+}
+
+func (s *Store) updateEventSchema(ctx context.Context, tenantID, eventType, version, actorID string, req app.UpdateEventSchemaRequest, action string) (domain.EventSchema, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return domain.EventSchema{}, err
+	}
+	defer rollback(ctx, tx)
+	current, err := scanEventSchema(tx.QueryRow(ctx, `SELECT id, tenant_id, event_type, version, schema_json, state, created_at FROM event_schemas WHERE tenant_id=$1 AND event_type=$2 AND version=$3 FOR UPDATE`, tenantID, eventType, version))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return domain.EventSchema{}, app.ErrNotFound
+	}
+	if err != nil {
+		return domain.EventSchema{}, err
+	}
+	if req.State != nil {
+		current.State = *req.State
+	}
+	current, err = scanEventSchema(tx.QueryRow(ctx, `
+		UPDATE event_schemas
+		SET state=$4
+		WHERE tenant_id=$1 AND event_type=$2 AND version=$3
+		RETURNING id, tenant_id, event_type, version, schema_json, state, created_at`,
+		tenantID, eventType, version, current.State,
+	))
+	if err != nil {
+		return domain.EventSchema{}, err
+	}
+	configVersion, err := s.nextConfigVersion(ctx, tx, tenantID, domain.ConfigResourceSchema, current.ID)
+	if err != nil {
+		return domain.EventSchema{}, err
+	}
+	if _, err := s.insertConfigVersion(ctx, tx, tenantID, domain.ConfigResourceSchema, current.ID, configVersion, map[string]any{
+		"id":         current.ID,
+		"event_type": current.EventType,
+		"version":    current.Version,
+		"schema":     current.Schema,
+		"state":      current.State,
+	}, actorID); err != nil {
+		return domain.EventSchema{}, err
+	}
+	if _, err := recordAuditEventTx(ctx, tx, auditEventInput{TenantID: tenantID, ActorID: actorID, Action: action, Resource: "event_schema", ResourceID: current.ID, Reason: req.Reason}); err != nil {
+		return domain.EventSchema{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return domain.EventSchema{}, err
+	}
+	return current, nil
 }
 
 func (s *Store) RotateSourceSecret(ctx context.Context, tenantID, sourceID, actorID string, req app.RotateSourceSecretRequest) (domain.SourceSecretVersion, error) {
@@ -5748,6 +5858,18 @@ func (s *Store) failReconciliationJob(ctx context.Context, tenantID, jobID strin
 func scanEvent(row rowScanner) (domain.Event, error) {
 	var item domain.Event
 	err := row.Scan(&item.ID, &item.TenantID, &item.SourceID, &item.Provider, &item.Type, &item.ProviderID, &item.RawPayloadID, &item.RawPayloadHash, &item.Verified, &item.VerifyReason, &item.DedupeKey, &item.DedupeStatus, &item.ReceivedAt, &item.TraceID)
+	return item, err
+}
+
+func scanEventType(row rowScanner) (domain.EventType, error) {
+	var item domain.EventType
+	err := row.Scan(&item.TenantID, &item.Name, &item.Description, &item.State, &item.CreatedAt)
+	return item, err
+}
+
+func scanEventSchema(row rowScanner) (domain.EventSchema, error) {
+	var item domain.EventSchema
+	err := row.Scan(&item.ID, &item.TenantID, &item.EventType, &item.Version, &item.Schema, &item.State, &item.CreatedAt)
 	return item, err
 }
 

@@ -101,9 +101,14 @@ func (s *Server) Routes() http.Handler {
 			r.Post("/routes/{route_id}:dry-run", s.dryRunRoute)
 			r.Get("/event-types", s.listEventTypes)
 			r.Post("/event-types", s.createEventType)
+			r.Get("/event-types/{event_type}", s.getEventType)
+			r.Patch("/event-types/{event_type}", s.updateEventType)
+			r.Delete("/event-types/{event_type}", s.deleteEventType)
 			r.Get("/event-types/{event_type}/schemas", s.listEventSchemas)
 			r.Post("/event-types/{event_type}/schemas", s.createEventSchema)
 			r.Get("/event-types/{event_type}/schemas/{schema_version}", s.getEventSchema)
+			r.Patch("/event-types/{event_type}/schemas/{schema_version}", s.updateEventSchema)
+			r.Delete("/event-types/{event_type}/schemas/{schema_version}", s.deleteEventSchema)
 			r.Post("/event-types/{event_type}/schemas/{schema_version}:validate", s.validateEventSchema)
 			r.Post("/event-types/{event_type}/schemas/{schema_version}:check-compatibility", s.checkEventSchemaCompatibility)
 			r.Get("/events", s.listEvents)
@@ -705,6 +710,41 @@ func (s *Server) listEventTypes(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, page(items))
 }
 
+func (s *Server) getEventType(w http.ResponseWriter, r *http.Request) {
+	item, err := s.cfg.Control.GetEventType(r.Context(), actorFrom(r), chi.URLParam(r, "event_type"))
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, item)
+}
+
+func (s *Server) updateEventType(w http.ResponseWriter, r *http.Request) {
+	var req app.UpdateEventTypeRequest
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	item, err := s.cfg.Control.UpdateEventType(r.Context(), actorFrom(r), chi.URLParam(r, "event_type"), req)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, item)
+}
+
+func (s *Server) deleteEventType(w http.ResponseWriter, r *http.Request) {
+	var req app.StateChangeRequest
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	item, err := s.cfg.Control.DeleteEventType(r.Context(), actorFrom(r), chi.URLParam(r, "event_type"), req)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, item)
+}
+
 func (s *Server) createEventSchema(w http.ResponseWriter, r *http.Request) {
 	var req app.CreateEventSchemaRequest
 	if !decodeJSON(w, r, &req) {
@@ -729,6 +769,32 @@ func (s *Server) listEventSchemas(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) getEventSchema(w http.ResponseWriter, r *http.Request) {
 	item, err := s.cfg.Control.GetEventSchema(r.Context(), actorFrom(r), chi.URLParam(r, "event_type"), chi.URLParam(r, "schema_version"))
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, item)
+}
+
+func (s *Server) updateEventSchema(w http.ResponseWriter, r *http.Request) {
+	var req app.UpdateEventSchemaRequest
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	item, err := s.cfg.Control.UpdateEventSchema(r.Context(), actorFrom(r), chi.URLParam(r, "event_type"), chi.URLParam(r, "schema_version"), req)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, item)
+}
+
+func (s *Server) deleteEventSchema(w http.ResponseWriter, r *http.Request) {
+	var req app.StateChangeRequest
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	item, err := s.cfg.Control.DeleteEventSchema(r.Context(), actorFrom(r), chi.URLParam(r, "event_type"), chi.URLParam(r, "schema_version"), req)
 	if err != nil {
 		s.writeError(w, r, err)
 		return

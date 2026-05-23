@@ -48,6 +48,57 @@ func TestControlServiceScopesEventSchemaReadsToActorTenant(t *testing.T) {
 	}
 }
 
+func TestControlServiceScopesEventTypeReadsToActorTenant(t *testing.T) {
+	store := &fakeControlStore{}
+	svc := NewControlService(store, ssrf.Validator{Resolver: ssrf.StaticResolver{}})
+	actor := authz.Actor{ID: "usr_1", TenantID: "ten_a", Role: authz.RoleDeveloper, Scopes: []string{"schemas:read"}}
+
+	_, err := svc.GetEventType(context.Background(), actor, "invoice.paid")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if store.schemaTenantID != "ten_a" {
+		t.Fatalf("expected tenant-scoped event type read, got %q", store.schemaTenantID)
+	}
+}
+
+func TestControlServiceSchemaLifecycleRequiresSchemasWrite(t *testing.T) {
+	store := &fakeControlStore{}
+	svc := NewControlService(store, ssrf.Validator{Resolver: ssrf.StaticResolver{}})
+	actor := authz.Actor{ID: "usr_1", TenantID: "ten_a", Role: authz.RoleDeveloper, Scopes: []string{"schemas:read"}}
+	state := domain.StateDeprecated
+
+	_, err := svc.UpdateEventType(context.Background(), actor, "invoice.paid", UpdateEventTypeRequest{Description: ptrString("Invoice paid"), Reason: "describe"})
+	if err != ErrForbidden {
+		t.Fatalf("expected forbidden event type update, got %v", err)
+	}
+	_, err = svc.UpdateEventSchema(context.Background(), actor, "invoice.paid", "2026-05-01", UpdateEventSchemaRequest{State: &state, Reason: "deprecate"})
+	if err != ErrForbidden {
+		t.Fatalf("expected forbidden schema update, got %v", err)
+	}
+}
+
+func TestControlServiceSchemaLifecycleValidatesReasonAndState(t *testing.T) {
+	store := &fakeControlStore{}
+	svc := NewControlService(store, ssrf.Validator{Resolver: ssrf.StaticResolver{}})
+	actor := authz.Actor{ID: "usr_1", TenantID: "ten_a", Role: authz.RoleAdmin, Scopes: []string{"schemas:write"}}
+	state := "bad"
+
+	_, err := svc.UpdateEventSchema(context.Background(), actor, "invoice.paid", "2026-05-01", UpdateEventSchemaRequest{State: &state, Reason: "bad state"})
+	if !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("expected invalid state, got %v", err)
+	}
+
+	state = domain.StateDeprecated
+	_, err = svc.UpdateEventSchema(context.Background(), actor, "invoice.paid", "2026-05-01", UpdateEventSchemaRequest{State: &state, Reason: "replace with 2026-06-01"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if store.schemaTenantID != "ten_a" || store.schemaReason != "replace with 2026-06-01" {
+		t.Fatalf("expected tenant-scoped schema update with reason, tenant=%q reason=%q", store.schemaTenantID, store.schemaReason)
+	}
+}
+
 func TestControlServiceScopesSourceReadsToActorTenant(t *testing.T) {
 	store := &fakeControlStore{}
 	svc := NewControlService(store, ssrf.Validator{Resolver: ssrf.StaticResolver{}})
@@ -885,6 +936,7 @@ type fakeControlStore struct {
 	apiKeyInput                APIKeyCreateInput
 	eventSchema                domain.EventSchema
 	schemaTenantID             string
+	schemaReason               string
 	retryPolicyTenantID        string
 	retryPolicyID              string
 	retryPolicyReq             UpdateRetryPolicyRequest
@@ -1133,6 +1185,28 @@ func (f *fakeControlStore) CreateEventType(context.Context, domain.EventType) (d
 func (f *fakeControlStore) ListEventTypes(context.Context, string, int) ([]domain.EventType, error) {
 	return nil, nil
 }
+func (f *fakeControlStore) GetEventType(_ context.Context, tenantID, eventType string) (domain.EventType, error) {
+	f.schemaTenantID = tenantID
+	return domain.EventType{TenantID: tenantID, Name: eventType, Description: "Invoice paid", State: domain.StateActive}, nil
+}
+func (f *fakeControlStore) UpdateEventType(_ context.Context, tenantID, eventType, actorID string, req UpdateEventTypeRequest) (domain.EventType, error) {
+	f.schemaTenantID = tenantID
+	f.schemaReason = req.Reason
+	description := "Invoice paid"
+	if req.Description != nil {
+		description = *req.Description
+	}
+	state := domain.StateActive
+	if req.State != nil {
+		state = *req.State
+	}
+	return domain.EventType{TenantID: tenantID, Name: eventType, Description: description, State: state}, nil
+}
+func (f *fakeControlStore) DeleteEventType(_ context.Context, tenantID, eventType, actorID, reason string) (domain.EventType, error) {
+	f.schemaTenantID = tenantID
+	f.schemaReason = reason
+	return domain.EventType{TenantID: tenantID, Name: eventType, Description: "Invoice paid", State: domain.StateDisabled}, nil
+}
 func (f *fakeControlStore) CreateEventSchema(context.Context, domain.EventSchema) (domain.EventSchema, error) {
 	return domain.EventSchema{}, nil
 }
@@ -1148,6 +1222,20 @@ func (f *fakeControlStore) GetEventSchema(_ context.Context, tenantID, eventType
 	f.eventSchema.EventType = eventType
 	f.eventSchema.Version = version
 	return f.eventSchema, nil
+}
+func (f *fakeControlStore) UpdateEventSchema(_ context.Context, tenantID, eventType, version, actorID string, req UpdateEventSchemaRequest) (domain.EventSchema, error) {
+	f.schemaTenantID = tenantID
+	f.schemaReason = req.Reason
+	state := domain.StateActive
+	if req.State != nil {
+		state = *req.State
+	}
+	return domain.EventSchema{ID: "sch_1", TenantID: tenantID, EventType: eventType, Version: version, Schema: `{"type":"object"}`, State: state}, nil
+}
+func (f *fakeControlStore) DeleteEventSchema(_ context.Context, tenantID, eventType, version, actorID, reason string) (domain.EventSchema, error) {
+	f.schemaTenantID = tenantID
+	f.schemaReason = reason
+	return domain.EventSchema{ID: "sch_1", TenantID: tenantID, EventType: eventType, Version: version, Schema: `{"type":"object"}`, State: domain.StateRetired}, nil
 }
 func (f *fakeControlStore) RotateSourceSecret(context.Context, string, string, string, RotateSourceSecretRequest) (domain.SourceSecretVersion, error) {
 	return domain.SourceSecretVersion{}, nil
@@ -1348,4 +1436,8 @@ func (f *fakeControlStore) ListTransformationVersions(context.Context, string, s
 }
 func (f *fakeControlStore) ActivateTransformationVersion(context.Context, string, string, string, string, string) (domain.TransformationVersion, error) {
 	return domain.TransformationVersion{}, nil
+}
+
+func ptrString(v string) *string {
+	return &v
 }

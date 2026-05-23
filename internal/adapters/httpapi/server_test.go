@@ -319,6 +319,20 @@ func TestSchemaGetRequiresSchemasRead(t *testing.T) {
 	}
 }
 
+func TestSchemaLifecycleRequiresSchemasWrite(t *testing.T) {
+	server := testServerWithActor(authz.Actor{ID: "usr_1", TenantID: "ten_1", Role: authz.RoleDeveloper, Scopes: []string{"schemas:read"}})
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPatch, "/v1/event-types/invoice.paid/schemas/2026-05-01", bytes.NewBufferString(`{"state":"deprecated","reason":"replace"}`))
+	req.Header.Set("Authorization", "Bearer token")
+	req.Header.Set("Content-Type", "application/json")
+
+	server.Routes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("expected 403, got %d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
 func TestReconciliationCreateRequiresReplayWrite(t *testing.T) {
 	server := testServerWithActor(authz.Actor{ID: "usr_1", TenantID: "ten_1", Role: authz.RoleSupport, Scopes: []string{"replay:read"}})
 	rec := httptest.NewRecorder()
@@ -499,6 +513,15 @@ func (noopControlStore) CreateEventType(context.Context, domain.EventType) (doma
 func (noopControlStore) ListEventTypes(context.Context, string, int) ([]domain.EventType, error) {
 	return nil, nil
 }
+func (noopControlStore) GetEventType(context.Context, string, string) (domain.EventType, error) {
+	return domain.EventType{}, nil
+}
+func (noopControlStore) UpdateEventType(context.Context, string, string, string, app.UpdateEventTypeRequest) (domain.EventType, error) {
+	return domain.EventType{}, nil
+}
+func (noopControlStore) DeleteEventType(context.Context, string, string, string, string) (domain.EventType, error) {
+	return domain.EventType{}, nil
+}
 func (noopControlStore) CreateEventSchema(context.Context, domain.EventSchema) (domain.EventSchema, error) {
 	return domain.EventSchema{}, nil
 }
@@ -506,6 +529,12 @@ func (noopControlStore) ListEventSchemas(context.Context, string, string, int) (
 	return nil, nil
 }
 func (noopControlStore) GetEventSchema(context.Context, string, string, string) (domain.EventSchema, error) {
+	return domain.EventSchema{}, nil
+}
+func (noopControlStore) UpdateEventSchema(context.Context, string, string, string, string, app.UpdateEventSchemaRequest) (domain.EventSchema, error) {
+	return domain.EventSchema{}, nil
+}
+func (noopControlStore) DeleteEventSchema(context.Context, string, string, string, string, string) (domain.EventSchema, error) {
 	return domain.EventSchema{}, nil
 }
 func (noopControlStore) ListEvents(context.Context, string, int) ([]domain.Event, error) {

@@ -9,10 +9,12 @@ import (
 )
 
 const (
-	StateActive   = "active"
-	StateDisabled = "disabled"
-	StateDraft    = "draft"
-	StateInactive = "inactive"
+	StateActive     = "active"
+	StateDisabled   = "disabled"
+	StateDraft      = "draft"
+	StateInactive   = "inactive"
+	StateDeprecated = "deprecated"
+	StateRetired    = "retired"
 
 	RawStoragePostgres = "postgres"
 	RawStorageS3       = "s3"

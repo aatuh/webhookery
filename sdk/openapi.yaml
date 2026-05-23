@@ -939,9 +939,83 @@ paths:
       summary: Create event type
       security:
         - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateEventTypeRequest"
       responses:
         "201":
           description: Event type created.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EventType"
+  /v1/event-types/{event_type}:
+    get:
+      summary: Get event type
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: event_type
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Event type metadata.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EventType"
+        "404":
+          description: Event type not found in this tenant.
+    patch:
+      summary: Update event type metadata or state
+      description: Event type names remain immutable; delete disables the event type.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: event_type
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateEventTypeRequest"
+      responses:
+        "200":
+          description: Event type updated.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EventType"
+    delete:
+      summary: Disable event type
+      description: Event type delete is a state transition to disabled; historical schemas and evidence remain.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: event_type
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/StateChangeRequest"
+      responses:
+        "200":
+          description: Event type disabled.
           content:
             application/json:
               schema:
@@ -974,6 +1048,12 @@ paths:
           required: true
           schema:
             type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateEventSchemaRequest"
       responses:
         "201":
           description: Schema created.
@@ -1006,6 +1086,64 @@ paths:
                 $ref: "#/components/schemas/EventSchema"
         "404":
           description: Schema not found in this tenant.
+    patch:
+      summary: Update schema lifecycle state
+      description: Schema body and version remain immutable; lifecycle state changes are audited and config-versioned.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: event_type
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: schema_version
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateEventSchemaRequest"
+      responses:
+        "200":
+          description: Event schema updated.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EventSchema"
+    delete:
+      summary: Retire schema
+      description: Schema delete is a state transition to retired; historical evidence remains.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: event_type
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: schema_version
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/StateChangeRequest"
+      responses:
+        "200":
+          description: Event schema retired.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EventSchema"
   /v1/event-types/{event_type}/schemas/{schema_version}:validate:
     post:
       summary: Validate payload against schema
@@ -2415,6 +2553,37 @@ components:
           nullable: true
         has_more:
           type: boolean
+    StateChangeRequest:
+      type: object
+      required: [reason]
+      additionalProperties: false
+      properties:
+        reason:
+          type: string
+          minLength: 1
+    CreateEventTypeRequest:
+      type: object
+      required: [name]
+      additionalProperties: false
+      properties:
+        name:
+          type: string
+          minLength: 1
+        description:
+          type: string
+    UpdateEventTypeRequest:
+      type: object
+      required: [reason]
+      additionalProperties: false
+      properties:
+        description:
+          type: string
+        state:
+          type: string
+          enum: [active, disabled]
+        reason:
+          type: string
+          minLength: 1
     EventType:
       type: object
       required: [name, tenant_id, description, state, created_at]
@@ -2427,6 +2596,7 @@ components:
           type: string
         state:
           type: string
+          enum: [active, disabled]
         created_at:
           type: string
           format: date-time
@@ -2443,6 +2613,28 @@ components:
           nullable: true
         has_more:
           type: boolean
+    CreateEventSchemaRequest:
+      type: object
+      required: [version, schema]
+      additionalProperties: false
+      properties:
+        version:
+          type: string
+          minLength: 1
+        schema:
+          type: string
+          minLength: 1
+    UpdateEventSchemaRequest:
+      type: object
+      required: [state, reason]
+      additionalProperties: false
+      properties:
+        state:
+          type: string
+          enum: [active, deprecated, retired]
+        reason:
+          type: string
+          minLength: 1
     EventSchema:
       type: object
       required: [id, tenant_id, event_type, version, schema, state, created_at]
@@ -2459,6 +2651,7 @@ components:
           type: string
         state:
           type: string
+          enum: [active, deprecated, retired]
         created_at:
           type: string
           format: date-time
