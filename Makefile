@@ -89,6 +89,8 @@ sdk-check: ## Validate committed SDK artifacts are present and aligned
 	@test -f sdk/openapi.yaml
 	@cmp -s openapi.yaml sdk/openapi.yaml
 	@test -f sdk/README.md
+	@test -f pkg/client/client.go
+	@$(GO) test ./pkg/client
 
 docs-check: ## Run non-mutating documentation-adjacent checks
 	@$(MAKE) openapi-check

@@ -112,6 +112,9 @@ external PostgreSQL and a separately managed `webhookery-secrets` Secret; they
 do not install ingress, TLS, PostgreSQL, or object storage.
 
 Postman and Bruno request collections are committed under `collections/`.
+The `pkg/client` package provides a small Go REST client for producer event
+ingestion and audit-chain verification; `pkg/verifier` remains the receiver
+signature verification helper.
 
 ## Security Promise
 
