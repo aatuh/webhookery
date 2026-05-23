@@ -137,7 +137,7 @@ var indexTemplate = template.Must(template.New("index").Parse(`<!doctype html>
       }
       let keys = [...new Set(rows.flatMap(row => Object.keys(row)))].slice(0, 8);
       if (name === "deliveries") {
-        keys = ["id", "event_id", "endpoint_id", "state", "adapter_version_id", "normalized_envelope_id", "transformation_version_id", "delivery_payload_sha256"];
+        keys = ["id", "event_id", "endpoint_id", "state", "retry_seed", "adapter_version_id", "transformation_version_id", "delivery_payload_sha256"];
       }
       if (name === "provider connections") {
         keys = ["id", "name", "provider", "state", "credential_type", "credential_hint", "verified_at", "updated_at"];

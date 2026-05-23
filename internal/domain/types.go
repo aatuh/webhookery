@@ -418,6 +418,7 @@ type Delivery struct {
 	TransformationVersionID string    `json:"transformation_version_id,omitempty"`
 	DeliveryPayloadID       string    `json:"delivery_payload_id,omitempty"`
 	DeliveryPayloadSHA256   string    `json:"delivery_payload_sha256,omitempty"`
+	RetrySeed               string    `json:"retry_seed,omitempty"`
 	State                   string    `json:"state"`
 	AttemptCount            int       `json:"attempt_count"`
 	NextAttemptAt           time.Time `json:"next_attempt_at,omitempty"`
@@ -452,6 +453,8 @@ type DeliveryAttempt struct {
 	ResponseBodyTruncated string    `json:"response_body_truncated,omitempty"`
 	FailureClass          string    `json:"failure_class,omitempty"`
 	Retryable             bool      `json:"retryable"`
+	RetryDelayMS          int64     `json:"retry_delay_ms,omitempty"`
+	NextRetryAt           time.Time `json:"next_retry_at,omitempty"`
 	StartedAt             time.Time `json:"started_at"`
 	CompletedAt           time.Time `json:"completed_at,omitempty"`
 }

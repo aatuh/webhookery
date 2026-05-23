@@ -31,6 +31,7 @@ type DeliveryItem struct {
 	EndpointURL       string
 	AttemptCount      int
 	RetryPolicyID     string
+	RetrySeed         string
 	SigningSecret     []byte
 	SigningKeyID      string
 	SigningKeyVersion int

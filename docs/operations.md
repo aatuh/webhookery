@@ -90,7 +90,9 @@ Routes are snapshotted in `route_versions`, subscriptions are snapshotted in
 tenant-scoped, versioned resources; endpoints and routes can reference a
 policy, and deliveries retain the selected `retry_policy_id`. If no policy is
 selected, the implemented default remains 12 attempts over a 72-hour maximum
-with full-jitter exponential backoff between 10 seconds and 6 hours.
+with full-jitter exponential backoff between 10 seconds and 6 hours. Each
+delivery stores a `retry_seed`, and each retryable delivery attempt records the
+deterministic jitter delay and `next_retry_at` chosen from that seed.
 
 Replay jobs create new delivery work linked to the original event or delivery.
 Replay never mutates the original event evidence.
@@ -172,8 +174,9 @@ versions, and secret-version metadata when those resources are created or
 rotated through the implemented code paths. `route_versions` and
 `subscription_versions` store the fields used for matching and delivery
 creation, including optional `transformation_id` and
-`transformation_version_id`. This is a reproducibility foundation; it does not
-yet implement deterministic jitter seeds.
+`transformation_version_id`. Retry schedule evidence is reproducible from the
+stored delivery `retry_seed`, retry policy, attempt number, and recorded
+attempt timestamps.
 
 ## Normalization And Transformations
 

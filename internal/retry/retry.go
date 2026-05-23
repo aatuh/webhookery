@@ -2,8 +2,12 @@ package retry
 
 import (
 	crand "crypto/rand"
+	"crypto/sha256"
+	"encoding/binary"
+	"encoding/hex"
 	"math/big"
 	"math/rand"
+	"strconv"
 	"time"
 )
 
@@ -29,6 +33,47 @@ func DefaultPolicy() Policy {
 }
 
 func (p Policy) NextDelay(attempt int, rng *rand.Rand) time.Duration {
+	capDelay := p.delayCap(attempt)
+	if capDelay <= 0 {
+		return 0
+	}
+	if rng == nil {
+		n, err := crand.Int(crand.Reader, big.NewInt(int64(capDelay)+1))
+		if err != nil {
+			return capDelay
+		}
+		return time.Duration(n.Int64())
+	}
+	return time.Duration(rng.Int63n(int64(capDelay) + 1))
+}
+
+func (p Policy) NextDeterministicDelay(attempt int, seed string) time.Duration {
+	capDelay := p.delayCap(attempt)
+	if capDelay <= 0 {
+		return 0
+	}
+	if seed == "" {
+		seed = Seed("empty")
+	}
+	material := append(append([]byte(seed), 0), []byte(strconv.Itoa(normalizeAttempt(attempt)))...)
+	sum := sha256.Sum256(material)
+	delay := new(big.Int).SetBytes(sum[:])
+	delay.Mod(delay, big.NewInt(int64(capDelay)+1))
+	return time.Duration(delay.Int64())
+}
+
+func Seed(parts ...string) string {
+	h := sha256.New()
+	var length [8]byte
+	for _, part := range parts {
+		binary.BigEndian.PutUint64(length[:], uint64(len(part)))
+		_, _ = h.Write(length[:])
+		_, _ = h.Write([]byte(part))
+	}
+	return "retryseed:v1:" + hex.EncodeToString(h.Sum(nil))
+}
+
+func (p Policy) delayCap(attempt int) time.Duration {
 	if attempt < 0 {
 		attempt = 0
 	}
@@ -41,17 +86,14 @@ func (p Policy) NextDelay(attempt int, rng *rand.Rand) time.Duration {
 		}
 	}
 	capDelay = minDuration(capDelay, p.MaxDelay)
-	if capDelay <= 0 {
+	return capDelay
+}
+
+func normalizeAttempt(attempt int) int {
+	if attempt < 0 {
 		return 0
 	}
-	if rng == nil {
-		n, err := crand.Int(crand.Reader, big.NewInt(int64(capDelay)+1))
-		if err != nil {
-			return capDelay
-		}
-		return time.Duration(n.Int64())
-	}
-	return time.Duration(rng.Int63n(int64(capDelay) + 1))
+	return attempt
 }
 
 func (p Policy) ClassifyStatus(status int) Classification {

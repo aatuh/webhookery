@@ -630,7 +630,8 @@ func (s *Store) TestEndpoint(ctx context.Context, tenantID, endpointID, actorID,
 	); err != nil {
 		return domain.Delivery{}, err
 	}
-	if _, err := tx.Exec(ctx, `INSERT INTO deliveries(id, tenant_id, event_id, endpoint_id, state, next_attempt_at) VALUES($1,$2,$3,$4,'scheduled',now())`, deliveryID, tenantID, eventID, endpointID); err != nil {
+	retrySeed := deliveryRetrySeed(tenantID, deliveryID, eventID, endpointID)
+	if _, err := tx.Exec(ctx, `INSERT INTO deliveries(id, tenant_id, event_id, endpoint_id, retry_seed, state, next_attempt_at) VALUES($1,$2,$3,$4,$5,'scheduled',now())`, deliveryID, tenantID, eventID, endpointID, retrySeed); err != nil {
 		return domain.Delivery{}, err
 	}
 	if _, err := tx.Exec(ctx, `INSERT INTO dedupe_records(tenant_id, source_id, dedupe_key, first_event_id, status) VALUES($1,$2,$3,$4,$5) ON CONFLICT (tenant_id, dedupe_key) DO UPDATE SET last_seen_at=now(), status=EXCLUDED.status`, tenantID, sourceID, dedupeKey, eventID, domain.DedupeUnique); err != nil {
@@ -642,7 +643,7 @@ func (s *Store) TestEndpoint(ctx context.Context, tenantID, endpointID, actorID,
 	if err := tx.Commit(ctx); err != nil {
 		return domain.Delivery{}, err
 	}
-	return domain.Delivery{ID: deliveryID, TenantID: tenantID, EventID: eventID, EndpointID: endpointID, State: "scheduled", NextAttemptAt: time.Now().UTC()}, nil
+	return domain.Delivery{ID: deliveryID, TenantID: tenantID, EventID: eventID, EndpointID: endpointID, RetrySeed: retrySeed, State: "scheduled", NextAttemptAt: time.Now().UTC()}, nil
 }
 
 func (s *Store) CreateSubscription(ctx context.Context, subscription domain.Subscription) (domain.Subscription, error) {
@@ -1602,7 +1603,11 @@ func (s *Store) ListEventTimeline(ctx context.Context, tenantID, eventID string,
 			       created_at AS occurred_at
 			FROM delivery_payloads WHERE tenant_id=$1 AND event_id=$2
 			UNION ALL
-			SELECT 'attempt' AS kind, id AS ref_id, state, failure_class AS detail, COALESCE(completed_at, started_at) AS occurred_at
+			SELECT 'attempt' AS kind, id AS ref_id, state,
+			       failure_class ||
+			       ' retryable=' || retryable::text ||
+			       ' retry_delay_ms=' || retry_delay_ms::text AS detail,
+			       COALESCE(completed_at, started_at) AS occurred_at
 			FROM delivery_attempts WHERE tenant_id=$1 AND event_id=$2
 			UNION ALL
 			SELECT 'reconciliation' AS kind, id AS ref_id, outcome AS state,
@@ -1622,7 +1627,7 @@ func (s *Store) ListEventTimeline(ctx context.Context, tenantID, eventID string,
 
 func (s *Store) ListDeliveries(ctx context.Context, tenantID string, limit int) ([]domain.Delivery, error) {
 	rows, err := s.pool.Query(ctx, `
-		SELECT d.id, d.tenant_id, d.event_id, d.endpoint_id, COALESCE(d.route_id,''), COALESCE(d.route_version_id,''), COALESCE(d.subscription_id,''), COALESCE(d.subscription_version_id,''), COALESCE(d.retry_policy_id,''), COALESCE(d.replay_job_id,''), COALESCE(d.adapter_version_id,''), COALESCE(d.normalized_envelope_id,''), COALESCE(d.transformation_version_id,''), COALESCE(d.delivery_payload_id,''), COALESCE(p.sha256,''), d.state, d.attempt_count, COALESCE(d.next_attempt_at, 'epoch'::timestamptz)
+		SELECT d.id, d.tenant_id, d.event_id, d.endpoint_id, COALESCE(d.route_id,''), COALESCE(d.route_version_id,''), COALESCE(d.subscription_id,''), COALESCE(d.subscription_version_id,''), COALESCE(d.retry_policy_id,''), COALESCE(d.replay_job_id,''), COALESCE(d.adapter_version_id,''), COALESCE(d.normalized_envelope_id,''), COALESCE(d.transformation_version_id,''), COALESCE(d.delivery_payload_id,''), COALESCE(p.sha256,''), COALESCE(d.retry_seed,''), d.state, d.attempt_count, COALESCE(d.next_attempt_at, 'epoch'::timestamptz)
 		FROM deliveries d
 		LEFT JOIN delivery_payloads p ON p.tenant_id=d.tenant_id AND p.id=d.delivery_payload_id
 		WHERE d.tenant_id=$1
@@ -1644,7 +1649,7 @@ func (s *Store) ListDeliveries(ctx context.Context, tenantID string, limit int) 
 }
 
 func (s *Store) ListDeliveryAttempts(ctx context.Context, tenantID, deliveryID string, limit int) ([]domain.DeliveryAttempt, error) {
-	rows, err := s.pool.Query(ctx, `SELECT id, tenant_id, delivery_id, event_id, endpoint_id, request_sha256, response_sha256, attempt_no, state, COALESCE(response_status, 0), response_body_truncated, failure_class, retryable, started_at, COALESCE(completed_at, started_at) FROM delivery_attempts WHERE tenant_id=$1 AND delivery_id=$2 ORDER BY attempt_no DESC LIMIT $3`, tenantID, deliveryID, limit)
+	rows, err := s.pool.Query(ctx, `SELECT id, tenant_id, delivery_id, event_id, endpoint_id, request_sha256, response_sha256, attempt_no, state, COALESCE(response_status, 0), response_body_truncated, failure_class, retryable, retry_delay_ms, COALESCE(next_retry_at, 'epoch'::timestamptz), started_at, COALESCE(completed_at, started_at) FROM delivery_attempts WHERE tenant_id=$1 AND delivery_id=$2 ORDER BY attempt_no DESC LIMIT $3`, tenantID, deliveryID, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -1661,7 +1666,7 @@ func (s *Store) ListDeliveryAttempts(ctx context.Context, tenantID, deliveryID s
 }
 
 func (s *Store) GetDeliveryAttempt(ctx context.Context, tenantID, attemptID string) (domain.DeliveryAttempt, error) {
-	row := s.pool.QueryRow(ctx, `SELECT id, tenant_id, delivery_id, event_id, endpoint_id, request_sha256, response_sha256, attempt_no, state, COALESCE(response_status, 0), response_body_truncated, failure_class, retryable, started_at, COALESCE(completed_at, started_at) FROM delivery_attempts WHERE tenant_id=$1 AND id=$2`, tenantID, attemptID)
+	row := s.pool.QueryRow(ctx, `SELECT id, tenant_id, delivery_id, event_id, endpoint_id, request_sha256, response_sha256, attempt_no, state, COALESCE(response_status, 0), response_body_truncated, failure_class, retryable, retry_delay_ms, COALESCE(next_retry_at, 'epoch'::timestamptz), started_at, COALESCE(completed_at, started_at) FROM delivery_attempts WHERE tenant_id=$1 AND id=$2`, tenantID, attemptID)
 	item, err := scanDeliveryAttempt(row)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return domain.DeliveryAttempt{}, app.ErrNotFound
@@ -1670,7 +1675,7 @@ func (s *Store) GetDeliveryAttempt(ctx context.Context, tenantID, attemptID stri
 }
 
 func (s *Store) RetryDelivery(ctx context.Context, tenantID, deliveryID, actorID, reason string) (domain.Delivery, error) {
-	row := s.pool.QueryRow(ctx, `UPDATE deliveries SET state='scheduled', next_attempt_at=now(), locked_by=NULL, lock_expires_at=NULL WHERE tenant_id=$1 AND id=$2 RETURNING id, tenant_id, event_id, endpoint_id, COALESCE(route_id,''), COALESCE(route_version_id,''), COALESCE(subscription_id,''), COALESCE(subscription_version_id,''), COALESCE(retry_policy_id,''), COALESCE(replay_job_id,''), COALESCE(adapter_version_id,''), COALESCE(normalized_envelope_id,''), COALESCE(transformation_version_id,''), COALESCE(delivery_payload_id,''), COALESCE((SELECT p.sha256 FROM delivery_payloads p WHERE p.tenant_id=deliveries.tenant_id AND p.id=deliveries.delivery_payload_id), ''), state, attempt_count, COALESCE(next_attempt_at, 'epoch'::timestamptz)`, tenantID, deliveryID)
+	row := s.pool.QueryRow(ctx, `UPDATE deliveries SET state='scheduled', next_attempt_at=now(), locked_by=NULL, lock_expires_at=NULL WHERE tenant_id=$1 AND id=$2 RETURNING id, tenant_id, event_id, endpoint_id, COALESCE(route_id,''), COALESCE(route_version_id,''), COALESCE(subscription_id,''), COALESCE(subscription_version_id,''), COALESCE(retry_policy_id,''), COALESCE(replay_job_id,''), COALESCE(adapter_version_id,''), COALESCE(normalized_envelope_id,''), COALESCE(transformation_version_id,''), COALESCE(delivery_payload_id,''), COALESCE((SELECT p.sha256 FROM delivery_payloads p WHERE p.tenant_id=deliveries.tenant_id AND p.id=deliveries.delivery_payload_id), ''), COALESCE(retry_seed,''), state, attempt_count, COALESCE(next_attempt_at, 'epoch'::timestamptz)`, tenantID, deliveryID)
 	item, err := scanDelivery(row)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return domain.Delivery{}, app.ErrNotFound
@@ -1683,7 +1688,7 @@ func (s *Store) RetryDelivery(ctx context.Context, tenantID, deliveryID, actorID
 }
 
 func (s *Store) CancelDelivery(ctx context.Context, tenantID, deliveryID, actorID, reason string) (domain.Delivery, error) {
-	row := s.pool.QueryRow(ctx, `UPDATE deliveries SET state='canceled', locked_by=NULL, lock_expires_at=NULL WHERE tenant_id=$1 AND id=$2 AND state NOT IN ('succeeded','dead_lettered','canceled') RETURNING id, tenant_id, event_id, endpoint_id, COALESCE(route_id,''), COALESCE(route_version_id,''), COALESCE(subscription_id,''), COALESCE(subscription_version_id,''), COALESCE(retry_policy_id,''), COALESCE(replay_job_id,''), COALESCE(adapter_version_id,''), COALESCE(normalized_envelope_id,''), COALESCE(transformation_version_id,''), COALESCE(delivery_payload_id,''), COALESCE((SELECT p.sha256 FROM delivery_payloads p WHERE p.tenant_id=deliveries.tenant_id AND p.id=deliveries.delivery_payload_id), ''), state, attempt_count, COALESCE(next_attempt_at, 'epoch'::timestamptz)`, tenantID, deliveryID)
+	row := s.pool.QueryRow(ctx, `UPDATE deliveries SET state='canceled', locked_by=NULL, lock_expires_at=NULL WHERE tenant_id=$1 AND id=$2 AND state NOT IN ('succeeded','dead_lettered','canceled') RETURNING id, tenant_id, event_id, endpoint_id, COALESCE(route_id,''), COALESCE(route_version_id,''), COALESCE(subscription_id,''), COALESCE(subscription_version_id,''), COALESCE(retry_policy_id,''), COALESCE(replay_job_id,''), COALESCE(adapter_version_id,''), COALESCE(normalized_envelope_id,''), COALESCE(transformation_version_id,''), COALESCE(delivery_payload_id,''), COALESCE((SELECT p.sha256 FROM delivery_payloads p WHERE p.tenant_id=deliveries.tenant_id AND p.id=deliveries.delivery_payload_id), ''), COALESCE(retry_seed,''), state, attempt_count, COALESCE(next_attempt_at, 'epoch'::timestamptz)`, tenantID, deliveryID)
 	item, err := scanDelivery(row)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return domain.Delivery{}, app.ErrNotFound
@@ -3193,7 +3198,8 @@ func (s *Store) createDeliveriesForEventWithOptions(ctx context.Context, tenantI
 			return 0, err
 		}
 		deliveryID := mustID("del")
-		if _, err := tx.Exec(ctx, `INSERT INTO deliveries(id, tenant_id, event_id, endpoint_id, subscription_id, subscription_version_id, retry_policy_id, replay_job_id, transformation_version_id, state, next_attempt_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,'scheduled',$10)`, deliveryID, tenantID, eventID, endpointID, subID, subscriptionVersionID, retryPolicyID, opts.ReplayJobID, transformationVersionID, scheduledDeliveryAt(created, opts.RateLimitPerMinute)); err != nil {
+		retrySeed := deliveryRetrySeed(tenantID, deliveryID, eventID, endpointID)
+		if _, err := tx.Exec(ctx, `INSERT INTO deliveries(id, tenant_id, event_id, endpoint_id, subscription_id, subscription_version_id, retry_policy_id, replay_job_id, transformation_version_id, retry_seed, state, next_attempt_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'scheduled',$11)`, deliveryID, tenantID, eventID, endpointID, subID, subscriptionVersionID, retryPolicyID, opts.ReplayJobID, transformationVersionID, retrySeed, scheduledDeliveryAt(created, opts.RateLimitPerMinute)); err != nil {
 			subRows.Close()
 			return 0, err
 		}
@@ -3240,7 +3246,8 @@ func (s *Store) createDeliveriesForEventWithOptions(ctx context.Context, tenantI
 			return 0, err
 		}
 		deliveryID := mustID("del")
-		if _, err := tx.Exec(ctx, `INSERT INTO deliveries(id, tenant_id, event_id, endpoint_id, route_id, route_version_id, retry_policy_id, replay_job_id, transformation_version_id, state, next_attempt_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,'scheduled',$10)`, deliveryID, tenantID, eventID, endpointID, routeID, routeVersionID, retryPolicyID, opts.ReplayJobID, transformationVersionID, scheduledDeliveryAt(created, opts.RateLimitPerMinute)); err != nil {
+		retrySeed := deliveryRetrySeed(tenantID, deliveryID, eventID, endpointID)
+		if _, err := tx.Exec(ctx, `INSERT INTO deliveries(id, tenant_id, event_id, endpoint_id, route_id, route_version_id, retry_policy_id, replay_job_id, transformation_version_id, retry_seed, state, next_attempt_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'scheduled',$11)`, deliveryID, tenantID, eventID, endpointID, routeID, routeVersionID, retryPolicyID, opts.ReplayJobID, transformationVersionID, retrySeed, scheduledDeliveryAt(created, opts.RateLimitPerMinute)); err != nil {
 			routeRows.Close()
 			return 0, err
 		}
@@ -3658,7 +3665,8 @@ func (s *Store) createDeliveryFromExisting(ctx context.Context, tenantID, delive
 		return 0, replayEvidence{}, err
 	}
 	defer rollback(ctx, tx)
-	if _, err = tx.Exec(ctx, `INSERT INTO deliveries(id, tenant_id, event_id, endpoint_id, route_id, route_version_id, subscription_id, subscription_version_id, retry_policy_id, replay_job_id, adapter_version_id, normalized_envelope_id, transformation_version_id, state, next_attempt_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,'scheduled',$14)`, newDeliveryID, tenantID, eventID, endpointID, routeID, routeVersionID, subscriptionID, subscriptionVersionID, retryPolicyID, opts.ReplayJobID, adapterVersionID, normalizedID, transformationVersionID, scheduledDeliveryAt(0, opts.RateLimitPerMinute)); err != nil {
+	retrySeed := deliveryRetrySeed(tenantID, newDeliveryID, eventID, endpointID)
+	if _, err = tx.Exec(ctx, `INSERT INTO deliveries(id, tenant_id, event_id, endpoint_id, route_id, route_version_id, subscription_id, subscription_version_id, retry_policy_id, replay_job_id, adapter_version_id, normalized_envelope_id, transformation_version_id, retry_seed, state, next_attempt_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,'scheduled',$15)`, newDeliveryID, tenantID, eventID, endpointID, routeID, routeVersionID, subscriptionID, subscriptionVersionID, retryPolicyID, opts.ReplayJobID, adapterVersionID, normalizedID, transformationVersionID, retrySeed, scheduledDeliveryAt(0, opts.RateLimitPerMinute)); err != nil {
 		return 0, replayEvidence{}, err
 	}
 	newPayloadID := ""
@@ -3781,12 +3789,14 @@ func (s *Store) createDeliveriesFromOriginalEvent(ctx context.Context, tenantID,
 	defer rollback(ctx, tx)
 	for i, original := range originals {
 		newDeliveryID := mustID("del")
+		retrySeed := deliveryRetrySeed(tenantID, newDeliveryID, eventID, original.endpointID)
 		if _, err := tx.Exec(ctx, `
-			INSERT INTO deliveries(id, tenant_id, event_id, endpoint_id, route_id, route_version_id, subscription_id, subscription_version_id, retry_policy_id, replay_job_id, adapter_version_id, normalized_envelope_id, transformation_version_id, state, next_attempt_at)
-			VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,'scheduled',$14)`,
+			INSERT INTO deliveries(id, tenant_id, event_id, endpoint_id, route_id, route_version_id, subscription_id, subscription_version_id, retry_policy_id, replay_job_id, adapter_version_id, normalized_envelope_id, transformation_version_id, retry_seed, state, next_attempt_at)
+			VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,'scheduled',$15)`,
 			newDeliveryID, tenantID, eventID, original.endpointID, original.routeID, original.routeVersionID,
 			original.subscriptionID, original.subscriptionVersionID, original.retryPolicyID, opts.ReplayJobID,
 			original.adapterVersionID, original.normalizedEnvelopeID, original.transformationVersionID,
+			retrySeed,
 			scheduledDeliveryAt(i, opts.RateLimitPerMinute),
 		); err != nil {
 			return 0, err
@@ -3880,7 +3890,7 @@ func (s *Store) ClaimDueDeliveries(ctx context.Context, workerID string, limit i
 			LIMIT $2
 			FOR UPDATE SKIP LOCKED
 		)
-		RETURNING id, tenant_id, event_id, endpoint_id, attempt_count, COALESCE(retry_policy_id,'')`, workerID, limit)
+		RETURNING id, tenant_id, event_id, endpoint_id, attempt_count, COALESCE(retry_policy_id,''), COALESCE(retry_seed,'')`, workerID, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -3888,7 +3898,7 @@ func (s *Store) ClaimDueDeliveries(ctx context.Context, workerID string, limit i
 	var out []worker.DeliveryItem
 	for rows.Next() {
 		var item worker.DeliveryItem
-		if err := rows.Scan(&item.ID, &item.TenantID, &item.EventID, &item.EndpointID, &item.AttemptCount, &item.RetryPolicyID); err != nil {
+		if err := rows.Scan(&item.ID, &item.TenantID, &item.EventID, &item.EndpointID, &item.AttemptCount, &item.RetryPolicyID, &item.RetrySeed); err != nil {
 			return nil, err
 		}
 		out = append(out, item)
@@ -3971,10 +3981,26 @@ func (s *Store) RecordDeliveryAttempt(ctx context.Context, item worker.DeliveryI
 	}
 	requestHash := domain.HashSHA256(item.Body)
 	responseHash := domain.HashSHA256(result.ResponseBody)
+	completedAt := time.Now().UTC()
+	retrySeed := item.RetrySeed
+	if retrySeed == "" {
+		retrySeed = deliveryRetrySeed(item.TenantID, item.ID, item.EventID, item.EndpointID)
+	}
+	var retryDelay time.Duration
+	var nextRetryAt time.Time
+	willRetry := state != "succeeded" && retryable && attemptNo < policy.MaxAttempts
+	if willRetry {
+		retryDelay = policy.NextDeterministicDelay(attemptNo, retrySeed)
+		nextRetryAt = completedAt.Add(retryDelay)
+	}
+	var nextRetryValue any
+	if !nextRetryAt.IsZero() {
+		nextRetryValue = nextRetryAt
+	}
 	if _, err := tx.Exec(ctx, `
-		INSERT INTO delivery_attempts(id, tenant_id, delivery_id, event_id, endpoint_id, request_sha256, response_sha256, attempt_no, state, response_status, response_body_truncated, failure_class, retryable, completed_at)
-		VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,now())`,
-		mustID("att"), item.TenantID, item.ID, item.EventID, item.EndpointID, requestHash, responseHash, attemptNo, state, result.StatusCode, body, failureClass, retryable,
+		INSERT INTO delivery_attempts(id, tenant_id, delivery_id, event_id, endpoint_id, request_sha256, response_sha256, attempt_no, state, response_status, response_body_truncated, failure_class, retryable, retry_delay_ms, next_retry_at, completed_at)
+		VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)`,
+		mustID("att"), item.TenantID, item.ID, item.EventID, item.EndpointID, requestHash, responseHash, attemptNo, state, result.StatusCode, body, failureClass, retryable, retryDelay.Milliseconds(), nextRetryValue, completedAt,
 	); err != nil {
 		return err
 	}
@@ -3985,9 +4011,8 @@ func (s *Store) RecordDeliveryAttempt(ctx context.Context, item worker.DeliveryI
 		if _, err := tx.Exec(ctx, `UPDATE endpoints SET failure_count=0, circuit_state='closed', disabled_until=NULL WHERE tenant_id=$1 AND id=$2`, item.TenantID, item.EndpointID); err != nil {
 			return err
 		}
-	} else if retryable && attemptNo < policy.MaxAttempts {
-		nextAttemptAt := time.Now().UTC().Add(policy.NextDelay(attemptNo, nil))
-		if _, err := tx.Exec(ctx, `UPDATE deliveries SET state='scheduled', attempt_count=$1, next_attempt_at=$2, locked_by=NULL, lock_expires_at=NULL WHERE tenant_id=$3 AND id=$4`, attemptNo, nextAttemptAt, item.TenantID, item.ID); err != nil {
+	} else if willRetry {
+		if _, err := tx.Exec(ctx, `UPDATE deliveries SET state='scheduled', attempt_count=$1, next_attempt_at=$2, retry_seed=$3, locked_by=NULL, lock_expires_at=NULL WHERE tenant_id=$4 AND id=$5`, attemptNo, nextRetryAt, retrySeed, item.TenantID, item.ID); err != nil {
 			return err
 		}
 		if _, err := tx.Exec(ctx, `
@@ -5145,13 +5170,16 @@ func scanTransformationVersion(row rowScanner) (domain.TransformationVersion, er
 
 func scanDelivery(row rowScanner) (domain.Delivery, error) {
 	var item domain.Delivery
-	err := row.Scan(&item.ID, &item.TenantID, &item.EventID, &item.EndpointID, &item.RouteID, &item.RouteVersionID, &item.SubscriptionID, &item.SubscriptionVersionID, &item.RetryPolicyID, &item.ReplayJobID, &item.AdapterVersionID, &item.NormalizedEnvelopeID, &item.TransformationVersionID, &item.DeliveryPayloadID, &item.DeliveryPayloadSHA256, &item.State, &item.AttemptCount, &item.NextAttemptAt)
+	err := row.Scan(&item.ID, &item.TenantID, &item.EventID, &item.EndpointID, &item.RouteID, &item.RouteVersionID, &item.SubscriptionID, &item.SubscriptionVersionID, &item.RetryPolicyID, &item.ReplayJobID, &item.AdapterVersionID, &item.NormalizedEnvelopeID, &item.TransformationVersionID, &item.DeliveryPayloadID, &item.DeliveryPayloadSHA256, &item.RetrySeed, &item.State, &item.AttemptCount, &item.NextAttemptAt)
 	return item, err
 }
 
 func scanDeliveryAttempt(row rowScanner) (domain.DeliveryAttempt, error) {
 	var item domain.DeliveryAttempt
-	err := row.Scan(&item.ID, &item.TenantID, &item.DeliveryID, &item.EventID, &item.EndpointID, &item.RequestSHA256, &item.ResponseSHA256, &item.AttemptNo, &item.State, &item.ResponseStatus, &item.ResponseBodyTruncated, &item.FailureClass, &item.Retryable, &item.StartedAt, &item.CompletedAt)
+	err := row.Scan(&item.ID, &item.TenantID, &item.DeliveryID, &item.EventID, &item.EndpointID, &item.RequestSHA256, &item.ResponseSHA256, &item.AttemptNo, &item.State, &item.ResponseStatus, &item.ResponseBodyTruncated, &item.FailureClass, &item.Retryable, &item.RetryDelayMS, &item.NextRetryAt, &item.StartedAt, &item.CompletedAt)
+	if item.NextRetryAt.Equal(time.Unix(0, 0).UTC()) {
+		item.NextRetryAt = time.Time{}
+	}
 	return item, err
 }
 
@@ -5306,6 +5334,10 @@ func (s *Store) insertConfigVersion(ctx context.Context, tx pgx.Tx, tenantID, re
 
 func scheduledDeliveryAt(index, rateLimitPerMinute int) time.Time {
 	return time.Now().UTC().Add(replayScheduleDelay(index, rateLimitPerMinute))
+}
+
+func deliveryRetrySeed(tenantID, deliveryID, eventID, endpointID string) string {
+	return retry.Seed(tenantID, deliveryID, eventID, endpointID)
 }
 
 func replayScheduleDelay(index, rateLimitPerMinute int) time.Duration {

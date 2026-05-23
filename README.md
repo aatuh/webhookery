@@ -93,6 +93,10 @@ new audit writes append the audit row and chain entry in one transaction.
 Evidence exports include `audit_chain_proof.jsonl`; `whcp audit verify-bundle`
 checks bundle file hashes and chain continuity locally.
 
+Retry scheduling records reproducibility evidence: deliveries carry a stored
+`retry_seed`, and retryable attempts record the deterministic jitter delay and
+next retry timestamp used by the worker.
+
 For local MinIO testing:
 
 ```bash

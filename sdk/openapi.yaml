@@ -791,7 +791,7 @@ paths:
         - bearerAuth: []
       responses:
         "200":
-          description: Paginated delivery list.
+          description: Paginated delivery list, including retry seed evidence for reproducible scheduling.
   /v1/deliveries/{delivery_id}/attempts:
     get:
       summary: List delivery attempts
@@ -805,7 +805,7 @@ paths:
             type: string
       responses:
         "200":
-          description: Paginated delivery attempts.
+          description: Paginated delivery attempts, including deterministic retry delay and next retry timestamp when retryable.
   /v1/deliveries/{delivery_id}:retry:
     post:
       summary: Manually retry delivery
@@ -859,7 +859,7 @@ paths:
             type: string
       responses:
         "200":
-          description: Delivery attempt detail.
+          description: Delivery attempt detail, including deterministic retry delay evidence when retryable.
   /v1/replay-jobs:dry-run:
     post:
       summary: Dry-run replay
