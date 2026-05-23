@@ -1752,6 +1752,56 @@ func (s *Store) OpsMetrics(ctx context.Context, tenantID string) (domain.OpsMetr
 	if err := s.pool.QueryRow(ctx, "SELECT count(*) FROM endpoints WHERE circuit_state='open'"+tenantAnd(tenantID), args...).Scan(&metrics.EndpointCircuitOpen); err != nil {
 		return metrics, err
 	}
+	if tenantID == "" {
+		if err := s.pool.QueryRow(ctx, `
+			SELECT count(*)
+			FROM audit_events a
+			WHERE NOT EXISTS (
+				SELECT 1 FROM audit_chain_entries c
+				WHERE c.tenant_id=a.tenant_id AND c.audit_event_id=a.id
+			)`).Scan(&metrics.AuditChainUnchainedEvents); err != nil {
+			return metrics, err
+		}
+		if err := s.pool.QueryRow(ctx, `
+			SELECT count(*)
+			FROM audit_chain_entries c
+			LEFT JOIN audit_events a ON a.tenant_id=c.tenant_id AND a.id=c.audit_event_id
+			WHERE c.state<>$1 AND a.id IS NULL`, domain.AuditChainEntryStateRetained).
+			Scan(&metrics.AuditChainVerificationFailures); err != nil {
+			return metrics, err
+		}
+		if err := s.pool.QueryRow(ctx, `
+			SELECT COALESCE(EXTRACT(EPOCH FROM now() - max(created_at)),0)
+			FROM audit_chain_anchors`).Scan(&oldestAge); err != nil {
+			return metrics, err
+		}
+	} else {
+		if err := s.pool.QueryRow(ctx, `
+			SELECT count(*)
+			FROM audit_events a
+			WHERE a.tenant_id=$1
+			  AND NOT EXISTS (
+				SELECT 1 FROM audit_chain_entries c
+				WHERE c.tenant_id=a.tenant_id AND c.audit_event_id=a.id
+			  )`, tenantID).Scan(&metrics.AuditChainUnchainedEvents); err != nil {
+			return metrics, err
+		}
+		if err := s.pool.QueryRow(ctx, `
+			SELECT count(*)
+			FROM audit_chain_entries c
+			LEFT JOIN audit_events a ON a.tenant_id=c.tenant_id AND a.id=c.audit_event_id
+			WHERE c.tenant_id=$1 AND c.state<>$2 AND a.id IS NULL`, tenantID, domain.AuditChainEntryStateRetained).
+			Scan(&metrics.AuditChainVerificationFailures); err != nil {
+			return metrics, err
+		}
+		if err := s.pool.QueryRow(ctx, `
+			SELECT COALESCE(EXTRACT(EPOCH FROM now() - max(created_at)),0)
+			FROM audit_chain_anchors
+			WHERE tenant_id=$1`, tenantID).Scan(&oldestAge); err != nil {
+			return metrics, err
+		}
+	}
+	metrics.AuditChainLastAnchorAgeSec = int64(oldestAge)
 	if err := scanCounts(ctx, s.pool, "SELECT state, count(*) FROM deliveries"+predicate+" GROUP BY state", args, metrics.DeliveriesByState); err != nil {
 		return metrics, err
 	}

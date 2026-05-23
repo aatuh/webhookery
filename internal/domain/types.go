@@ -578,16 +578,19 @@ type EvidenceExport struct {
 }
 
 type OpsMetrics struct {
-	EventsTotal                  int64            `json:"events_total"`
-	OutboxPending                int64            `json:"outbox_pending"`
-	OldestOutboxAgeSec           int64            `json:"oldest_outbox_age_seconds"`
-	DeadLetterOpen               int64            `json:"dead_letter_open"`
-	QuarantineOpen               int64            `json:"quarantine_open"`
-	EndpointCircuitOpen          int64            `json:"endpoint_circuit_open"`
-	DeliveriesByState            map[string]int64 `json:"deliveries_by_state"`
-	ReplayJobsByState            map[string]int64 `json:"replay_jobs_by_state"`
-	ReconciliationJobsByState    map[string]int64 `json:"reconciliation_jobs_by_state,omitempty"`
-	ReconciliationItemsByOutcome map[string]int64 `json:"reconciliation_items_by_outcome,omitempty"`
+	EventsTotal                    int64            `json:"events_total"`
+	OutboxPending                  int64            `json:"outbox_pending"`
+	OldestOutboxAgeSec             int64            `json:"oldest_outbox_age_seconds"`
+	DeadLetterOpen                 int64            `json:"dead_letter_open"`
+	QuarantineOpen                 int64            `json:"quarantine_open"`
+	EndpointCircuitOpen            int64            `json:"endpoint_circuit_open"`
+	AuditChainUnchainedEvents      int64            `json:"audit_chain_unchained_events"`
+	AuditChainVerificationFailures int64            `json:"audit_chain_verification_failures"`
+	AuditChainLastAnchorAgeSec     int64            `json:"audit_chain_last_anchor_age_seconds"`
+	DeliveriesByState              map[string]int64 `json:"deliveries_by_state"`
+	ReplayJobsByState              map[string]int64 `json:"replay_jobs_by_state"`
+	ReconciliationJobsByState      map[string]int64 `json:"reconciliation_jobs_by_state,omitempty"`
+	ReconciliationItemsByOutcome   map[string]int64 `json:"reconciliation_items_by_outcome,omitempty"`
 }
 
 type ProviderConnection struct {

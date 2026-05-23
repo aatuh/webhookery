@@ -39,6 +39,11 @@ go run ./cmd/whcp transformations dry-run --payload-file payload.json --operatio
 go run ./cmd/whcp audit export --include-timelines --include-payloads --reason "support case" --api-key "$WEBHOOKERY_API_KEY"
 go run ./cmd/whcp audit export-status --export-id exp_... --api-key "$WEBHOOKERY_API_KEY"
 go run ./cmd/whcp audit download --export-id exp_... --output evidence.tar.gz --api-key "$WEBHOOKERY_API_KEY"
+go run ./cmd/whcp audit chain-head --api-key "$WEBHOOKERY_API_KEY"
+go run ./cmd/whcp audit verify-chain --api-key "$WEBHOOKERY_API_KEY"
+go run ./cmd/whcp audit anchor --reason "daily anchor" --api-key "$WEBHOOKERY_API_KEY"
+go run ./cmd/whcp audit anchors --api-key "$WEBHOOKERY_API_KEY"
+go run ./cmd/whcp audit verify-bundle --file evidence.tar.gz
 go run ./cmd/whcp retention create --resource-type raw_payload --retention-days 30 --api-key "$WEBHOOKERY_API_KEY"
 go run ./cmd/whcp provider-connections create --name stripe-prod --provider stripe --credential "$STRIPE_API_KEY" --config source_id=src_stripe --api-key "$WEBHOOKERY_API_KEY"
 go run ./cmd/whcp provider-connections verify --connection-id pcn_... --reason "initial credential check" --api-key "$WEBHOOKERY_API_KEY"
@@ -81,6 +86,12 @@ and request redelivery for failed deliveries. Shopify and Slack currently
 record capability/limitation evidence instead of claiming generic missed-event
 recovery. Recovered events are not marked as signed webhooks and route only
 when `route_recovered=true`.
+
+Audit events are written through a tenant-scoped SHA-256 hash chain. Existing
+audit rows are backfilled into deterministic chain entries during startup, and
+new audit writes append the audit row and chain entry in one transaction.
+Evidence exports include `audit_chain_proof.jsonl`; `whcp audit verify-bundle`
+checks bundle file hashes and chain continuity locally.
 
 For local MinIO testing:
 

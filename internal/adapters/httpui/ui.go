@@ -68,6 +68,8 @@ var indexTemplate = template.Must(template.New("index").Parse(`<!doctype html>
       ["dead letter", "/v1/dead-letter"],
       ["quarantine", "/v1/quarantine"],
       ["audit", "/v1/audit-events"],
+      ["audit chain", "/v1/audit-chain/head"],
+      ["audit anchors", "/v1/audit-chain/anchors"],
       ["audit exports", "/v1/audit-exports"],
       ["retention", "/v1/admin/retention-policies"],
       ["endpoint health", "/v1/endpoint-health"],
@@ -123,6 +125,10 @@ var indexTemplate = template.Must(template.New("index").Parse(`<!doctype html>
         view.innerHTML = "";
         return;
       }
+      if (name === "audit chain") {
+        renderAuditChain(body);
+        return;
+      }
       const rows = Array.isArray(body.data) ? body.data : [];
       view.innerHTML = "";
       if (rows.length === 0) {
@@ -138,6 +144,9 @@ var indexTemplate = template.Must(template.New("index").Parse(`<!doctype html>
       }
       if (name === "reconciliation") {
         keys = ["id", "connection_id", "provider", "state", "total_items", "missing_items", "captured_items", "redelivered_items"];
+      }
+      if (name === "audit anchors") {
+        keys = ["id", "from_sequence", "to_sequence", "chain_hash", "manifest_sha256", "storage_backend", "created_at"];
       }
       const table = document.createElement("table");
       const head = document.createElement("tr");
@@ -218,6 +227,75 @@ var indexTemplate = template.Must(template.New("index").Parse(`<!doctype html>
         table.append(tr);
       }
       view.append(table);
+    }
+
+    function renderAuditChain(body) {
+      view.innerHTML = "";
+      raw.hidden = false;
+      raw.textContent = JSON.stringify(body, null, 2);
+      const verify = document.createElement("button");
+      verify.textContent = "Verify";
+      verify.onclick = verifyAuditChain;
+      const anchor = document.createElement("button");
+      anchor.textContent = "Anchor";
+      anchor.onclick = anchorAuditChain;
+      actions.replaceChildren(verify, anchor);
+      const table = document.createElement("table");
+      const rows = [
+        ["sequence", body.sequence],
+        ["chain_hash", body.chain_hash],
+        ["unchained_events", body.unchained_events],
+        ["last_anchor_id", body.last_anchor_id],
+        ["last_anchor_sequence", body.last_anchor_sequence],
+        ["last_anchored_at", body.last_anchored_at],
+        ["updated_at", body.updated_at]
+      ];
+      for (const row of rows) {
+        const tr = document.createElement("tr");
+        const key = document.createElement("th");
+        key.textContent = row[0];
+        const value = document.createElement("td");
+        value.textContent = String(row[1] ?? "");
+        tr.append(key, value);
+        table.append(tr);
+      }
+      view.append(table);
+    }
+
+    async function verifyAuditChain() {
+      try {
+        const body = await request("/v1/audit-chain:verify", {
+          method: "POST",
+          headers: {"Content-Type": "application/json"},
+          body: "{}"
+        });
+        raw.hidden = false;
+        raw.textContent = JSON.stringify(body, null, 2);
+        status.textContent = body.valid ? "Audit chain verified" : "Audit chain verification failed";
+      } catch (error) {
+        raw.hidden = false;
+        raw.textContent = JSON.stringify(error, null, 2);
+        status.textContent = "Audit chain verification failed";
+      }
+    }
+
+    async function anchorAuditChain() {
+      const reason = prompt("Reason for audit chain anchor");
+      if (!reason) return;
+      try {
+        const body = await request("/v1/audit-chain:anchor", {
+          method: "POST",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({reason})
+        });
+        raw.hidden = false;
+        raw.textContent = JSON.stringify(body, null, 2);
+        status.textContent = "Audit chain anchored";
+      } catch (error) {
+        raw.hidden = false;
+        raw.textContent = JSON.stringify(error, null, 2);
+        status.textContent = "Audit chain anchor failed";
+      }
     }
 
     async function showNormalized(id) {

@@ -5,6 +5,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"webhookery/internal/app"
@@ -65,6 +66,28 @@ func TestPrometheusMetricsDoesNotRequireBearer(t *testing.T) {
 	server.Routes().ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected public metrics, got %d", rec.Code)
+	}
+}
+
+func TestPrometheusAuditChainMetricsAreAggregate(t *testing.T) {
+	body := formatPrometheus(domain.OpsMetrics{
+		AuditChainUnchainedEvents:      2,
+		AuditChainVerificationFailures: 1,
+		AuditChainLastAnchorAgeSec:     3600,
+		DeliveriesByState:              map[string]int64{},
+		ReplayJobsByState:              map[string]int64{},
+	})
+	if !strings.Contains(body, "webhookery_audit_chain_unchained_events 2") {
+		t.Fatalf("missing unchained audit metric:\n%s", body)
+	}
+	if !strings.Contains(body, "webhookery_audit_chain_verification_failures 1") {
+		t.Fatalf("missing audit chain failure metric:\n%s", body)
+	}
+	if !strings.Contains(body, "webhookery_audit_chain_last_anchor_age_seconds 3600") {
+		t.Fatalf("missing last anchor age metric:\n%s", body)
+	}
+	if strings.Contains(body, "tenant=") {
+		t.Fatalf("public metrics must not expose tenant labels:\n%s", body)
 	}
 }
 

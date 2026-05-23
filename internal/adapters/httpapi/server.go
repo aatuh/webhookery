@@ -1282,6 +1282,15 @@ func formatPrometheus(metrics domain.OpsMetrics) string {
 	fmt.Fprintf(&b, "# HELP webhookery_endpoint_circuit_open Open endpoint circuits.\n")
 	fmt.Fprintf(&b, "# TYPE webhookery_endpoint_circuit_open gauge\n")
 	fmt.Fprintf(&b, "webhookery_endpoint_circuit_open %d\n", metrics.EndpointCircuitOpen)
+	fmt.Fprintf(&b, "# HELP webhookery_audit_chain_unchained_events Audit events without chain entries.\n")
+	fmt.Fprintf(&b, "# TYPE webhookery_audit_chain_unchained_events gauge\n")
+	fmt.Fprintf(&b, "webhookery_audit_chain_unchained_events %d\n", metrics.AuditChainUnchainedEvents)
+	fmt.Fprintf(&b, "# HELP webhookery_audit_chain_verification_failures Audit chain entries that cannot verify against available audit rows.\n")
+	fmt.Fprintf(&b, "# TYPE webhookery_audit_chain_verification_failures gauge\n")
+	fmt.Fprintf(&b, "webhookery_audit_chain_verification_failures %d\n", metrics.AuditChainVerificationFailures)
+	fmt.Fprintf(&b, "# HELP webhookery_audit_chain_last_anchor_age_seconds Age of the newest audit chain anchor.\n")
+	fmt.Fprintf(&b, "# TYPE webhookery_audit_chain_last_anchor_age_seconds gauge\n")
+	fmt.Fprintf(&b, "webhookery_audit_chain_last_anchor_age_seconds %d\n", metrics.AuditChainLastAnchorAgeSec)
 	for state, count := range metrics.DeliveriesByState {
 		fmt.Fprintf(&b, "webhookery_deliveries{state=%q} %d\n", state, count)
 	}

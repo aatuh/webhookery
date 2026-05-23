@@ -2563,7 +2563,7 @@ components:
           type: boolean
     OpsMetrics:
       type: object
-      required: [events_total, outbox_pending, dead_letter_open, quarantine_open, deliveries_by_state, replay_jobs_by_state]
+      required: [events_total, outbox_pending, dead_letter_open, quarantine_open, audit_chain_unchained_events, audit_chain_verification_failures, audit_chain_last_anchor_age_seconds, deliveries_by_state, replay_jobs_by_state]
       properties:
         events_total:
           type: integer
@@ -2577,6 +2577,15 @@ components:
           type: integer
         endpoint_circuit_open:
           type: integer
+        audit_chain_unchained_events:
+          type: integer
+          description: Aggregate count of audit events that do not yet have chain entries.
+        audit_chain_verification_failures:
+          type: integer
+          description: Aggregate count of non-retained chain entries whose audit rows are missing.
+        audit_chain_last_anchor_age_seconds:
+          type: integer
+          description: Age of the newest audit chain anchor in seconds, or zero when no anchors exist.
         deliveries_by_state:
           type: object
           additionalProperties:

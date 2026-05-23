@@ -173,7 +173,7 @@ rotated through the implemented code paths. `route_versions` and
 `subscription_versions` store the fields used for matching and delivery
 creation, including optional `transformation_id` and
 `transformation_version_id`. This is a reproducibility foundation; it does not
-yet implement deterministic jitter seeds or a hash-chained audit log.
+yet implement deterministic jitter seeds.
 
 ## Normalization And Transformations
 
@@ -243,21 +243,24 @@ types are:
 - `provider_api_evidence`: deletes stored provider API response bodies while
   preserving reconciliation jobs, gap items, request metadata, hashes, sizes,
   and audit rows.
-- `audit_event`: deletes audit rows after the policy age.
+- `audit_event`: deletes audit rows after the policy age while preserving
+  `audit_chain_entries` as retained tombstones with hashes and sequence
+  metadata.
 
 The worker applies active policies in bounded batches and records
 `retention_runs` plus `retention_run_items`. Policy changes and completed runs
-write audit events.
+write chained audit events.
 
 ## Audit Evidence Exports
 
 `POST /v1/audit-events:export` creates a tenant-scoped `tar.gz` bundle
 synchronously for this implementation slice. The bundle contains
-`manifest.json`, `audit_events.jsonl`, `payload_evidence.jsonl`, and optional
-`timelines.jsonl` and `raw_payloads.jsonl`. Reconciliation evidence is included
-in `reconciliation_evidence.jsonl`. Payload evidence includes normalized
-envelope metadata, delivery payload metadata, provider API evidence metadata,
-and hashes. Raw payload bodies are included only with
+`manifest.json`, `audit_events.jsonl`, `payload_evidence.jsonl`,
+`audit_chain_proof.jsonl`, and optional `timelines.jsonl` and
+`raw_payloads.jsonl`. Reconciliation evidence is included in
+`reconciliation_evidence.jsonl`. Payload evidence includes normalized envelope
+metadata, delivery payload metadata, provider API evidence metadata, and hashes.
+Raw payload bodies are included only with
 `include_raw_payloads=true` when the actor has both `audit:read` and
 `events:raw`. Normalized, delivery payload, and provider API response bodies are
 included only with `include_payload_bodies=true` and the same permissions.
@@ -265,9 +268,50 @@ Actors without `events:raw` cannot see or download raw- or payload-body
 inclusive exports.
 
 Each export row stores the bundle SHA-256, manifest SHA-256, file hashes,
-storage backend, size, creator, and completion timestamp. This is a
-tamper-evidence foundation, not a full hash-chained audit log. Hash-chain fields
-and verification workflows remain a later v2 feature.
+storage backend, size, creator, completion timestamp, and audit-chain range
+metadata. Export creation verifies the chain proof before marking an export
+ready. `whcp audit verify-bundle --file evidence.tar.gz` checks tar entry
+safety, manifest/file hashes, and audit-chain continuity in the downloaded
+bundle.
+
+## Audit Chain Verification And Anchors
+
+Every audit event written through implemented API, CLI, worker, retention,
+replay, export, reconciliation, and configuration paths is appended to a
+tenant-scoped SHA-256 chain in the same transaction as the audit row. Chain
+entries store the audit event hash, previous chain hash, current chain hash,
+canonicalization version, source, state, and tombstone metadata. They do not
+duplicate raw payloads, credentials, or payload bodies.
+
+Existing audit rows are backfilled into deterministic per-tenant chains ordered
+by `occurred_at, id` during store startup. Backfilled chains prove continuity
+from the current database state; they cannot prove history from before the
+chain feature existed.
+
+Operators can inspect and verify the chain through:
+
+```bash
+go run ./cmd/whcp audit chain-head --api-key "$WEBHOOKERY_API_KEY"
+go run ./cmd/whcp audit verify-chain --api-key "$WEBHOOKERY_API_KEY"
+go run ./cmd/whcp audit anchor --reason "daily anchor" --api-key "$WEBHOOKERY_API_KEY"
+go run ./cmd/whcp audit anchors --api-key "$WEBHOOKERY_API_KEY"
+```
+
+`GET /v1/audit-chain/head`, `POST /v1/audit-chain:verify`,
+`GET /v1/audit-chain/anchors`, and
+`GET /v1/audit-chain/anchors/{anchor_id}` require `audit:read`.
+`POST /v1/audit-chain:anchor` requires `security:write` and a reason.
+Anchor creation verifies the requested range first, then stores a manifest hash,
+range, chain hash, actor, and reason. When S3-compatible object storage is
+configured, the anchor manifest is also written to the object store; otherwise
+the local PostgreSQL anchor row is the durable anchor record.
+
+Audit-event retention marks chain entries as retained tombstones before
+deleting audit rows. Verification treats retained entries as hash-only evidence,
+while missing non-retained audit rows or mismatched hashes are reported as
+failures. This implementation does not integrate external timestamping
+services, SIEM streaming, KMS/HSM signing, or compliance-certified evidence
+packs.
 
 ## Metrics And Readiness
 
@@ -275,8 +319,9 @@ and verification workflows remain a later v2 feature.
 metrics without tenant labels. `/v1/ops/metrics` exposes tenant-scoped JSON
 metrics for authenticated operators, including pending outbox count, oldest
 outbox age, delivery states, replay states, open DLQ count, quarantine count,
-open endpoint circuits, reconciliation job states, and reconciliation item
-outcomes.
+open endpoint circuits, reconciliation job states, reconciliation item outcomes,
+unchained audit-event count, audit-chain verification failure count, and newest
+anchor age.
 
 ## SSRF Protection
 
