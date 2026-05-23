@@ -26,7 +26,24 @@ type Manifest struct {
 	IncludeRawPayloads   bool           `json:"include_raw_payloads"`
 	IncludeTimelines     bool           `json:"include_timelines"`
 	IncludePayloadBodies bool           `json:"include_payload_bodies"`
+	AuditChain           *AuditChain    `json:"audit_chain,omitempty"`
 	Files                []ManifestFile `json:"files"`
+}
+
+type AuditChain struct {
+	FromSequence   int64              `json:"from_sequence"`
+	ToSequence     int64              `json:"to_sequence"`
+	StartChainHash string             `json:"start_chain_hash,omitempty"`
+	EndChainHash   string             `json:"end_chain_hash,omitempty"`
+	Anchors        []AuditChainAnchor `json:"anchors,omitempty"`
+}
+
+type AuditChainAnchor struct {
+	ID             string `json:"id"`
+	FromSequence   int64  `json:"from_sequence"`
+	ToSequence     int64  `json:"to_sequence"`
+	ChainHash      string `json:"chain_hash"`
+	ManifestSHA256 string `json:"manifest_sha256"`
 }
 
 type ManifestFile struct {

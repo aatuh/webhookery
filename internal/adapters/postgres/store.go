@@ -2447,6 +2447,11 @@ func (s *Store) CreateAuditExport(ctx context.Context, tenantID, actorID string,
 		return domain.EvidenceExport{}, err
 	}
 	files["reconciliation_evidence.jsonl"] = reconciliationEvidence
+	chainProof, chainManifest, err := s.auditChainProofForExport(ctx, tenantID, req.From, req.To)
+	if err != nil {
+		return domain.EvidenceExport{}, err
+	}
+	files["audit_chain_proof.jsonl"] = chainProof
 	bundle, err := evidence.BuildTarGzipBundle(evidence.Manifest{
 		ExportID:             id,
 		TenantID:             tenantID,
@@ -2456,9 +2461,17 @@ func (s *Store) CreateAuditExport(ctx context.Context, tenantID, actorID string,
 		IncludeRawPayloads:   req.IncludeRawPayloads,
 		IncludeTimelines:     req.IncludeTimelines,
 		IncludePayloadBodies: req.IncludePayloadBodies,
+		AuditChain:           chainManifest,
 	}, files)
 	if err != nil {
 		return domain.EvidenceExport{}, err
+	}
+	verification, err := evidence.VerifyTarGzipBundle(bundle.Bytes)
+	if err != nil {
+		return domain.EvidenceExport{}, err
+	}
+	if !verification.Valid {
+		return domain.EvidenceExport{}, fmt.Errorf("audit export bundle verification failed: %s", strings.Join(verification.Failures, "; "))
 	}
 	storageBackend := domain.RawStoragePostgres
 	objectBucket := ""
@@ -3965,6 +3978,16 @@ func scanAuditChainAnchor(row rowScanner) (domain.AuditChainAnchor, error) {
 	return item, err
 }
 
+func scanAuditChainEntry(row rowScanner) (domain.AuditChainEntry, error) {
+	var item domain.AuditChainEntry
+	err := row.Scan(&item.ID, &item.TenantID, &item.Sequence, &item.AuditEventID, &item.EventHash, &item.PreviousChainHash,
+		&item.ChainHash, &item.CanonicalizationVersion, &item.Source, &item.State, &item.AuditEventDeletedAt, &item.TombstoneReason, &item.CreatedAt)
+	if item.AuditEventDeletedAt.Equal(time.Unix(0, 0).UTC()) {
+		item.AuditEventDeletedAt = time.Time{}
+	}
+	return item, err
+}
+
 func (s *Store) auditEventsForExport(ctx context.Context, tenantID string, from, to time.Time) ([]domain.AuditEvent, error) {
 	query := `SELECT id, tenant_id, actor_id, action, resource, resource_id, reason, occurred_at FROM audit_events WHERE tenant_id=$1`
 	args := []any{tenantID}
@@ -3986,6 +4009,83 @@ func (s *Store) auditEventsForExport(ctx context.Context, tenantID string, from,
 	for rows.Next() {
 		var item domain.AuditEvent
 		if err := rows.Scan(&item.ID, &item.TenantID, &item.ActorID, &item.Action, &item.Resource, &item.ResourceID, &item.Reason, &item.OccurredAt); err != nil {
+			return nil, err
+		}
+		out = append(out, item)
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) auditChainProofForExport(ctx context.Context, tenantID string, from, to time.Time) ([]byte, *evidence.AuditChain, error) {
+	query := `
+		SELECT c.id, c.tenant_id, c.sequence, c.audit_event_id, c.event_hash, c.previous_chain_hash, c.chain_hash,
+		       c.canonicalization_version, c.source, c.state, COALESCE(c.audit_event_deleted_at, 'epoch'::timestamptz), c.tombstone_reason, c.created_at
+		FROM audit_chain_entries c
+		JOIN audit_events a ON a.tenant_id=c.tenant_id AND a.id=c.audit_event_id
+		WHERE c.tenant_id=$1`
+	args := []any{tenantID}
+	if !from.IsZero() {
+		args = append(args, from)
+		query += fmt.Sprintf(" AND a.occurred_at >= $%d", len(args))
+	}
+	if !to.IsZero() {
+		args = append(args, to)
+		query += fmt.Sprintf(" AND a.occurred_at <= $%d", len(args))
+	}
+	query += " ORDER BY c.sequence ASC"
+	rows, err := s.pool.Query(ctx, query, args...)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer rows.Close()
+	var entries []domain.AuditChainEntry
+	items := []any{}
+	for rows.Next() {
+		entry, err := scanAuditChainEntry(rows)
+		if err != nil {
+			return nil, nil, err
+		}
+		entries = append(entries, entry)
+		items = append(items, entry)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, nil, err
+	}
+	body, err := evidence.JSONLines(items)
+	if err != nil {
+		return nil, nil, err
+	}
+	if len(entries) == 0 {
+		return body, nil, nil
+	}
+	manifest := &evidence.AuditChain{
+		FromSequence:   entries[0].Sequence,
+		ToSequence:     entries[len(entries)-1].Sequence,
+		StartChainHash: entries[0].PreviousChainHash,
+		EndChainHash:   entries[len(entries)-1].ChainHash,
+	}
+	anchors, err := s.coveringAuditChainAnchors(ctx, tenantID, manifest.FromSequence, manifest.ToSequence)
+	if err != nil {
+		return nil, nil, err
+	}
+	manifest.Anchors = anchors
+	return body, manifest, nil
+}
+
+func (s *Store) coveringAuditChainAnchors(ctx context.Context, tenantID string, fromSequence, toSequence int64) ([]evidence.AuditChainAnchor, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT id, from_sequence, to_sequence, chain_hash, manifest_sha256
+		FROM audit_chain_anchors
+		WHERE tenant_id=$1 AND from_sequence <= $2 AND to_sequence >= $3
+		ORDER BY created_at DESC`, tenantID, fromSequence, toSequence)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []evidence.AuditChainAnchor
+	for rows.Next() {
+		var item evidence.AuditChainAnchor
+		if err := rows.Scan(&item.ID, &item.FromSequence, &item.ToSequence, &item.ChainHash, &item.ManifestSHA256); err != nil {
 			return nil, err
 		}
 		out = append(out, item)
