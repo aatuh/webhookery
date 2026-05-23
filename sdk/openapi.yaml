@@ -1,0 +1,1553 @@
+openapi: 3.1.0
+info:
+  title: Webhookery API
+  version: 0.1.0
+  description: Self-hosted webhook evidence and delivery control plane.
+servers:
+  - url: http://localhost:8080
+paths:
+  /healthz:
+    get:
+      summary: Liveness check
+      responses:
+        "200":
+          description: Process is alive.
+  /readyz:
+    get:
+      summary: Readiness check
+      responses:
+        "200":
+          description: Dependencies are ready.
+        "503":
+          description: A dependency is unavailable.
+  /openapi.yaml:
+    get:
+      summary: OpenAPI document
+      responses:
+        "200":
+          description: YAML OpenAPI document.
+  /metrics:
+    get:
+      summary: Prometheus metrics
+      responses:
+        "200":
+          description: Process and queue metrics in Prometheus text format without tenant labels.
+          content:
+            text/plain:
+              schema:
+                type: string
+  /v1/api-keys:
+    get:
+      summary: List API keys
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: Paginated API key metadata. Key hashes and token values are never returned.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/APIKeyPage"
+    post:
+      summary: Create API key
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateAPIKeyRequest"
+      responses:
+        "201":
+          description: API key created. The token is returned once.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/APIKeyCreated"
+        "403":
+          $ref: "#/components/responses/Problem"
+  /v1/api-keys/{api_key_id}:revoke:
+    post:
+      summary: Revoke API key
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: api_key_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ReasonRequest"
+      responses:
+        "200":
+          description: API key revoked.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/APIKey"
+  /v1/sources:
+    get:
+      summary: List inbound sources
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Paginated source list.
+    post:
+      summary: Create inbound source
+      security:
+        - bearerAuth: []
+      responses:
+        "201":
+          description: Source created.
+  /v1/sources/{source_id}/secrets:rotate:
+    post:
+      summary: Rotate source verification secret
+      description: Creates a new active source secret version and keeps the previous version during the requested grace period. Plaintext secrets are never returned.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: source_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RotateSourceSecretRequest"
+      responses:
+        "200":
+          description: Source secret version metadata.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SourceSecretVersion"
+  /v1/endpoints:
+    get:
+      summary: List outbound endpoints
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Paginated endpoint list.
+    post:
+      summary: Create outbound endpoint
+      security:
+        - bearerAuth: []
+      responses:
+        "201":
+          description: Endpoint created after SSRF validation.
+  /v1/endpoints:validate-url:
+    post:
+      summary: Validate endpoint URL against SSRF policy
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: URL validation result.
+  /v1/endpoints/{endpoint_id}:test:
+    post:
+      summary: Schedule a signed endpoint test delivery
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: endpoint_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ReasonRequest"
+      responses:
+        "202":
+          description: Endpoint test delivery scheduled.
+  /v1/endpoints/{endpoint_id}/secrets:rotate:
+    post:
+      summary: Rotate endpoint signing secret
+      description: Creates a new active endpoint signing secret version. Outbound deliveries include signing key metadata headers.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: endpoint_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RotateEndpointSecretRequest"
+      responses:
+        "200":
+          description: Endpoint signing secret metadata.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EndpointSecretVersion"
+  /v1/subscriptions:
+    get:
+      summary: List subscriptions
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Paginated subscription list.
+    post:
+      summary: Create subscription
+      security:
+        - bearerAuth: []
+      responses:
+        "201":
+          description: Subscription created.
+  /v1/retry-policies:
+    get:
+      summary: List retry policies
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Paginated retry policy list.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RetryPolicyPage"
+    post:
+      summary: Create retry policy version
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateRetryPolicyRequest"
+      responses:
+        "201":
+          description: Retry policy version created.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RetryPolicy"
+  /v1/routes:
+    get:
+      summary: List routes
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Paginated route list.
+    post:
+      summary: Create route
+      security:
+        - bearerAuth: []
+      responses:
+        "201":
+          description: Route created.
+  /v1/routes/{route_id}/versions:
+    get:
+      summary: List immutable route versions
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: route_id
+          in: path
+          required: true
+          schema:
+            type: string
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: Route version snapshots.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RouteVersionPage"
+  /v1/routes/{route_id}:activate:
+    post:
+      summary: Activate route
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: route_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Route activated.
+  /v1/routes/{route_id}:dry-run:
+    post:
+      summary: Dry-run route against event
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: route_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Route match explanation.
+  /v1/event-types:
+    get:
+      summary: List event types
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Paginated event type list.
+    post:
+      summary: Create event type
+      security:
+        - bearerAuth: []
+      responses:
+        "201":
+          description: Event type created.
+  /v1/event-types/{event_type}/schemas:
+    get:
+      summary: List schemas for event type
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: event_type
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Paginated schema list.
+    post:
+      summary: Create schema for event type
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: event_type
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "201":
+          description: Schema created.
+  /v1/event-types/{event_type}/schemas/{schema_version}:validate:
+    post:
+      summary: Validate payload against schema
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: event_type
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: schema_version
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ValidateSchemaRequest"
+      responses:
+        "200":
+          description: Validation result.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SchemaValidationResult"
+  /v1/event-types/{event_type}/schemas/{schema_version}:check-compatibility:
+    post:
+      summary: Check schema compatibility
+      description: Performs conservative JSON-object compatibility checks for required fields and property type changes.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: event_type
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: schema_version
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CheckSchemaCompatibilityRequest"
+      responses:
+        "200":
+          description: Compatibility result.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SchemaCompatibilityResult"
+  /v1/events:
+    get:
+      summary: Search events
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Paginated event list.
+    post:
+      summary: Ingest product event
+      security:
+        - bearerAuth: []
+      responses:
+        "202":
+          description: Product event accepted after durable capture.
+  /v1/events/{event_id}:
+    get:
+      summary: Get event
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: event_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Event detail.
+        "404":
+          description: Event not found or not visible.
+  /v1/events/{event_id}/raw:
+    get:
+      summary: Get raw payload evidence
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: event_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Raw body as base64 plus hash and storage metadata.
+        "403":
+          description: Actor lacks raw payload permission.
+        "410":
+          description: Raw payload body has expired or was deleted by retention; metadata remains on related records.
+  /v1/events/{event_id}/timeline:
+    get:
+      summary: Get event timeline
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: event_id
+          in: path
+          required: true
+          schema:
+            type: string
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: Timeline entries for event, receipts, deliveries, attempts, and audit records.
+  /v1/ingest/{tenant_id}/{source_id}:
+    post:
+      summary: Generic provider webhook ingestion
+      parameters:
+        - name: tenant_id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: source_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Accepted after durable capture.
+        "401":
+          description: Invalid signature.
+        "413":
+          description: Payload too large.
+        "503":
+          description: Durable storage unavailable before acknowledgement.
+  /v1/ingest/stripe/{source_id}:
+    post:
+      summary: Stripe webhook ingestion
+      responses:
+        "200":
+          description: Accepted after durable capture.
+  /v1/ingest/github/{source_id}:
+    post:
+      summary: GitHub webhook ingestion
+      responses:
+        "200":
+          description: Accepted after durable capture.
+  /v1/ingest/shopify/{source_id}:
+    post:
+      summary: Shopify webhook ingestion
+      responses:
+        "200":
+          description: Accepted after durable capture.
+  /v1/ingest/slack/{source_id}:
+    post:
+      summary: Slack webhook ingestion
+      responses:
+        "200":
+          description: Accepted after durable capture.
+  /v1/ingest/cloudevents/{source_id}:
+    post:
+      summary: CloudEvents webhook ingestion
+      responses:
+        "200":
+          description: Accepted after durable capture for binary or structured CloudEvents envelopes.
+  /v1/deliveries:
+    get:
+      summary: List deliveries
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Paginated delivery list.
+  /v1/deliveries/{delivery_id}/attempts:
+    get:
+      summary: List delivery attempts
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: delivery_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Paginated delivery attempts.
+  /v1/deliveries/{delivery_id}:retry:
+    post:
+      summary: Manually retry delivery
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: delivery_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ReasonRequest"
+      responses:
+        "202":
+          description: Delivery retry scheduled.
+  /v1/deliveries/{delivery_id}:cancel:
+    post:
+      summary: Cancel scheduled delivery
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: delivery_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ReasonRequest"
+      responses:
+        "200":
+          description: Delivery canceled.
+  /v1/delivery-attempts/{attempt_id}:
+    get:
+      summary: Get delivery attempt
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: attempt_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Delivery attempt detail.
+  /v1/replay-jobs:dry-run:
+    post:
+      summary: Dry-run replay
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ReplayRequest"
+      responses:
+        "200":
+          description: Replay dry-run result.
+  /v1/replay-jobs:
+    get:
+      summary: List replay jobs
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Paginated replay job list.
+    post:
+      summary: Create replay job
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ReplayRequest"
+      responses:
+        "202":
+          description: Replay job scheduled.
+  /v1/replay-jobs/{replay_job_id}:pause:
+    post:
+      summary: Pause replay job
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: replay_job_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ReasonRequest"
+      responses:
+        "200":
+          description: Replay job paused.
+  /v1/replay-jobs/{replay_job_id}:resume:
+    post:
+      summary: Resume replay job
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: replay_job_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ReasonRequest"
+      responses:
+        "200":
+          description: Replay job scheduled again.
+  /v1/replay-jobs/{replay_job_id}:cancel:
+    post:
+      summary: Cancel replay job
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: replay_job_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ReasonRequest"
+      responses:
+        "200":
+          description: Replay job canceled.
+  /v1/dead-letter:
+    get:
+      summary: List dead-letter entries
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Paginated dead-letter list.
+  /v1/dead-letter/{entry_id}:release:
+    post:
+      summary: Release dead-letter entry into replay work
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: entry_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "202":
+          description: Replay job scheduled for dead-letter entry.
+  /v1/dead-letter:bulk-release:
+    post:
+      summary: Bulk release dead-letter entries
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DeadLetterBulkReleaseRequest"
+      responses:
+        "202":
+          description: Replay jobs scheduled for matching dead-letter entries.
+  /v1/quarantine:
+    get:
+      summary: List quarantine entries
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Paginated quarantine list.
+  /v1/quarantine/{entry_id}:approve:
+    post:
+      summary: Approve quarantine entry
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: entry_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Quarantine entry approved.
+  /v1/quarantine/{entry_id}:reject:
+    post:
+      summary: Reject quarantine entry
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: entry_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Quarantine entry rejected.
+  /v1/audit-events:
+    get:
+      summary: List audit events
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Paginated audit event list.
+  /v1/audit-events:export:
+    post:
+      summary: Create audit evidence export
+      description: Creates a tenant-scoped tar.gz bundle containing manifest.json, audit_events.jsonl, and optional timeline or raw payload JSONL files. Raw payload bodies require events:raw in addition to audit:read.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateAuditExportRequest"
+      responses:
+        "202":
+          description: Export created and ready for download.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EvidenceExport"
+        "403":
+          description: Actor lacks audit:read or requested raw payload bodies without events:raw.
+  /v1/audit-exports:
+    get:
+      summary: List audit evidence exports
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: Paginated tenant-scoped export jobs. Raw-inclusive exports are hidden from actors without events:raw.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EvidenceExportPage"
+  /v1/audit-exports/{export_id}:
+    get:
+      summary: Get audit evidence export status
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: export_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Export job status and hashes.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EvidenceExport"
+        "404":
+          description: Export not found or not visible.
+  /v1/audit-exports/{export_id}:download:
+    get:
+      summary: Download audit evidence export bundle
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: export_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Gzipped tar bundle containing manifest.json and JSONL files.
+          headers:
+            X-Webhookery-Export-SHA256:
+              schema:
+                type: string
+          content:
+            application/gzip:
+              schema:
+                type: string
+                format: binary
+        "403":
+          description: Actor lacks permission for this export.
+        "410":
+          description: Export bundle is unavailable.
+  /v1/admin/retention-policies:
+    get:
+      summary: List retention policies
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: Paginated retention policy list.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RetentionPolicyPage"
+    post:
+      summary: Create or update retention policy
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateRetentionPolicyRequest"
+      responses:
+        "201":
+          description: Retention policy created or upserted.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RetentionPolicy"
+  /v1/admin/retention-policies/{policy_id}:
+    patch:
+      summary: Update retention policy
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: policy_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateRetentionPolicyRequest"
+      responses:
+        "200":
+          description: Retention policy updated.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RetentionPolicy"
+  /v1/endpoint-health:
+    get:
+      summary: List endpoint health
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Paginated endpoint health summaries.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EndpointHealthPage"
+  /v1/ops/metrics:
+    get:
+      summary: Get tenant ops metrics
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Tenant-scoped operational metrics.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OpsMetrics"
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+  parameters:
+    Limit:
+      name: limit
+      in: query
+      required: false
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 100
+  responses:
+    Problem:
+      description: Problem details error response.
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+  schemas:
+    Problem:
+      type: object
+      required: [type, title, status, code, request_id]
+      properties:
+        type:
+          type: string
+        title:
+          type: string
+        status:
+          type: integer
+        detail:
+          type: string
+        code:
+          type: string
+        request_id:
+          type: string
+        retryable:
+          type: boolean
+    DeliverySignature:
+      type: string
+      description: Webhook-Signature header using HMAC-SHA256.
+    ReasonRequest:
+      type: object
+      required: [reason]
+      additionalProperties: false
+      properties:
+        reason:
+          type: string
+          minLength: 1
+          maxLength: 500
+    CreateAPIKeyRequest:
+      type: object
+      required: [name, role, scopes]
+      additionalProperties: false
+      properties:
+        name:
+          type: string
+        user_id:
+          type: string
+        email:
+          type: string
+          format: email
+        role:
+          type: string
+          enum: [owner, admin, developer, operator, security, auditor, support]
+        scopes:
+          type: array
+          minItems: 1
+          items:
+            type: string
+    APIKeyCreated:
+      type: object
+      required: [key, token]
+      properties:
+        key:
+          $ref: "#/components/schemas/APIKey"
+        token:
+          type: string
+          description: One-time API key token. It is not retrievable later.
+    APIKey:
+      type: object
+      required: [id, tenant_id, user_id, name, prefix, last4, scopes, state, created_at]
+      properties:
+        id:
+          type: string
+        tenant_id:
+          type: string
+        user_id:
+          type: string
+        name:
+          type: string
+        prefix:
+          type: string
+        last4:
+          type: string
+        scopes:
+          type: array
+          items:
+            type: string
+        state:
+          type: string
+          enum: [active, revoked]
+        created_at:
+          type: string
+          format: date-time
+        revoked_at:
+          type: string
+          format: date-time
+    APIKeyPage:
+      type: object
+      required: [data, has_more]
+      properties:
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/APIKey"
+        next_cursor:
+          type: string
+          nullable: true
+        has_more:
+          type: boolean
+    RotateSourceSecretRequest:
+      type: object
+      required: [new_secret, reason]
+      additionalProperties: false
+      properties:
+        new_secret:
+          type: string
+          minLength: 1
+        grace_period_hours:
+          type: integer
+          minimum: 0
+          maximum: 720
+          default: 72
+        reason:
+          type: string
+          minLength: 1
+    RotateEndpointSecretRequest:
+      type: object
+      required: [reason]
+      additionalProperties: false
+      properties:
+        grace_period_hours:
+          type: integer
+          minimum: 0
+          maximum: 720
+          default: 72
+        reason:
+          type: string
+          minLength: 1
+    SourceSecretVersion:
+      type: object
+      properties:
+        id:
+          type: string
+        tenant_id:
+          type: string
+        source_id:
+          type: string
+        version:
+          type: integer
+        state:
+          type: string
+          enum: [active, previous, revoked]
+        active_at:
+          type: string
+          format: date-time
+        expires_at:
+          type: string
+          format: date-time
+        created_by:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        revoked_at:
+          type: string
+          format: date-time
+    EndpointSecretVersion:
+      type: object
+      properties:
+        id:
+          type: string
+        tenant_id:
+          type: string
+        endpoint_id:
+          type: string
+        version:
+          type: integer
+        algorithm:
+          type: string
+          enum: [hmac_sha256]
+        state:
+          type: string
+          enum: [active, previous, revoked]
+        active_at:
+          type: string
+          format: date-time
+        expires_at:
+          type: string
+          format: date-time
+        created_by:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        revoked_at:
+          type: string
+          format: date-time
+    CreateRetryPolicyRequest:
+      type: object
+      required: [name, max_attempts, max_duration_seconds, initial_delay_seconds, max_delay_seconds]
+      additionalProperties: false
+      properties:
+        name:
+          type: string
+          minLength: 1
+        max_attempts:
+          type: integer
+          minimum: 1
+          maximum: 100
+        max_duration_seconds:
+          type: integer
+          minimum: 1
+          maximum: 2592000
+        initial_delay_seconds:
+          type: integer
+          minimum: 1
+        max_delay_seconds:
+          type: integer
+          minimum: 1
+          maximum: 86400
+        rate_limit_per_minute:
+          type: integer
+          minimum: 0
+          maximum: 60000
+        state:
+          type: string
+          enum: [active, disabled]
+          default: active
+    RetryPolicy:
+      type: object
+      properties:
+        id:
+          type: string
+        tenant_id:
+          type: string
+        name:
+          type: string
+        version:
+          type: integer
+        state:
+          type: string
+          enum: [active, disabled]
+        max_attempts:
+          type: integer
+        max_duration_seconds:
+          type: integer
+        initial_delay_seconds:
+          type: integer
+        max_delay_seconds:
+          type: integer
+        rate_limit_per_minute:
+          type: integer
+        created_by:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+    RetryPolicyPage:
+      type: object
+      properties:
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/RetryPolicy"
+        next_cursor:
+          type: string
+          nullable: true
+        has_more:
+          type: boolean
+    RouteVersion:
+      type: object
+      properties:
+        id:
+          type: string
+        tenant_id:
+          type: string
+        route_id:
+          type: string
+        version:
+          type: integer
+        config_hash:
+          type: string
+        source_id:
+          type: string
+        name:
+          type: string
+        priority:
+          type: integer
+        event_types:
+          type: array
+          items:
+            type: string
+        endpoint_id:
+          type: string
+        retry_policy_id:
+          type: string
+        state:
+          type: string
+        created_by:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+    RouteVersionPage:
+      type: object
+      properties:
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/RouteVersion"
+        next_cursor:
+          type: string
+          nullable: true
+        has_more:
+          type: boolean
+    ValidateSchemaRequest:
+      type: object
+      required: [payload]
+      additionalProperties: false
+      properties:
+        payload:
+          type: string
+          description: JSON payload to validate.
+    CheckSchemaCompatibilityRequest:
+      type: object
+      required: [new_schema]
+      additionalProperties: false
+      properties:
+        new_schema:
+          type: string
+          description: Candidate JSON Schema document.
+    SchemaValidationResult:
+      type: object
+      properties:
+        valid:
+          type: boolean
+        errors:
+          type: array
+          items:
+            type: string
+    SchemaCompatibilityResult:
+      type: object
+      properties:
+        compatible:
+          type: boolean
+        errors:
+          type: array
+          items:
+            type: string
+    DeadLetterBulkReleaseRequest:
+      type: object
+      required: [reason]
+      additionalProperties: false
+      properties:
+        entry_ids:
+          type: array
+          description: Empty or omitted means up to 100 currently open entries.
+          items:
+            type: string
+        reason:
+          type: string
+          minLength: 1
+    ReplayRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        event_id:
+          type: string
+        delivery_id:
+          type: string
+        endpoint_id:
+          type: string
+        reason:
+          type: string
+        dry_run:
+          type: boolean
+        config_mode:
+          type: string
+          enum: [current, original]
+          default: current
+        rate_limit_per_minute:
+          type: integer
+          minimum: 0
+          maximum: 60000
+    CreateAuditExportRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        from:
+          type: string
+          format: date-time
+        to:
+          type: string
+          format: date-time
+        include_raw_payloads:
+          type: boolean
+          default: false
+        include_timelines:
+          type: boolean
+          default: false
+        reason:
+          type: string
+          maxLength: 500
+    EvidenceExport:
+      type: object
+      required: [id, tenant_id, state, include_raw_payloads, include_timelines, format, storage_backend, sha256, manifest_sha256, size_bytes, created_by, created_at]
+      properties:
+        id:
+          type: string
+        tenant_id:
+          type: string
+        state:
+          type: string
+          enum: [ready, failed]
+        from:
+          type: string
+          format: date-time
+        to:
+          type: string
+          format: date-time
+        include_raw_payloads:
+          type: boolean
+        include_timelines:
+          type: boolean
+        format:
+          type: string
+          enum: [tar+gzip+jsonl]
+        storage_backend:
+          type: string
+          enum: [postgres, s3]
+        object_bucket:
+          type: string
+        object_key:
+          type: string
+        sha256:
+          type: string
+          description: SHA-256 of the downloadable bundle.
+        manifest_sha256:
+          type: string
+          description: SHA-256 of manifest.json inside the bundle.
+        size_bytes:
+          type: integer
+        error:
+          type: string
+        created_by:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        completed_at:
+          type: string
+          format: date-time
+    EvidenceExportPage:
+      type: object
+      properties:
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/EvidenceExport"
+        next_cursor:
+          type: string
+          nullable: true
+        has_more:
+          type: boolean
+    CreateRetentionPolicyRequest:
+      type: object
+      required: [resource_type, retention_days]
+      additionalProperties: false
+      properties:
+        resource_type:
+          type: string
+          enum: [raw_payload, audit_event]
+        source_id:
+          type: string
+          description: Optional source filter for raw payload policies.
+        retention_days:
+          type: integer
+          minimum: 1
+          maximum: 3650
+        state:
+          type: string
+          enum: [active, disabled]
+          default: active
+    UpdateRetentionPolicyRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        source_id:
+          type: string
+        retention_days:
+          type: integer
+          minimum: 1
+          maximum: 3650
+        state:
+          type: string
+          enum: [active, disabled]
+    RetentionPolicy:
+      type: object
+      required: [id, tenant_id, resource_type, retention_days, state, created_by, created_at, updated_at]
+      properties:
+        id:
+          type: string
+        tenant_id:
+          type: string
+        resource_type:
+          type: string
+          enum: [raw_payload, audit_event]
+        source_id:
+          type: string
+        retention_days:
+          type: integer
+        state:
+          type: string
+          enum: [active, disabled]
+        created_by:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+    RetentionPolicyPage:
+      type: object
+      properties:
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/RetentionPolicy"
+        next_cursor:
+          type: string
+          nullable: true
+        has_more:
+          type: boolean
+    EndpointHealth:
+      type: object
+      properties:
+        endpoint_id:
+          type: string
+        tenant_id:
+          type: string
+        url:
+          type: string
+        state:
+          type: string
+        circuit_state:
+          type: string
+          enum: [closed, open]
+        failure_count:
+          type: integer
+        disabled_until:
+          type: string
+          format: date-time
+        last_attempt_at:
+          type: string
+          format: date-time
+        last_status:
+          type: integer
+        last_failure:
+          type: string
+        successes_24h:
+          type: integer
+        failures_24h:
+          type: integer
+    EndpointHealthPage:
+      type: object
+      properties:
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/EndpointHealth"
+        next_cursor:
+          type: string
+          nullable: true
+        has_more:
+          type: boolean
+    OpsMetrics:
+      type: object
+      required: [events_total, outbox_pending, dead_letter_open, quarantine_open, deliveries_by_state, replay_jobs_by_state]
+      properties:
+        events_total:
+          type: integer
+        outbox_pending:
+          type: integer
+        oldest_outbox_age_seconds:
+          type: integer
+        dead_letter_open:
+          type: integer
+        quarantine_open:
+          type: integer
+        endpoint_circuit_open:
+          type: integer
+        deliveries_by_state:
+          type: object
+          additionalProperties:
+            type: integer
+        replay_jobs_by_state:
+          type: object
+          additionalProperties:
+            type: integer

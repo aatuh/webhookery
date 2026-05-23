@@ -1,0 +1,11 @@
+DROP TABLE IF EXISTS evidence_export_items;
+DROP TABLE IF EXISTS evidence_exports;
+DROP TABLE IF EXISTS retention_run_items;
+DROP TABLE IF EXISTS retention_runs;
+DROP TABLE IF EXISTS retention_policies;
+DROP INDEX IF EXISTS raw_payloads_storage_idx;
+ALTER TABLE raw_payloads DROP COLUMN IF EXISTS storage_deleted_at;
+ALTER TABLE raw_payloads DROP COLUMN IF EXISTS storage_status;
+ALTER TABLE raw_payloads DROP COLUMN IF EXISTS object_key;
+ALTER TABLE raw_payloads DROP COLUMN IF EXISTS object_bucket;
+ALTER TABLE raw_payloads DROP COLUMN IF EXISTS storage_backend;

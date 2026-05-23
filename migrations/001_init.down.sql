@@ -1,0 +1,16 @@
+DROP TABLE IF EXISTS worker_leases;
+DROP TABLE IF EXISTS outbox;
+DROP TABLE IF EXISTS audit_events;
+DROP TABLE IF EXISTS quarantine_entries;
+DROP TABLE IF EXISTS dead_letter_entries;
+DROP TABLE IF EXISTS replay_receipts;
+DROP TABLE IF EXISTS replay_jobs;
+DROP TABLE IF EXISTS delivery_attempts;
+DROP TABLE IF EXISTS deliveries;
+DROP TABLE IF EXISTS provider_receipts;
+DROP TABLE IF EXISTS events;
+DROP TABLE IF EXISTS raw_payloads;
+DROP TABLE IF EXISTS endpoints;
+DROP TABLE IF EXISTS sources;
+DROP TABLE IF EXISTS tenants;
+DROP TABLE IF EXISTS schema_migrations;

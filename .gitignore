@@ -1,0 +1,13 @@
+**/.*
+!.gitignore
+!.github/
+!.golangci.yml
+!.env.example
+!.api.env.example
+!.test.env.example
+
+coverage.out
+bin/
+dist/
+tmp/
+release-evidence/

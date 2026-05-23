@@ -1,0 +1,10 @@
+DROP INDEX IF EXISTS deliveries_due_idx;
+ALTER TABLE deliveries DROP COLUMN IF EXISTS lock_expires_at;
+ALTER TABLE deliveries DROP COLUMN IF EXISTS locked_by;
+ALTER TABLE deliveries DROP COLUMN IF EXISTS subscription_id;
+ALTER TABLE deliveries DROP COLUMN IF EXISTS route_id;
+DROP TABLE IF EXISTS event_schemas;
+DROP TABLE IF EXISTS event_types;
+DROP TABLE IF EXISTS routes;
+DROP TABLE IF EXISTS subscriptions;
+DROP TABLE IF EXISTS endpoint_secrets;

@@ -1,0 +1,83 @@
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-webhookery}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change-me}
+      POSTGRES_DB: ${POSTGRES_DB:-webhookery}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  api:
+    build: .
+    command: ["api"]
+    env_file:
+      - .env
+    ports:
+      - "8080:8080"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+  migrate:
+    build: .
+    command: ["migrate", "up"]
+    env_file:
+      - .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  worker:
+    build: .
+    command: ["worker"]
+    env_file:
+      - .env
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+  minio:
+    image: minio/minio:RELEASE.2025-04-22T22-12-26Z
+    profiles: ["object-storage"]
+    command: ["server", "/data", "--console-address", ":9001"]
+    environment:
+      MINIO_ROOT_USER: ${WEBHOOKERY_OBJECT_STORAGE_ACCESS_KEY:-webhookery-minio}
+      MINIO_ROOT_PASSWORD: ${WEBHOOKERY_OBJECT_STORAGE_SECRET_KEY:-change-me-minio-secret}
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio-data:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  minio-init:
+    image: minio/mc:RELEASE.2025-04-16T18-13-26Z
+    profiles: ["object-storage"]
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint:
+      - /bin/sh
+      - -c
+      - >
+        mc alias set local http://minio:9000 "$$MINIO_ROOT_USER" "$$MINIO_ROOT_PASSWORD" &&
+        mc mb --ignore-existing local/${WEBHOOKERY_OBJECT_STORAGE_BUCKET:-webhookery-raw}
+    environment:
+      MINIO_ROOT_USER: ${WEBHOOKERY_OBJECT_STORAGE_ACCESS_KEY:-webhookery-minio}
+      MINIO_ROOT_PASSWORD: ${WEBHOOKERY_OBJECT_STORAGE_SECRET_KEY:-change-me-minio-secret}
+
+volumes:
+  postgres-data:
+  minio-data:
