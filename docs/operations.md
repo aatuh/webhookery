@@ -134,6 +134,13 @@ endpoints in the same tenant before subscription creation or endpoint changes.
 `DELETE /v1/subscriptions/{id}` and `whcp subscriptions delete` disable future
 fanout without deleting historical delivery or config-version evidence.
 
+Route reads, updates, and deletes are tenant-scoped. Route create/update checks
+source and endpoint references against active resources in the same tenant,
+resolves active transformation versions when configured, and writes a new
+immutable route version for each mutation. `DELETE /v1/routes/{id}` and `whcp
+routes delete` move the route to `inactive`; historical route decisions,
+delivery rows, replay receipts, and config versions are retained.
+
 Endpoints may also be created with a PEM client certificate and private key for
 outbound mTLS. The API accepts `mtls_client_cert_pem` and
 `mtls_client_key_pem` together, validates that they form a client certificate

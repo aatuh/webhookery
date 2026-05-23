@@ -90,6 +90,9 @@ func (s *Server) Routes() http.Handler {
 			r.Post("/retry-policies", s.createRetryPolicy)
 			r.Get("/routes", s.listRoutes)
 			r.Post("/routes", s.createRoute)
+			r.Get("/routes/{route_id}", s.getRoute)
+			r.Patch("/routes/{route_id}", s.updateRoute)
+			r.Delete("/routes/{route_id}", s.deleteRoute)
 			r.Get("/routes/{route_id}/versions", s.listRouteVersions)
 			r.Post("/routes/{route_id}:activate", s.activateRoute)
 			r.Post("/routes/{route_id}:dry-run", s.dryRunRoute)
@@ -567,6 +570,41 @@ func (s *Server) listRoutes(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, page(items))
+}
+
+func (s *Server) getRoute(w http.ResponseWriter, r *http.Request) {
+	item, err := s.cfg.Control.GetRoute(r.Context(), actorFrom(r), chi.URLParam(r, "route_id"))
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, item)
+}
+
+func (s *Server) updateRoute(w http.ResponseWriter, r *http.Request) {
+	var req app.UpdateRouteRequest
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	item, err := s.cfg.Control.UpdateRoute(r.Context(), actorFrom(r), chi.URLParam(r, "route_id"), req)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, item)
+}
+
+func (s *Server) deleteRoute(w http.ResponseWriter, r *http.Request) {
+	var req app.StateChangeRequest
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	item, err := s.cfg.Control.DeleteRoute(r.Context(), actorFrom(r), chi.URLParam(r, "route_id"), req)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, item)
 }
 
 func (s *Server) listRouteVersions(w http.ResponseWriter, r *http.Request) {

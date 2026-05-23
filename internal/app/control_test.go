@@ -236,6 +236,80 @@ func TestControlServiceDeleteSubscriptionDisablesWithReason(t *testing.T) {
 	}
 }
 
+func TestControlServiceScopesRouteReadsToActorTenant(t *testing.T) {
+	store := &fakeControlStore{}
+	svc := NewControlService(store, ssrf.Validator{Resolver: ssrf.StaticResolver{}})
+	actor := authz.Actor{ID: "usr_1", TenantID: "ten_a", Role: authz.RoleDeveloper, Scopes: []string{"routes:read"}}
+
+	_, err := svc.GetRoute(context.Background(), actor, "rte_123")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if store.routeTenantID != "ten_a" || store.routeID != "rte_123" {
+		t.Fatalf("expected tenant-scoped route read, got tenant=%q route=%q", store.routeTenantID, store.routeID)
+	}
+}
+
+func TestControlServiceRouteMutationRequiresRoutesWrite(t *testing.T) {
+	store := &fakeControlStore{}
+	svc := NewControlService(store, ssrf.Validator{Resolver: ssrf.StaticResolver{}})
+	actor := authz.Actor{ID: "usr_1", TenantID: "ten_a", Role: authz.RoleDeveloper, Scopes: []string{"routes:read"}}
+	state := "inactive"
+
+	_, err := svc.UpdateRoute(context.Background(), actor, "rte_123", UpdateRouteRequest{State: &state, Reason: "pause route"})
+	if err != ErrForbidden {
+		t.Fatalf("expected forbidden route update, got %v", err)
+	}
+	_, err = svc.DeleteRoute(context.Background(), actor, "rte_123", StateChangeRequest{Reason: "retire route"})
+	if err != ErrForbidden {
+		t.Fatalf("expected forbidden route delete, got %v", err)
+	}
+	if store.routeTenantID != "" {
+		t.Fatal("route store must not be called before authorization")
+	}
+}
+
+func TestControlServiceUpdateRouteValidatesFields(t *testing.T) {
+	store := &fakeControlStore{}
+	svc := NewControlService(store, ssrf.Validator{Resolver: ssrf.StaticResolver{}})
+	actor := authz.Actor{ID: "usr_1", TenantID: "ten_a", Role: authz.RoleAdmin, Scopes: []string{"routes:write"}}
+
+	_, err := svc.UpdateRoute(context.Background(), actor, "rte_123", UpdateRouteRequest{Reason: "noop"})
+	if !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("expected missing field validation, got %v", err)
+	}
+
+	priority := 25
+	eventTypes := []string{"invoice.paid", "invoice.updated"}
+	_, err = svc.UpdateRoute(context.Background(), actor, "rte_123", UpdateRouteRequest{Priority: &priority, EventTypes: eventTypes, Reason: "reprioritize"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if store.routeTenantID != "ten_a" || store.route.Priority != 25 || len(store.route.EventTypes) != 2 {
+		t.Fatalf("expected route update to reach tenant store, tenant=%q route=%+v", store.routeTenantID, store.route)
+	}
+
+	state := "paused"
+	_, err = svc.UpdateRoute(context.Background(), actor, "rte_123", UpdateRouteRequest{State: &state, Reason: "bad state"})
+	if !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("expected state validation, got %v", err)
+	}
+}
+
+func TestControlServiceDeleteRouteInactivatesWithReason(t *testing.T) {
+	store := &fakeControlStore{}
+	svc := NewControlService(store, ssrf.Validator{Resolver: ssrf.StaticResolver{}})
+	actor := authz.Actor{ID: "usr_1", TenantID: "ten_a", Role: authz.RoleAdmin, Scopes: []string{"routes:write"}}
+
+	_, err := svc.DeleteRoute(context.Background(), actor, "rte_123", StateChangeRequest{Reason: "retire route"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if store.routeTenantID != "ten_a" || store.routeID != "rte_123" || store.routeReason != "retire route" {
+		t.Fatalf("expected tenant-scoped route delete, tenant=%q route=%q reason=%q", store.routeTenantID, store.routeID, store.routeReason)
+	}
+}
+
 func TestControlServiceRequiresRawPayloadScope(t *testing.T) {
 	store := &fakeControlStore{}
 	svc := NewControlService(store, ssrf.Validator{Resolver: ssrf.StaticResolver{}})
@@ -746,6 +820,10 @@ type fakeControlStore struct {
 	subscriptionID             string
 	subscriptionReason         string
 	subscription               domain.Subscription
+	routeTenantID              string
+	routeID                    string
+	routeReason                string
+	route                      domain.Route
 	transformationTenantID     string
 	providerConnectionTenantID string
 	providerConnectionReq      CreateProviderConnectionRequest
@@ -888,6 +966,50 @@ func (f *fakeControlStore) CreateRoute(context.Context, domain.Route) (domain.Ro
 }
 func (f *fakeControlStore) ListRoutes(context.Context, string, int) ([]domain.Route, error) {
 	return nil, nil
+}
+func (f *fakeControlStore) GetRoute(_ context.Context, tenantID, routeID string) (domain.Route, error) {
+	f.routeTenantID = tenantID
+	f.routeID = routeID
+	return domain.Route{ID: routeID, TenantID: tenantID, SourceID: "src_1", Name: "Route", Priority: 100, EventTypes: []string{"invoice.paid"}, EndpointID: "end_1", State: domain.StateActive, Version: 1}, nil
+}
+func (f *fakeControlStore) UpdateRoute(_ context.Context, tenantID, routeID, actorID string, req UpdateRouteRequest) (domain.Route, error) {
+	f.routeTenantID = tenantID
+	f.routeID = routeID
+	f.routeReason = req.Reason
+	if f.route.ID == "" {
+		f.route = domain.Route{ID: routeID, TenantID: tenantID, SourceID: "src_1", Name: "Route", Priority: 100, EventTypes: []string{"invoice.paid"}, EndpointID: "end_1", State: domain.StateActive, Version: 1}
+	}
+	if req.SourceID != nil {
+		f.route.SourceID = *req.SourceID
+	}
+	if req.Name != nil {
+		f.route.Name = *req.Name
+	}
+	if req.Priority != nil {
+		f.route.Priority = *req.Priority
+	}
+	if req.EventTypes != nil {
+		f.route.EventTypes = req.EventTypes
+	}
+	if req.EndpointID != nil {
+		f.route.EndpointID = *req.EndpointID
+	}
+	if req.RetryPolicyID != nil {
+		f.route.RetryPolicyID = *req.RetryPolicyID
+	}
+	if req.TransformationID != nil {
+		f.route.TransformationID = *req.TransformationID
+	}
+	if req.State != nil {
+		f.route.State = *req.State
+	}
+	return f.route, nil
+}
+func (f *fakeControlStore) DeleteRoute(_ context.Context, tenantID, routeID, actorID, reason string) (domain.Route, error) {
+	f.routeTenantID = tenantID
+	f.routeID = routeID
+	f.routeReason = reason
+	return domain.Route{ID: routeID, TenantID: tenantID, SourceID: "src_1", Name: "Route", Priority: 100, EventTypes: []string{"invoice.paid"}, EndpointID: "end_1", State: domain.StateInactive, Version: 2}, nil
 }
 func (f *fakeControlStore) ListRouteVersions(context.Context, string, string, int) ([]domain.RouteVersion, error) {
 	return nil, nil

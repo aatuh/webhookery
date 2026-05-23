@@ -975,6 +975,12 @@ func (s *Store) CreateRoute(ctx context.Context, route domain.Route) (domain.Rou
 		return domain.Route{}, err
 	}
 	defer rollback(ctx, tx)
+	if err := s.requireActiveSource(ctx, tx, route.TenantID, route.SourceID); err != nil {
+		return domain.Route{}, err
+	}
+	if err := s.requireActiveEndpoint(ctx, tx, route.TenantID, route.EndpointID); err != nil {
+		return domain.Route{}, err
+	}
 	if route.TransformationID != "" {
 		versionID, err := s.activeTransformationVersionID(ctx, tx, route.TenantID, route.TransformationID)
 		if err != nil {
@@ -1021,6 +1027,98 @@ func (s *Store) ListRoutes(ctx context.Context, tenantID string, limit int) ([]d
 		out = append(out, item)
 	}
 	return out, rows.Err()
+}
+
+func (s *Store) GetRoute(ctx context.Context, tenantID, routeID string) (domain.Route, error) {
+	return s.getRoute(ctx, tenantID, routeID)
+}
+
+func (s *Store) UpdateRoute(ctx context.Context, tenantID, routeID, actorID string, req app.UpdateRouteRequest) (domain.Route, error) {
+	return s.updateRoute(ctx, tenantID, routeID, actorID, req, "route.updated")
+}
+
+func (s *Store) DeleteRoute(ctx context.Context, tenantID, routeID, actorID, reason string) (domain.Route, error) {
+	state := domain.StateInactive
+	return s.updateRoute(ctx, tenantID, routeID, actorID, app.UpdateRouteRequest{State: &state, Reason: reason}, "route.inactivated")
+}
+
+func (s *Store) updateRoute(ctx context.Context, tenantID, routeID, actorID string, req app.UpdateRouteRequest, action string) (domain.Route, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return domain.Route{}, err
+	}
+	defer rollback(ctx, tx)
+	current, err := scanRoute(tx.QueryRow(ctx, `SELECT id, tenant_id, source_id, name, priority, event_types, endpoint_id, state, version, active_version_id, retry_policy_id, transformation_id, transformation_version_id, created_at FROM routes WHERE tenant_id=$1 AND id=$2 FOR UPDATE`, tenantID, routeID))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return domain.Route{}, app.ErrNotFound
+	}
+	if err != nil {
+		return domain.Route{}, err
+	}
+	if req.SourceID != nil {
+		if err := s.requireActiveSource(ctx, tx, tenantID, *req.SourceID); err != nil {
+			return domain.Route{}, err
+		}
+		current.SourceID = *req.SourceID
+	}
+	if req.Name != nil {
+		current.Name = *req.Name
+	}
+	if req.Priority != nil {
+		current.Priority = *req.Priority
+	}
+	if req.EventTypes != nil {
+		current.EventTypes = req.EventTypes
+	}
+	if req.EndpointID != nil {
+		if err := s.requireActiveEndpoint(ctx, tx, tenantID, *req.EndpointID); err != nil {
+			return domain.Route{}, err
+		}
+		current.EndpointID = *req.EndpointID
+	}
+	if req.RetryPolicyID != nil {
+		current.RetryPolicyID = *req.RetryPolicyID
+	}
+	if req.TransformationID != nil {
+		current.TransformationID = *req.TransformationID
+		current.TransformationVersionID = ""
+		if current.TransformationID != "" {
+			versionID, err := s.activeTransformationVersionID(ctx, tx, tenantID, current.TransformationID)
+			if err != nil {
+				return domain.Route{}, err
+			}
+			current.TransformationVersionID = versionID
+		}
+	}
+	if req.State != nil {
+		current.State = *req.State
+	}
+	err = tx.QueryRow(ctx, `
+		UPDATE routes
+		SET source_id=$3, name=$4, priority=$5, event_types=$6, endpoint_id=$7, state=$8, retry_policy_id=$9, transformation_id=$10, transformation_version_id=$11, version=version+1
+		WHERE tenant_id=$1 AND id=$2
+		RETURNING id, tenant_id, source_id, name, priority, event_types, endpoint_id, state, version, active_version_id, retry_policy_id, transformation_id, transformation_version_id, created_at`,
+		tenantID, routeID, current.SourceID, current.Name, current.Priority, current.EventTypes, current.EndpointID,
+		current.State, current.RetryPolicyID, current.TransformationID, current.TransformationVersionID,
+	).Scan(&current.ID, &current.TenantID, &current.SourceID, &current.Name, &current.Priority, &current.EventTypes, &current.EndpointID, &current.State, &current.Version, &current.ActiveVersionID, &current.RetryPolicyID, &current.TransformationID, &current.TransformationVersionID, &current.CreatedAt)
+	if err != nil {
+		return domain.Route{}, err
+	}
+	version, err := s.insertRouteVersion(ctx, tx, current, actorID)
+	if err != nil {
+		return domain.Route{}, err
+	}
+	current.ActiveVersionID = version.ID
+	if _, err := tx.Exec(ctx, `UPDATE routes SET active_version_id=$1 WHERE tenant_id=$2 AND id=$3`, version.ID, tenantID, routeID); err != nil {
+		return domain.Route{}, err
+	}
+	if _, err := recordAuditEventTx(ctx, tx, auditEventInput{TenantID: tenantID, ActorID: actorID, Action: action, Resource: "route", ResourceID: routeID, Reason: req.Reason}); err != nil {
+		return domain.Route{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return domain.Route{}, err
+	}
+	return current, nil
 }
 
 func (s *Store) ListRouteVersions(ctx context.Context, tenantID, routeID string, limit int) ([]domain.RouteVersion, error) {
@@ -1720,6 +1818,21 @@ func (s *Store) requireActiveEndpoint(ctx context.Context, tx pgx.Tx, tenantID, 
 	}
 	if state != domain.StateActive {
 		return fmt.Errorf("%w: endpoint disabled", app.ErrInvalidInput)
+	}
+	return nil
+}
+
+func (s *Store) requireActiveSource(ctx context.Context, tx pgx.Tx, tenantID, sourceID string) error {
+	var state string
+	err := tx.QueryRow(ctx, `SELECT state FROM sources WHERE tenant_id=$1 AND id=$2`, tenantID, sourceID).Scan(&state)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return app.ErrNotFound
+	}
+	if err != nil {
+		return err
+	}
+	if state != domain.StateActive {
+		return fmt.Errorf("%w: source disabled", app.ErrInvalidInput)
 	}
 	return nil
 }

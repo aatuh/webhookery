@@ -45,6 +45,9 @@ type ControlStore interface {
 	DeleteSubscription(ctx context.Context, tenantID, subscriptionID, actorID, reason string) (domain.Subscription, error)
 	CreateRoute(ctx context.Context, route domain.Route) (domain.Route, error)
 	ListRoutes(ctx context.Context, tenantID string, limit int) ([]domain.Route, error)
+	GetRoute(ctx context.Context, tenantID, routeID string) (domain.Route, error)
+	UpdateRoute(ctx context.Context, tenantID, routeID, actorID string, req UpdateRouteRequest) (domain.Route, error)
+	DeleteRoute(ctx context.Context, tenantID, routeID, actorID, reason string) (domain.Route, error)
 	ListRouteVersions(ctx context.Context, tenantID, routeID string, limit int) ([]domain.RouteVersion, error)
 	ActivateRoute(ctx context.Context, tenantID, routeID, actorID, reason string) (domain.Route, error)
 	DryRunRoute(ctx context.Context, tenantID, routeID, eventID string) (RouteDryRun, error)
@@ -205,6 +208,18 @@ type CreateRouteRequest struct {
 	RetryPolicyID    string   `json:"retry_policy_id,omitempty"`
 	TransformationID string   `json:"transformation_id,omitempty"`
 	State            string   `json:"state"`
+}
+
+type UpdateRouteRequest struct {
+	SourceID         *string  `json:"source_id,omitempty"`
+	Name             *string  `json:"name,omitempty"`
+	Priority         *int     `json:"priority,omitempty"`
+	EventTypes       []string `json:"event_types,omitempty"`
+	EndpointID       *string  `json:"endpoint_id,omitempty"`
+	RetryPolicyID    *string  `json:"retry_policy_id,omitempty"`
+	TransformationID *string  `json:"transformation_id,omitempty"`
+	State            *string  `json:"state,omitempty"`
+	Reason           string   `json:"reason"`
 }
 
 type ActivateRouteRequest struct {
@@ -761,24 +776,35 @@ func (s *ControlService) CreateRoute(ctx context.Context, actor authz.Actor, req
 	if !authz.Can(actor, "routes:write", actor.TenantID) {
 		return domain.Route{}, ErrForbidden
 	}
-	if req.SourceID == "" || req.EndpointID == "" || len(req.EventTypes) == 0 {
+	eventTypes := normalizeEventTypes(req.EventTypes)
+	if strings.TrimSpace(req.SourceID) == "" || strings.TrimSpace(req.EndpointID) == "" || len(eventTypes) == 0 {
 		return domain.Route{}, fmt.Errorf("%w: source_id, endpoint_id, and event_types are required", ErrInvalidInput)
 	}
-	state := req.State
+	name := strings.TrimSpace(req.Name)
+	if name == "" {
+		return domain.Route{}, fmt.Errorf("%w: name is required", ErrInvalidInput)
+	}
+	state := strings.TrimSpace(req.State)
 	if state == "" {
-		state = "draft"
+		state = domain.StateDraft
+	}
+	if !validRouteState(state) {
+		return domain.Route{}, fmt.Errorf("%w: route state must be draft, active, or inactive", ErrInvalidInput)
 	}
 	priority := req.Priority
 	if priority == 0 {
 		priority = 100
 	}
+	if priority < 0 {
+		return domain.Route{}, fmt.Errorf("%w: priority must be non-negative", ErrInvalidInput)
+	}
 	return s.store.CreateRoute(ctx, domain.Route{
 		TenantID:         actor.TenantID,
-		SourceID:         req.SourceID,
-		Name:             req.Name,
+		SourceID:         strings.TrimSpace(req.SourceID),
+		Name:             name,
 		Priority:         priority,
-		EventTypes:       req.EventTypes,
-		EndpointID:       req.EndpointID,
+		EventTypes:       eventTypes,
+		EndpointID:       strings.TrimSpace(req.EndpointID),
 		RetryPolicyID:    strings.TrimSpace(req.RetryPolicyID),
 		TransformationID: strings.TrimSpace(req.TransformationID),
 		State:            state,
@@ -791,6 +817,84 @@ func (s *ControlService) ListRoutes(ctx context.Context, actor authz.Actor, limi
 		return nil, ErrForbidden
 	}
 	return s.store.ListRoutes(ctx, actor.TenantID, normalizeLimit(limit))
+}
+
+func (s *ControlService) GetRoute(ctx context.Context, actor authz.Actor, routeID string) (domain.Route, error) {
+	if !authz.Can(actor, "routes:read", actor.TenantID) {
+		return domain.Route{}, ErrForbidden
+	}
+	if strings.TrimSpace(routeID) == "" {
+		return domain.Route{}, fmt.Errorf("%w: route_id is required", ErrInvalidInput)
+	}
+	return s.store.GetRoute(ctx, actor.TenantID, routeID)
+}
+
+func (s *ControlService) UpdateRoute(ctx context.Context, actor authz.Actor, routeID string, req UpdateRouteRequest) (domain.Route, error) {
+	if !authz.Can(actor, "routes:write", actor.TenantID) {
+		return domain.Route{}, ErrForbidden
+	}
+	if strings.TrimSpace(routeID) == "" || strings.TrimSpace(req.Reason) == "" {
+		return domain.Route{}, fmt.Errorf("%w: route_id and reason are required", ErrInvalidInput)
+	}
+	if req.SourceID == nil && req.Name == nil && req.Priority == nil && req.EventTypes == nil && req.EndpointID == nil && req.RetryPolicyID == nil && req.TransformationID == nil && req.State == nil {
+		return domain.Route{}, fmt.Errorf("%w: at least one route field is required", ErrInvalidInput)
+	}
+	if req.SourceID != nil {
+		sourceID := strings.TrimSpace(*req.SourceID)
+		if sourceID == "" {
+			return domain.Route{}, fmt.Errorf("%w: source_id cannot be empty", ErrInvalidInput)
+		}
+		req.SourceID = &sourceID
+	}
+	if req.Name != nil {
+		name := strings.TrimSpace(*req.Name)
+		if name == "" {
+			return domain.Route{}, fmt.Errorf("%w: name cannot be empty", ErrInvalidInput)
+		}
+		req.Name = &name
+	}
+	if req.Priority != nil && *req.Priority < 0 {
+		return domain.Route{}, fmt.Errorf("%w: priority must be non-negative", ErrInvalidInput)
+	}
+	if req.EventTypes != nil {
+		req.EventTypes = normalizeEventTypes(req.EventTypes)
+		if len(req.EventTypes) == 0 {
+			return domain.Route{}, fmt.Errorf("%w: event_types cannot be empty", ErrInvalidInput)
+		}
+	}
+	if req.EndpointID != nil {
+		endpointID := strings.TrimSpace(*req.EndpointID)
+		if endpointID == "" {
+			return domain.Route{}, fmt.Errorf("%w: endpoint_id cannot be empty", ErrInvalidInput)
+		}
+		req.EndpointID = &endpointID
+	}
+	if req.RetryPolicyID != nil {
+		retryPolicyID := strings.TrimSpace(*req.RetryPolicyID)
+		req.RetryPolicyID = &retryPolicyID
+	}
+	if req.TransformationID != nil {
+		transformationID := strings.TrimSpace(*req.TransformationID)
+		req.TransformationID = &transformationID
+	}
+	if req.State != nil {
+		state := strings.TrimSpace(*req.State)
+		if !validRouteState(state) {
+			return domain.Route{}, fmt.Errorf("%w: route state must be draft, active, or inactive", ErrInvalidInput)
+		}
+		req.State = &state
+	}
+	return s.store.UpdateRoute(ctx, actor.TenantID, routeID, actor.ID, req)
+}
+
+func (s *ControlService) DeleteRoute(ctx context.Context, actor authz.Actor, routeID string, req StateChangeRequest) (domain.Route, error) {
+	if !authz.Can(actor, "routes:write", actor.TenantID) {
+		return domain.Route{}, ErrForbidden
+	}
+	if strings.TrimSpace(routeID) == "" || strings.TrimSpace(req.Reason) == "" {
+		return domain.Route{}, fmt.Errorf("%w: route_id and reason are required", ErrInvalidInput)
+	}
+	return s.store.DeleteRoute(ctx, actor.TenantID, routeID, actor.ID, req.Reason)
 }
 
 func (s *ControlService) ListRouteVersions(ctx context.Context, actor authz.Actor, routeID string, limit int) ([]domain.RouteVersion, error) {
@@ -807,8 +911,8 @@ func (s *ControlService) ActivateRoute(ctx context.Context, actor authz.Actor, r
 	if !authz.Can(actor, "routes:write", actor.TenantID) {
 		return domain.Route{}, ErrForbidden
 	}
-	if reason == "" {
-		return domain.Route{}, fmt.Errorf("%w: reason is required", ErrInvalidInput)
+	if strings.TrimSpace(routeID) == "" || strings.TrimSpace(reason) == "" {
+		return domain.Route{}, fmt.Errorf("%w: route_id and reason are required", ErrInvalidInput)
 	}
 	return s.store.ActivateRoute(ctx, actor.TenantID, routeID, actor.ID, reason)
 }
@@ -817,7 +921,7 @@ func (s *ControlService) DryRunRoute(ctx context.Context, actor authz.Actor, rou
 	if !authz.Can(actor, "routes:read", actor.TenantID) {
 		return RouteDryRun{}, ErrForbidden
 	}
-	if routeID == "" || eventID == "" {
+	if strings.TrimSpace(routeID) == "" || strings.TrimSpace(eventID) == "" {
 		return RouteDryRun{}, fmt.Errorf("%w: route_id and event_id are required", ErrInvalidInput)
 	}
 	return s.store.DryRunRoute(ctx, actor.TenantID, routeID, eventID)
@@ -1660,6 +1764,15 @@ func normalizeEventTypes(eventTypes []string) []string {
 		out = append(out, eventType)
 	}
 	return out
+}
+
+func validRouteState(state string) bool {
+	switch state {
+	case domain.StateDraft, domain.StateActive, domain.StateInactive:
+		return true
+	default:
+		return false
+	}
 }
 
 func normalizeScopes(scopes []string) []string {

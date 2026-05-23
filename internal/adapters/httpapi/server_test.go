@@ -278,6 +278,20 @@ func TestSubscriptionUpdateRequiresSubscriptionsWrite(t *testing.T) {
 	}
 }
 
+func TestRouteUpdateRequiresRoutesWrite(t *testing.T) {
+	server := testServerWithActor(authz.Actor{ID: "usr_1", TenantID: "ten_1", Role: authz.RoleDeveloper, Scopes: []string{"routes:read"}})
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPatch, "/v1/routes/rte_1", bytes.NewBufferString(`{"state":"inactive","reason":"pause"}`))
+	req.Header.Set("Authorization", "Bearer token")
+	req.Header.Set("Content-Type", "application/json")
+
+	server.Routes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("expected 403, got %d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
 func TestReconciliationCreateRequiresReplayWrite(t *testing.T) {
 	server := testServerWithActor(authz.Actor{ID: "usr_1", TenantID: "ten_1", Role: authz.RoleSupport, Scopes: []string{"replay:read"}})
 	rec := httptest.NewRecorder()
@@ -418,6 +432,15 @@ func (noopControlStore) CreateRoute(context.Context, domain.Route) (domain.Route
 }
 func (noopControlStore) ListRoutes(context.Context, string, int) ([]domain.Route, error) {
 	return nil, nil
+}
+func (noopControlStore) GetRoute(context.Context, string, string) (domain.Route, error) {
+	return domain.Route{}, nil
+}
+func (noopControlStore) UpdateRoute(context.Context, string, string, string, app.UpdateRouteRequest) (domain.Route, error) {
+	return domain.Route{}, nil
+}
+func (noopControlStore) DeleteRoute(context.Context, string, string, string, string) (domain.Route, error) {
+	return domain.Route{}, nil
 }
 func (noopControlStore) ListRouteVersions(context.Context, string, string, int) ([]domain.RouteVersion, error) {
 	return nil, nil

@@ -11,6 +11,8 @@ import (
 const (
 	StateActive   = "active"
 	StateDisabled = "disabled"
+	StateDraft    = "draft"
+	StateInactive = "inactive"
 
 	RawStoragePostgres = "postgres"
 	RawStorageS3       = "s3"

@@ -53,6 +53,8 @@ go run ./cmd/whcp endpoints update --endpoint-id end_... --url https://receiver.
 go run ./cmd/whcp endpoints delete --endpoint-id end_... --reason "retire old receiver" --api-key "$WEBHOOKERY_API_KEY"
 go run ./cmd/whcp subscriptions update --subscription-id sub_... --event-types invoice.paid,invoice.updated --reason "narrow fanout" --api-key "$WEBHOOKERY_API_KEY"
 go run ./cmd/whcp subscriptions delete --subscription-id sub_... --reason "retire fanout" --api-key "$WEBHOOKERY_API_KEY"
+go run ./cmd/whcp routes update --route-id rte_... --priority 10 --reason "prefer primary receiver" --api-key "$WEBHOOKERY_API_KEY"
+go run ./cmd/whcp routes delete --route-id rte_... --reason "retire route" --api-key "$WEBHOOKERY_API_KEY"
 go run ./cmd/whcp reconciliation-jobs dry-run --connection-id pcn_... --from 2026-05-25T00:00:00Z --to 2026-05-25T12:00:00Z --capture-missing --api-key "$WEBHOOKERY_API_KEY"
 go run ./cmd/whcp reconciliation-jobs create --connection-id pcn_... --capture-missing --route-recovered --reason "recover missing Stripe events" --api-key "$WEBHOOKERY_API_KEY"
 go run ./cmd/whcp reconciliation-jobs items --job-id rec_... --api-key "$WEBHOOKERY_API_KEY"

@@ -553,7 +553,7 @@ func runRetryPolicies(args []string) error {
 
 func runRoutes(args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: whcp routes <create|activate|dry-run|versions>")
+		return fmt.Errorf("usage: whcp routes <list|get|create|update|delete|activate|dry-run|versions>")
 	}
 	fs := flag.NewFlagSet("routes "+args[0], flag.ContinueOnError)
 	baseURL := fs.String("base-url", "http://localhost:8080", "API base URL")
@@ -565,22 +565,82 @@ func runRoutes(args []string) error {
 	eventID := fs.String("event-id", "", "event id")
 	reason := fs.String("reason", "", "change reason")
 	name := fs.String("name", "", "route name")
+	priority := fs.Int("priority", -1, "route priority")
+	state := fs.String("state", "", "draft, active, or inactive")
 	retryPolicyID := fs.String("retry-policy-id", "", "retry policy id")
 	transformationID := fs.String("transformation-id", "", "optional transformation id")
 	if err := fs.Parse(args[1:]); err != nil {
 		return err
 	}
 	switch args[0] {
+	case "list":
+		return getJSON(*baseURL, *apiKey, "/v1/routes")
+	case "get":
+		if strings.TrimSpace(*routeID) == "" {
+			return fmt.Errorf("route-id is required")
+		}
+		return getJSON(*baseURL, *apiKey, "/v1/routes/"+url.PathEscape(*routeID))
 	case "create":
-		return postJSON(*baseURL, *apiKey, "/v1/routes", map[string]any{"name": *name, "source_id": *sourceID, "endpoint_id": *endpointID, "event_types": splitCSV(*eventTypes), "retry_policy_id": *retryPolicyID, "transformation_id": *transformationID})
+		body := map[string]any{"name": *name, "source_id": *sourceID, "endpoint_id": *endpointID, "event_types": splitCSV(*eventTypes), "retry_policy_id": *retryPolicyID, "transformation_id": *transformationID}
+		if *priority >= 0 {
+			body["priority"] = *priority
+		}
+		if strings.TrimSpace(*state) != "" {
+			body["state"] = *state
+		}
+		return postJSON(*baseURL, *apiKey, "/v1/routes", body)
+	case "update":
+		if strings.TrimSpace(*routeID) == "" {
+			return fmt.Errorf("route-id is required")
+		}
+		body := map[string]any{"reason": *reason}
+		if strings.TrimSpace(*name) != "" {
+			body["name"] = *name
+		}
+		if strings.TrimSpace(*sourceID) != "" {
+			body["source_id"] = *sourceID
+		}
+		if strings.TrimSpace(*endpointID) != "" {
+			body["endpoint_id"] = *endpointID
+		}
+		if strings.TrimSpace(*eventTypes) != "" {
+			body["event_types"] = splitCSV(*eventTypes)
+		}
+		if *priority >= 0 {
+			body["priority"] = *priority
+		}
+		if strings.TrimSpace(*state) != "" {
+			body["state"] = *state
+		}
+		if strings.TrimSpace(*retryPolicyID) != "" {
+			body["retry_policy_id"] = *retryPolicyID
+		}
+		if strings.TrimSpace(*transformationID) != "" {
+			body["transformation_id"] = *transformationID
+		}
+		return patchJSON(*baseURL, *apiKey, "/v1/routes/"+url.PathEscape(*routeID), body)
+	case "delete":
+		if strings.TrimSpace(*routeID) == "" {
+			return fmt.Errorf("route-id is required")
+		}
+		return deleteJSON(*baseURL, *apiKey, "/v1/routes/"+url.PathEscape(*routeID), map[string]string{"reason": *reason})
 	case "activate":
-		return postJSON(*baseURL, *apiKey, "/v1/routes/"+*routeID+":activate", map[string]string{"reason": *reason})
+		if strings.TrimSpace(*routeID) == "" {
+			return fmt.Errorf("route-id is required")
+		}
+		return postJSON(*baseURL, *apiKey, "/v1/routes/"+url.PathEscape(*routeID)+":activate", map[string]string{"reason": *reason})
 	case "dry-run":
-		return postJSON(*baseURL, *apiKey, "/v1/routes/"+*routeID+":dry-run", map[string]string{"event_id": *eventID})
+		if strings.TrimSpace(*routeID) == "" {
+			return fmt.Errorf("route-id is required")
+		}
+		return postJSON(*baseURL, *apiKey, "/v1/routes/"+url.PathEscape(*routeID)+":dry-run", map[string]string{"event_id": *eventID})
 	case "versions":
+		if strings.TrimSpace(*routeID) == "" {
+			return fmt.Errorf("route-id is required")
+		}
 		return getJSON(*baseURL, *apiKey, "/v1/routes/"+url.PathEscape(*routeID)+"/versions")
 	default:
-		return fmt.Errorf("usage: whcp routes <create|activate|dry-run|versions>")
+		return fmt.Errorf("usage: whcp routes <list|get|create|update|delete|activate|dry-run|versions>")
 	}
 }
 

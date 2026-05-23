@@ -719,6 +719,10 @@ paths:
       responses:
         "200":
           description: Paginated route list.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RoutePage"
     post:
       summary: Create route
       security:
@@ -732,6 +736,78 @@ paths:
       responses:
         "201":
           description: Route created.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Route"
+  /v1/routes/{route_id}:
+    get:
+      summary: Get route
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: route_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Route metadata.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Route"
+        "404":
+          description: Route not found in this tenant.
+    patch:
+      summary: Update route
+      description: Updates route matching/destination metadata and records a new immutable route version.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: route_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateRouteRequest"
+      responses:
+        "200":
+          description: Updated route metadata.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Route"
+    delete:
+      summary: Inactivate route
+      description: Moves the route to inactive without deleting historical decisions, deliveries, or version evidence.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: route_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ReasonRequest"
+      responses:
+        "200":
+          description: Inactivated route metadata.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Route"
   /v1/routes/{route_id}/versions:
     get:
       summary: List immutable route versions
@@ -2145,6 +2221,91 @@ components:
         transformation_id:
           type: string
           description: Optional active transformation to snapshot onto new delivery payloads.
+        state:
+          type: string
+          enum: [draft, active, inactive]
+          default: draft
+    UpdateRouteRequest:
+      type: object
+      required: [reason]
+      additionalProperties: false
+      properties:
+        source_id:
+          type: string
+        name:
+          type: string
+          minLength: 1
+        priority:
+          type: integer
+          minimum: 0
+        event_types:
+          type: array
+          items:
+            type: string
+          minItems: 1
+        endpoint_id:
+          type: string
+        retry_policy_id:
+          type: string
+          description: Optional retry policy reference. Use an empty string to clear an existing policy.
+        transformation_id:
+          type: string
+          description: Optional active transformation. Use an empty string to clear an existing transformation.
+        state:
+          type: string
+          enum: [draft, active, inactive]
+        reason:
+          type: string
+          minLength: 1
+    Route:
+      type: object
+      required: [id, tenant_id, source_id, name, priority, event_types, endpoint_id, state, version, created_at]
+      properties:
+        id:
+          type: string
+        tenant_id:
+          type: string
+        source_id:
+          type: string
+        name:
+          type: string
+        priority:
+          type: integer
+        event_types:
+          type: array
+          items:
+            type: string
+        endpoint_id:
+          type: string
+        state:
+          type: string
+          enum: [draft, active, inactive]
+        version:
+          type: integer
+        active_version_id:
+          type: string
+        retry_policy_id:
+          type: string
+        transformation_id:
+          type: string
+        transformation_version_id:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+    RoutePage:
+      type: object
+      required: [data, has_more]
+      properties:
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/Route"
+        next_cursor:
+          type: string
+          nullable: true
+        has_more:
+          type: boolean
     NormalizedEnvelope:
       type: object
       required: [id, tenant_id, event_id, provider, type, source, envelope_sha256, data_sha256, metadata_sha256, storage_status, created_at]
