@@ -83,6 +83,9 @@ func (s *Server) Routes() http.Handler {
 			r.Post("/endpoints/{endpoint_id}/secrets:rotate", s.rotateEndpointSecret)
 			r.Get("/subscriptions", s.listSubscriptions)
 			r.Post("/subscriptions", s.createSubscription)
+			r.Get("/subscriptions/{subscription_id}", s.getSubscription)
+			r.Patch("/subscriptions/{subscription_id}", s.updateSubscription)
+			r.Delete("/subscriptions/{subscription_id}", s.deleteSubscription)
 			r.Get("/retry-policies", s.listRetryPolicies)
 			r.Post("/retry-policies", s.createRetryPolicy)
 			r.Get("/routes", s.listRoutes)
@@ -485,6 +488,41 @@ func (s *Server) listSubscriptions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, page(items))
+}
+
+func (s *Server) getSubscription(w http.ResponseWriter, r *http.Request) {
+	item, err := s.cfg.Control.GetSubscription(r.Context(), actorFrom(r), chi.URLParam(r, "subscription_id"))
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, item)
+}
+
+func (s *Server) updateSubscription(w http.ResponseWriter, r *http.Request) {
+	var req app.UpdateSubscriptionRequest
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	item, err := s.cfg.Control.UpdateSubscription(r.Context(), actorFrom(r), chi.URLParam(r, "subscription_id"), req)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, item)
+}
+
+func (s *Server) deleteSubscription(w http.ResponseWriter, r *http.Request) {
+	var req app.StateChangeRequest
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	item, err := s.cfg.Control.DeleteSubscription(r.Context(), actorFrom(r), chi.URLParam(r, "subscription_id"), req)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, item)
 }
 
 func (s *Server) createRetryPolicy(w http.ResponseWriter, r *http.Request) {

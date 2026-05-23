@@ -163,6 +163,79 @@ func TestControlServiceDeleteEndpointDisablesWithReason(t *testing.T) {
 	}
 }
 
+func TestControlServiceScopesSubscriptionReadsToActorTenant(t *testing.T) {
+	store := &fakeControlStore{}
+	svc := NewControlService(store, ssrf.Validator{Resolver: ssrf.StaticResolver{}})
+	actor := authz.Actor{ID: "usr_1", TenantID: "ten_a", Role: authz.RoleDeveloper, Scopes: []string{"subscriptions:read"}}
+
+	_, err := svc.GetSubscription(context.Background(), actor, "sub_123")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if store.subscriptionTenantID != "ten_a" || store.subscriptionID != "sub_123" {
+		t.Fatalf("expected tenant-scoped subscription read, got tenant=%q subscription=%q", store.subscriptionTenantID, store.subscriptionID)
+	}
+}
+
+func TestControlServiceSubscriptionMutationRequiresSubscriptionsWrite(t *testing.T) {
+	store := &fakeControlStore{}
+	svc := NewControlService(store, ssrf.Validator{Resolver: ssrf.StaticResolver{}})
+	actor := authz.Actor{ID: "usr_1", TenantID: "ten_a", Role: authz.RoleDeveloper, Scopes: []string{"subscriptions:read"}}
+	state := domain.StateDisabled
+
+	_, err := svc.UpdateSubscription(context.Background(), actor, "sub_123", UpdateSubscriptionRequest{State: &state, Reason: "pause fanout"})
+	if err != ErrForbidden {
+		t.Fatalf("expected forbidden subscription update, got %v", err)
+	}
+	_, err = svc.DeleteSubscription(context.Background(), actor, "sub_123", StateChangeRequest{Reason: "retire fanout"})
+	if err != ErrForbidden {
+		t.Fatalf("expected forbidden subscription delete, got %v", err)
+	}
+	if store.subscriptionTenantID != "" {
+		t.Fatal("subscription store must not be called before authorization")
+	}
+}
+
+func TestControlServiceUpdateSubscriptionValidatesFields(t *testing.T) {
+	store := &fakeControlStore{}
+	svc := NewControlService(store, ssrf.Validator{Resolver: ssrf.StaticResolver{}})
+	actor := authz.Actor{ID: "usr_1", TenantID: "ten_a", Role: authz.RoleAdmin, Scopes: []string{"subscriptions:write"}}
+
+	_, err := svc.UpdateSubscription(context.Background(), actor, "sub_123", UpdateSubscriptionRequest{Reason: "noop"})
+	if !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("expected missing field validation, got %v", err)
+	}
+
+	eventTypes := []string{"invoice.paid", "invoice.updated"}
+	_, err = svc.UpdateSubscription(context.Background(), actor, "sub_123", UpdateSubscriptionRequest{EventTypes: eventTypes, Reason: "narrow fanout"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if store.subscriptionTenantID != "ten_a" || len(store.subscription.EventTypes) != 2 {
+		t.Fatalf("expected subscription update to reach tenant store, tenant=%q subscription=%+v", store.subscriptionTenantID, store.subscription)
+	}
+
+	state := "paused"
+	_, err = svc.UpdateSubscription(context.Background(), actor, "sub_123", UpdateSubscriptionRequest{State: &state, Reason: "bad state"})
+	if !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("expected state validation, got %v", err)
+	}
+}
+
+func TestControlServiceDeleteSubscriptionDisablesWithReason(t *testing.T) {
+	store := &fakeControlStore{}
+	svc := NewControlService(store, ssrf.Validator{Resolver: ssrf.StaticResolver{}})
+	actor := authz.Actor{ID: "usr_1", TenantID: "ten_a", Role: authz.RoleAdmin, Scopes: []string{"subscriptions:write"}}
+
+	_, err := svc.DeleteSubscription(context.Background(), actor, "sub_123", StateChangeRequest{Reason: "retire fanout"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if store.subscriptionTenantID != "ten_a" || store.subscriptionID != "sub_123" || store.subscriptionReason != "retire fanout" {
+		t.Fatalf("expected tenant-scoped subscription delete, tenant=%q subscription=%q reason=%q", store.subscriptionTenantID, store.subscriptionID, store.subscriptionReason)
+	}
+}
+
 func TestControlServiceRequiresRawPayloadScope(t *testing.T) {
 	store := &fakeControlStore{}
 	svc := NewControlService(store, ssrf.Validator{Resolver: ssrf.StaticResolver{}})
@@ -669,6 +742,10 @@ type fakeControlStore struct {
 	endpointTenantID           string
 	endpointID                 string
 	endpointReason             string
+	subscriptionTenantID       string
+	subscriptionID             string
+	subscriptionReason         string
+	subscription               domain.Subscription
 	transformationTenantID     string
 	providerConnectionTenantID string
 	providerConnectionReq      CreateProviderConnectionRequest
@@ -770,6 +847,41 @@ func (f *fakeControlStore) CreateSubscription(context.Context, domain.Subscripti
 }
 func (f *fakeControlStore) ListSubscriptions(context.Context, string, int) ([]domain.Subscription, error) {
 	return nil, nil
+}
+func (f *fakeControlStore) GetSubscription(_ context.Context, tenantID, subscriptionID string) (domain.Subscription, error) {
+	f.subscriptionTenantID = tenantID
+	f.subscriptionID = subscriptionID
+	return domain.Subscription{ID: subscriptionID, TenantID: tenantID, EndpointID: "end_1", EventTypes: []string{"invoice.paid"}, PayloadFormat: "canonical_json", State: domain.StateActive, Version: 1}, nil
+}
+func (f *fakeControlStore) UpdateSubscription(_ context.Context, tenantID, subscriptionID, actorID string, req UpdateSubscriptionRequest) (domain.Subscription, error) {
+	f.subscriptionTenantID = tenantID
+	f.subscriptionID = subscriptionID
+	f.subscriptionReason = req.Reason
+	if f.subscription.ID == "" {
+		f.subscription = domain.Subscription{ID: subscriptionID, TenantID: tenantID, EndpointID: "end_1", EventTypes: []string{"invoice.paid"}, PayloadFormat: "canonical_json", State: domain.StateActive, Version: 1}
+	}
+	if req.EndpointID != nil {
+		f.subscription.EndpointID = *req.EndpointID
+	}
+	if req.EventTypes != nil {
+		f.subscription.EventTypes = req.EventTypes
+	}
+	if req.PayloadFormat != nil {
+		f.subscription.PayloadFormat = *req.PayloadFormat
+	}
+	if req.TransformationID != nil {
+		f.subscription.TransformationID = *req.TransformationID
+	}
+	if req.State != nil {
+		f.subscription.State = *req.State
+	}
+	return f.subscription, nil
+}
+func (f *fakeControlStore) DeleteSubscription(_ context.Context, tenantID, subscriptionID, actorID, reason string) (domain.Subscription, error) {
+	f.subscriptionTenantID = tenantID
+	f.subscriptionID = subscriptionID
+	f.subscriptionReason = reason
+	return domain.Subscription{ID: subscriptionID, TenantID: tenantID, EndpointID: "end_1", EventTypes: []string{"invoice.paid"}, PayloadFormat: "canonical_json", State: domain.StateDisabled, Version: 2}, nil
 }
 func (f *fakeControlStore) CreateRoute(context.Context, domain.Route) (domain.Route, error) {
 	return domain.Route{}, nil

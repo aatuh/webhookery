@@ -822,6 +822,9 @@ func (s *Store) CreateSubscription(ctx context.Context, subscription domain.Subs
 		return domain.Subscription{}, err
 	}
 	defer rollback(ctx, tx)
+	if err := s.requireActiveEndpoint(ctx, tx, subscription.TenantID, subscription.EndpointID); err != nil {
+		return domain.Subscription{}, err
+	}
 	if subscription.TransformationID != "" {
 		versionID, err := s.activeTransformationVersionID(ctx, tx, subscription.TenantID, subscription.TransformationID)
 		if err != nil {
@@ -868,6 +871,90 @@ func (s *Store) ListSubscriptions(ctx context.Context, tenantID string, limit in
 		out = append(out, item)
 	}
 	return out, rows.Err()
+}
+
+func (s *Store) GetSubscription(ctx context.Context, tenantID, subscriptionID string) (domain.Subscription, error) {
+	row := s.pool.QueryRow(ctx, `SELECT id, tenant_id, endpoint_id, event_types, payload_format, transformation_id, transformation_version_id, state, version, active_version_id, created_at FROM subscriptions WHERE tenant_id=$1 AND id=$2`, tenantID, subscriptionID)
+	item, err := scanSubscription(row)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return domain.Subscription{}, app.ErrNotFound
+	}
+	return item, err
+}
+
+func (s *Store) UpdateSubscription(ctx context.Context, tenantID, subscriptionID, actorID string, req app.UpdateSubscriptionRequest) (domain.Subscription, error) {
+	return s.updateSubscription(ctx, tenantID, subscriptionID, actorID, req, "subscription.updated")
+}
+
+func (s *Store) DeleteSubscription(ctx context.Context, tenantID, subscriptionID, actorID, reason string) (domain.Subscription, error) {
+	state := domain.StateDisabled
+	return s.updateSubscription(ctx, tenantID, subscriptionID, actorID, app.UpdateSubscriptionRequest{State: &state, Reason: reason}, "subscription.disabled")
+}
+
+func (s *Store) updateSubscription(ctx context.Context, tenantID, subscriptionID, actorID string, req app.UpdateSubscriptionRequest, action string) (domain.Subscription, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return domain.Subscription{}, err
+	}
+	defer rollback(ctx, tx)
+	current, err := scanSubscription(tx.QueryRow(ctx, `SELECT id, tenant_id, endpoint_id, event_types, payload_format, transformation_id, transformation_version_id, state, version, active_version_id, created_at FROM subscriptions WHERE tenant_id=$1 AND id=$2 FOR UPDATE`, tenantID, subscriptionID))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return domain.Subscription{}, app.ErrNotFound
+	}
+	if err != nil {
+		return domain.Subscription{}, err
+	}
+	if req.EndpointID != nil {
+		if err := s.requireActiveEndpoint(ctx, tx, tenantID, *req.EndpointID); err != nil {
+			return domain.Subscription{}, err
+		}
+		current.EndpointID = *req.EndpointID
+	}
+	if req.EventTypes != nil {
+		current.EventTypes = req.EventTypes
+	}
+	if req.PayloadFormat != nil {
+		current.PayloadFormat = *req.PayloadFormat
+	}
+	if req.TransformationID != nil {
+		current.TransformationID = *req.TransformationID
+		current.TransformationVersionID = ""
+		if current.TransformationID != "" {
+			versionID, err := s.activeTransformationVersionID(ctx, tx, tenantID, current.TransformationID)
+			if err != nil {
+				return domain.Subscription{}, err
+			}
+			current.TransformationVersionID = versionID
+		}
+	}
+	if req.State != nil {
+		current.State = *req.State
+	}
+	err = tx.QueryRow(ctx, `
+		UPDATE subscriptions
+		SET endpoint_id=$3, event_types=$4, payload_format=$5, transformation_id=$6, transformation_version_id=$7, state=$8, version=version+1
+		WHERE tenant_id=$1 AND id=$2
+		RETURNING id, tenant_id, endpoint_id, event_types, payload_format, transformation_id, transformation_version_id, state, version, active_version_id, created_at`,
+		tenantID, subscriptionID, current.EndpointID, current.EventTypes, current.PayloadFormat, current.TransformationID, current.TransformationVersionID, current.State,
+	).Scan(&current.ID, &current.TenantID, &current.EndpointID, &current.EventTypes, &current.PayloadFormat, &current.TransformationID, &current.TransformationVersionID, &current.State, &current.Version, &current.ActiveVersionID, &current.CreatedAt)
+	if err != nil {
+		return domain.Subscription{}, err
+	}
+	version, err := s.insertSubscriptionVersion(ctx, tx, current, actorID)
+	if err != nil {
+		return domain.Subscription{}, err
+	}
+	current.ActiveVersionID = version.ID
+	if _, err := tx.Exec(ctx, `UPDATE subscriptions SET active_version_id=$1 WHERE tenant_id=$2 AND id=$3`, version.ID, tenantID, subscriptionID); err != nil {
+		return domain.Subscription{}, err
+	}
+	if _, err := recordAuditEventTx(ctx, tx, auditEventInput{TenantID: tenantID, ActorID: actorID, Action: action, Resource: "subscription", ResourceID: subscriptionID, Reason: req.Reason}); err != nil {
+		return domain.Subscription{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return domain.Subscription{}, err
+	}
+	return current, nil
 }
 
 func (s *Store) CreateRoute(ctx context.Context, route domain.Route) (domain.Route, error) {
@@ -1620,6 +1707,21 @@ func (s *Store) activeTransformationVersionID(ctx context.Context, tx pgx.Tx, te
 		return "", app.ErrNotFound
 	}
 	return versionID, err
+}
+
+func (s *Store) requireActiveEndpoint(ctx context.Context, tx pgx.Tx, tenantID, endpointID string) error {
+	var state string
+	err := tx.QueryRow(ctx, `SELECT state FROM endpoints WHERE tenant_id=$1 AND id=$2`, tenantID, endpointID).Scan(&state)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return app.ErrNotFound
+	}
+	if err != nil {
+		return err
+	}
+	if state != domain.StateActive {
+		return fmt.Errorf("%w: endpoint disabled", app.ErrInvalidInput)
+	}
+	return nil
 }
 
 func (s *Store) ListEvents(ctx context.Context, tenantID string, limit int) ([]domain.Event, error) {

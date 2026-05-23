@@ -40,6 +40,9 @@ type ControlStore interface {
 	TestEndpoint(ctx context.Context, tenantID, endpointID, actorID, reason string) (domain.Delivery, error)
 	CreateSubscription(ctx context.Context, subscription domain.Subscription) (domain.Subscription, error)
 	ListSubscriptions(ctx context.Context, tenantID string, limit int) ([]domain.Subscription, error)
+	GetSubscription(ctx context.Context, tenantID, subscriptionID string) (domain.Subscription, error)
+	UpdateSubscription(ctx context.Context, tenantID, subscriptionID, actorID string, req UpdateSubscriptionRequest) (domain.Subscription, error)
+	DeleteSubscription(ctx context.Context, tenantID, subscriptionID, actorID, reason string) (domain.Subscription, error)
 	CreateRoute(ctx context.Context, route domain.Route) (domain.Route, error)
 	ListRoutes(ctx context.Context, tenantID string, limit int) ([]domain.Route, error)
 	ListRouteVersions(ctx context.Context, tenantID, routeID string, limit int) ([]domain.RouteVersion, error)
@@ -182,6 +185,15 @@ type CreateSubscriptionRequest struct {
 	EventTypes       []string `json:"event_types"`
 	PayloadFormat    string   `json:"payload_format"`
 	TransformationID string   `json:"transformation_id,omitempty"`
+}
+
+type UpdateSubscriptionRequest struct {
+	EndpointID       *string  `json:"endpoint_id,omitempty"`
+	EventTypes       []string `json:"event_types,omitempty"`
+	PayloadFormat    *string  `json:"payload_format,omitempty"`
+	TransformationID *string  `json:"transformation_id,omitempty"`
+	State            *string  `json:"state,omitempty"`
+	Reason           string   `json:"reason"`
 }
 
 type CreateRouteRequest struct {
@@ -656,7 +668,8 @@ func (s *ControlService) CreateSubscription(ctx context.Context, actor authz.Act
 	if !authz.Can(actor, "subscriptions:write", actor.TenantID) {
 		return domain.Subscription{}, ErrForbidden
 	}
-	if req.EndpointID == "" || len(req.EventTypes) == 0 {
+	eventTypes := normalizeEventTypes(req.EventTypes)
+	if strings.TrimSpace(req.EndpointID) == "" || len(eventTypes) == 0 {
 		return domain.Subscription{}, fmt.Errorf("%w: endpoint_id and event_types are required", ErrInvalidInput)
 	}
 	payloadFormat := req.PayloadFormat
@@ -665,9 +678,9 @@ func (s *ControlService) CreateSubscription(ctx context.Context, actor authz.Act
 	}
 	return s.store.CreateSubscription(ctx, domain.Subscription{
 		TenantID:         actor.TenantID,
-		EndpointID:       req.EndpointID,
-		EventTypes:       req.EventTypes,
-		PayloadFormat:    payloadFormat,
+		EndpointID:       strings.TrimSpace(req.EndpointID),
+		EventTypes:       eventTypes,
+		PayloadFormat:    strings.TrimSpace(payloadFormat),
 		TransformationID: strings.TrimSpace(req.TransformationID),
 		State:            domain.StateActive,
 	})
@@ -678,6 +691,70 @@ func (s *ControlService) ListSubscriptions(ctx context.Context, actor authz.Acto
 		return nil, ErrForbidden
 	}
 	return s.store.ListSubscriptions(ctx, actor.TenantID, normalizeLimit(limit))
+}
+
+func (s *ControlService) GetSubscription(ctx context.Context, actor authz.Actor, subscriptionID string) (domain.Subscription, error) {
+	if !authz.Can(actor, "subscriptions:read", actor.TenantID) {
+		return domain.Subscription{}, ErrForbidden
+	}
+	if strings.TrimSpace(subscriptionID) == "" {
+		return domain.Subscription{}, fmt.Errorf("%w: subscription_id is required", ErrInvalidInput)
+	}
+	return s.store.GetSubscription(ctx, actor.TenantID, subscriptionID)
+}
+
+func (s *ControlService) UpdateSubscription(ctx context.Context, actor authz.Actor, subscriptionID string, req UpdateSubscriptionRequest) (domain.Subscription, error) {
+	if !authz.Can(actor, "subscriptions:write", actor.TenantID) {
+		return domain.Subscription{}, ErrForbidden
+	}
+	if strings.TrimSpace(subscriptionID) == "" || strings.TrimSpace(req.Reason) == "" {
+		return domain.Subscription{}, fmt.Errorf("%w: subscription_id and reason are required", ErrInvalidInput)
+	}
+	if req.EndpointID == nil && req.EventTypes == nil && req.PayloadFormat == nil && req.TransformationID == nil && req.State == nil {
+		return domain.Subscription{}, fmt.Errorf("%w: at least one subscription field is required", ErrInvalidInput)
+	}
+	if req.EndpointID != nil {
+		endpointID := strings.TrimSpace(*req.EndpointID)
+		if endpointID == "" {
+			return domain.Subscription{}, fmt.Errorf("%w: endpoint_id cannot be empty", ErrInvalidInput)
+		}
+		req.EndpointID = &endpointID
+	}
+	if req.EventTypes != nil {
+		req.EventTypes = normalizeEventTypes(req.EventTypes)
+		if len(req.EventTypes) == 0 {
+			return domain.Subscription{}, fmt.Errorf("%w: event_types cannot be empty", ErrInvalidInput)
+		}
+	}
+	if req.PayloadFormat != nil {
+		payloadFormat := strings.TrimSpace(*req.PayloadFormat)
+		if payloadFormat == "" {
+			return domain.Subscription{}, fmt.Errorf("%w: payload_format cannot be empty", ErrInvalidInput)
+		}
+		req.PayloadFormat = &payloadFormat
+	}
+	if req.TransformationID != nil {
+		transformationID := strings.TrimSpace(*req.TransformationID)
+		req.TransformationID = &transformationID
+	}
+	if req.State != nil {
+		state := strings.TrimSpace(*req.State)
+		if state != domain.StateActive && state != domain.StateDisabled {
+			return domain.Subscription{}, fmt.Errorf("%w: subscription state must be active or disabled", ErrInvalidInput)
+		}
+		req.State = &state
+	}
+	return s.store.UpdateSubscription(ctx, actor.TenantID, subscriptionID, actor.ID, req)
+}
+
+func (s *ControlService) DeleteSubscription(ctx context.Context, actor authz.Actor, subscriptionID string, req StateChangeRequest) (domain.Subscription, error) {
+	if !authz.Can(actor, "subscriptions:write", actor.TenantID) {
+		return domain.Subscription{}, ErrForbidden
+	}
+	if strings.TrimSpace(subscriptionID) == "" || strings.TrimSpace(req.Reason) == "" {
+		return domain.Subscription{}, fmt.Errorf("%w: subscription_id and reason are required", ErrInvalidInput)
+	}
+	return s.store.DeleteSubscription(ctx, actor.TenantID, subscriptionID, actor.ID, req.Reason)
 }
 
 func (s *ControlService) CreateRoute(ctx context.Context, actor authz.Actor, req CreateRouteRequest) (domain.Route, error) {
@@ -1566,6 +1643,23 @@ func normalizeState(state string) string {
 
 func normalizeOptionalState(state string) string {
 	return strings.TrimSpace(state)
+}
+
+func normalizeEventTypes(eventTypes []string) []string {
+	seen := make(map[string]struct{}, len(eventTypes))
+	out := make([]string, 0, len(eventTypes))
+	for _, eventType := range eventTypes {
+		eventType = strings.TrimSpace(eventType)
+		if eventType == "" {
+			continue
+		}
+		if _, ok := seen[eventType]; ok {
+			continue
+		}
+		seen[eventType] = struct{}{}
+		out = append(out, eventType)
+	}
+	return out
 }
 
 func normalizeScopes(scopes []string) []string {

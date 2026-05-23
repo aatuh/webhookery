@@ -126,6 +126,14 @@ audit evidence. Endpoint signing secrets and mTLS key material are managed
 through their dedicated rotation/create paths and are never returned by these
 metadata APIs.
 
+Subscription reads, updates, and deletes are tenant-scoped. Updating a
+subscription can change its endpoint, event types, payload format,
+transformation reference, or state, and writes a new immutable subscription
+version plus audit event. Endpoint references are checked against active
+endpoints in the same tenant before subscription creation or endpoint changes.
+`DELETE /v1/subscriptions/{id}` and `whcp subscriptions delete` disable future
+fanout without deleting historical delivery or config-version evidence.
+
 Endpoints may also be created with a PEM client certificate and private key for
 outbound mTLS. The API accepts `mtls_client_cert_pem` and
 `mtls_client_key_pem` together, validates that they form a client certificate

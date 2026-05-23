@@ -264,6 +264,20 @@ func TestEndpointUpdateRequiresEndpointsWrite(t *testing.T) {
 	}
 }
 
+func TestSubscriptionUpdateRequiresSubscriptionsWrite(t *testing.T) {
+	server := testServerWithActor(authz.Actor{ID: "usr_1", TenantID: "ten_1", Role: authz.RoleDeveloper, Scopes: []string{"subscriptions:read"}})
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPatch, "/v1/subscriptions/sub_1", bytes.NewBufferString(`{"state":"disabled","reason":"pause"}`))
+	req.Header.Set("Authorization", "Bearer token")
+	req.Header.Set("Content-Type", "application/json")
+
+	server.Routes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("expected 403, got %d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
 func TestReconciliationCreateRequiresReplayWrite(t *testing.T) {
 	server := testServerWithActor(authz.Actor{ID: "usr_1", TenantID: "ten_1", Role: authz.RoleSupport, Scopes: []string{"replay:read"}})
 	rec := httptest.NewRecorder()
@@ -389,6 +403,15 @@ func (noopControlStore) CreateSubscription(context.Context, domain.Subscription)
 }
 func (noopControlStore) ListSubscriptions(context.Context, string, int) ([]domain.Subscription, error) {
 	return nil, nil
+}
+func (noopControlStore) GetSubscription(context.Context, string, string) (domain.Subscription, error) {
+	return domain.Subscription{}, nil
+}
+func (noopControlStore) UpdateSubscription(context.Context, string, string, string, app.UpdateSubscriptionRequest) (domain.Subscription, error) {
+	return domain.Subscription{}, nil
+}
+func (noopControlStore) DeleteSubscription(context.Context, string, string, string, string) (domain.Subscription, error) {
+	return domain.Subscription{}, nil
 }
 func (noopControlStore) CreateRoute(context.Context, domain.Route) (domain.Route, error) {
 	return domain.Route{}, nil

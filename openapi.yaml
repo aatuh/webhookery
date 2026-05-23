@@ -473,6 +473,10 @@ paths:
       responses:
         "200":
           description: Paginated subscription list.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SubscriptionPage"
     post:
       summary: Create subscription
       security:
@@ -486,6 +490,78 @@ paths:
       responses:
         "201":
           description: Subscription created.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Subscription"
+  /v1/subscriptions/{subscription_id}:
+    get:
+      summary: Get subscription
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: subscription_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Subscription metadata.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Subscription"
+        "404":
+          description: Subscription not found in this tenant.
+    patch:
+      summary: Update subscription
+      description: Updates fanout configuration and records a new immutable subscription version.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: subscription_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateSubscriptionRequest"
+      responses:
+        "200":
+          description: Updated subscription metadata.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Subscription"
+    delete:
+      summary: Disable subscription
+      description: Disables future fanout without deleting historical deliveries or configuration evidence.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: subscription_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ReasonRequest"
+      responses:
+        "200":
+          description: Disabled subscription metadata.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Subscription"
   /v1/transformations:
     get:
       summary: List deterministic transformations
@@ -1980,6 +2056,72 @@ components:
         transformation_id:
           type: string
           description: Optional active transformation to snapshot onto new delivery payloads.
+    UpdateSubscriptionRequest:
+      type: object
+      required: [reason]
+      additionalProperties: false
+      properties:
+        endpoint_id:
+          type: string
+        event_types:
+          type: array
+          items:
+            type: string
+          minItems: 1
+        payload_format:
+          type: string
+        transformation_id:
+          type: string
+          description: Optional active transformation. Use an empty string to clear an existing transformation.
+        state:
+          type: string
+          enum: [active, disabled]
+        reason:
+          type: string
+          minLength: 1
+    Subscription:
+      type: object
+      required: [id, tenant_id, endpoint_id, event_types, payload_format, state, version, created_at]
+      properties:
+        id:
+          type: string
+        tenant_id:
+          type: string
+        endpoint_id:
+          type: string
+        event_types:
+          type: array
+          items:
+            type: string
+        payload_format:
+          type: string
+        transformation_id:
+          type: string
+        transformation_version_id:
+          type: string
+        state:
+          type: string
+          enum: [active, disabled]
+        version:
+          type: integer
+        active_version_id:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+    SubscriptionPage:
+      type: object
+      required: [data, has_more]
+      properties:
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/Subscription"
+        next_cursor:
+          type: string
+          nullable: true
+        has_more:
+          type: boolean
     CreateRouteRequest:
       type: object
       required: [source_id, name, endpoint_id]

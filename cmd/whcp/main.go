@@ -451,23 +451,69 @@ func runEndpoints(args []string) error {
 }
 
 func runSubscriptions(args []string) error {
-	if len(args) == 0 || args[0] != "create" {
-		return fmt.Errorf("usage: whcp subscriptions create --base-url URL --api-key KEY --endpoint-id ID --event-types type[,type]")
+	if len(args) == 0 {
+		return fmt.Errorf("usage: whcp subscriptions <list|get|create|update|delete>")
 	}
-	fs := flag.NewFlagSet("subscriptions create", flag.ContinueOnError)
+	fs := flag.NewFlagSet("subscriptions "+args[0], flag.ContinueOnError)
 	baseURL := fs.String("base-url", "http://localhost:8080", "API base URL")
 	apiKey := fs.String("api-key", os.Getenv("WEBHOOKERY_API_KEY"), "API key")
+	subscriptionID := fs.String("subscription-id", "", "subscription id")
 	endpointID := fs.String("endpoint-id", "", "endpoint id")
 	eventTypes := fs.String("event-types", "", "comma-separated event types")
+	payloadFormat := fs.String("payload-format", "", "payload format")
 	transformationID := fs.String("transformation-id", "", "optional transformation id")
+	state := fs.String("state", "", "active or disabled")
+	reason := fs.String("reason", "", "operator reason")
 	if err := fs.Parse(args[1:]); err != nil {
 		return err
 	}
-	return postJSON(*baseURL, *apiKey, "/v1/subscriptions", map[string]any{
-		"endpoint_id":       *endpointID,
-		"event_types":       splitCSV(*eventTypes),
-		"transformation_id": *transformationID,
-	})
+	switch args[0] {
+	case "list":
+		return getJSON(*baseURL, *apiKey, "/v1/subscriptions")
+	case "get":
+		if strings.TrimSpace(*subscriptionID) == "" {
+			return fmt.Errorf("subscription-id is required")
+		}
+		return getJSON(*baseURL, *apiKey, "/v1/subscriptions/"+url.PathEscape(*subscriptionID))
+	case "create":
+		body := map[string]any{
+			"endpoint_id":       *endpointID,
+			"event_types":       splitCSV(*eventTypes),
+			"transformation_id": *transformationID,
+		}
+		if strings.TrimSpace(*payloadFormat) != "" {
+			body["payload_format"] = *payloadFormat
+		}
+		return postJSON(*baseURL, *apiKey, "/v1/subscriptions", body)
+	case "update":
+		if strings.TrimSpace(*subscriptionID) == "" {
+			return fmt.Errorf("subscription-id is required")
+		}
+		body := map[string]any{"reason": *reason}
+		if strings.TrimSpace(*endpointID) != "" {
+			body["endpoint_id"] = *endpointID
+		}
+		if strings.TrimSpace(*eventTypes) != "" {
+			body["event_types"] = splitCSV(*eventTypes)
+		}
+		if strings.TrimSpace(*payloadFormat) != "" {
+			body["payload_format"] = *payloadFormat
+		}
+		if strings.TrimSpace(*transformationID) != "" {
+			body["transformation_id"] = *transformationID
+		}
+		if strings.TrimSpace(*state) != "" {
+			body["state"] = *state
+		}
+		return patchJSON(*baseURL, *apiKey, "/v1/subscriptions/"+url.PathEscape(*subscriptionID), body)
+	case "delete":
+		if strings.TrimSpace(*subscriptionID) == "" {
+			return fmt.Errorf("subscription-id is required")
+		}
+		return deleteJSON(*baseURL, *apiKey, "/v1/subscriptions/"+url.PathEscape(*subscriptionID), map[string]string{"reason": *reason})
+	default:
+		return fmt.Errorf("usage: whcp subscriptions <list|get|create|update|delete>")
+	}
 }
 
 func runRetryPolicies(args []string) error {
