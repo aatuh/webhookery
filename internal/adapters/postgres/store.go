@@ -2513,6 +2513,23 @@ func (s *Store) createDeliveryFromExisting(ctx context.Context, tenantID, delive
 	if err != nil {
 		return 0, replayEvidence{}, err
 	}
+	if opts.ConfigMode != app.ReplayConfigOriginal && (routeID != "" || subscriptionID != "") {
+		current, ok, err := s.currentDeliveryReplayConfig(ctx, tenantID, routeID, subscriptionID)
+		if err != nil {
+			return 0, replayEvidence{}, err
+		}
+		if !ok {
+			return 0, replayEvidence{}, nil
+		}
+		endpointID = current.endpointID
+		routeVersionID = current.routeVersionID
+		subscriptionVersionID = current.subscriptionVersionID
+		retryPolicyID = current.retryPolicyID
+		transformationVersionID = current.transformationVersionID
+		adapterVersionID = ""
+		normalizedID = ""
+		deliveryPayloadID = ""
+	}
 	newDeliveryID := mustID("del")
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
@@ -2523,7 +2540,7 @@ func (s *Store) createDeliveryFromExisting(ctx context.Context, tenantID, delive
 		return 0, replayEvidence{}, err
 	}
 	newPayloadID := ""
-	if deliveryPayloadID != "" {
+	if deliveryPayloadID != "" && opts.ConfigMode == app.ReplayConfigOriginal {
 		newPayloadID, normalizedID, adapterVersionID, transformationVersionID, err = s.cloneDeliveryPayload(ctx, tx, tenantID, deliveryPayloadID, newDeliveryID)
 	} else {
 		newPayloadID, normalizedID, adapterVersionID, err = s.createDeliveryPayload(ctx, tx, tenantID, eventID, newDeliveryID, transformationVersionID)
@@ -2539,6 +2556,55 @@ func (s *Store) createDeliveryFromExisting(ctx context.Context, tenantID, delive
 		configMode: opts.ConfigMode, routeVersionID: routeVersionID, subscriptionVersionID: subscriptionVersionID, retryPolicyID: retryPolicyID,
 		adapterVersionID: adapterVersionID, normalizedEnvelopeID: normalizedID, transformationVersionID: transformationVersionID, deliveryPayloadID: newPayloadID,
 	}, nil
+}
+
+type currentReplayConfig struct {
+	endpointID              string
+	routeVersionID          string
+	subscriptionVersionID   string
+	retryPolicyID           string
+	transformationVersionID string
+}
+
+func (s *Store) currentDeliveryReplayConfig(ctx context.Context, tenantID, routeID, subscriptionID string) (currentReplayConfig, bool, error) {
+	var out currentReplayConfig
+	if routeID != "" {
+		err := s.pool.QueryRow(ctx, `
+			SELECT r.endpoint_id, r.active_version_id,
+			       COALESCE(NULLIF(r.retry_policy_id,''), NULLIF(e.retry_policy_id,''), ''),
+			       COALESCE(NULLIF(r.transformation_version_id,''),'')
+			FROM routes r
+			JOIN endpoints e ON e.tenant_id=r.tenant_id AND e.id=r.endpoint_id
+			WHERE r.tenant_id=$1 AND r.id=$2 AND r.state='active'`,
+			tenantID, routeID,
+		).Scan(&out.endpointID, &out.routeVersionID, &out.retryPolicyID, &out.transformationVersionID)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return currentReplayConfig{}, false, nil
+		}
+		if err != nil {
+			return currentReplayConfig{}, false, err
+		}
+		return out, true, nil
+	}
+	if subscriptionID != "" {
+		err := s.pool.QueryRow(ctx, `
+			SELECT s.endpoint_id, s.active_version_id,
+			       COALESCE(NULLIF(e.retry_policy_id,''), ''),
+			       COALESCE(NULLIF(s.transformation_version_id,''),'')
+			FROM subscriptions s
+			JOIN endpoints e ON e.tenant_id=s.tenant_id AND e.id=s.endpoint_id
+			WHERE s.tenant_id=$1 AND s.id=$2 AND s.state='active'`,
+			tenantID, subscriptionID,
+		).Scan(&out.endpointID, &out.subscriptionVersionID, &out.retryPolicyID, &out.transformationVersionID)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return currentReplayConfig{}, false, nil
+		}
+		if err != nil {
+			return currentReplayConfig{}, false, err
+		}
+		return out, true, nil
+	}
+	return out, true, nil
 }
 
 func (s *Store) createDeliveriesFromOriginalEvent(ctx context.Context, tenantID, eventID string, opts deliveryCreationOptions) (int, error) {
