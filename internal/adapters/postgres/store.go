@@ -1264,6 +1264,113 @@ func (s *Store) ListRetryPolicies(ctx context.Context, tenantID string, limit in
 	return out, rows.Err()
 }
 
+func (s *Store) GetRetryPolicy(ctx context.Context, tenantID, retryPolicyID string) (domain.RetryPolicy, error) {
+	row := s.pool.QueryRow(ctx, `
+		SELECT id, tenant_id, name, version, state, max_attempts, max_duration_seconds, initial_delay_seconds, max_delay_seconds, rate_limit_per_minute, created_by, created_at
+		FROM retry_policies
+		WHERE tenant_id=$1 AND id=$2`, tenantID, retryPolicyID)
+	item, err := scanRetryPolicy(row)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return domain.RetryPolicy{}, app.ErrNotFound
+	}
+	return item, err
+}
+
+func (s *Store) UpdateRetryPolicy(ctx context.Context, tenantID, retryPolicyID, actorID string, req app.UpdateRetryPolicyRequest) (domain.RetryPolicy, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return domain.RetryPolicy{}, err
+	}
+	defer rollback(ctx, tx)
+	current, err := scanRetryPolicy(tx.QueryRow(ctx, `
+		SELECT id, tenant_id, name, version, state, max_attempts, max_duration_seconds, initial_delay_seconds, max_delay_seconds, rate_limit_per_minute, created_by, created_at
+		FROM retry_policies
+		WHERE tenant_id=$1 AND id=$2 FOR UPDATE`, tenantID, retryPolicyID))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return domain.RetryPolicy{}, app.ErrNotFound
+	}
+	if err != nil {
+		return domain.RetryPolicy{}, err
+	}
+	item := current
+	item.ID = mustID("rtp")
+	item.CreatedBy = actorID
+	if req.Name != nil {
+		item.Name = *req.Name
+	}
+	if req.MaxAttempts != nil {
+		item.MaxAttempts = *req.MaxAttempts
+	}
+	if req.MaxDurationSeconds != nil {
+		item.MaxDurationSeconds = *req.MaxDurationSeconds
+	}
+	if req.InitialDelaySeconds != nil {
+		item.InitialDelaySeconds = *req.InitialDelaySeconds
+	}
+	if req.MaxDelaySeconds != nil {
+		item.MaxDelaySeconds = *req.MaxDelaySeconds
+	}
+	if req.RateLimitPerMinute != nil {
+		item.RateLimitPerMinute = *req.RateLimitPerMinute
+	}
+	if req.State != nil {
+		item.State = *req.State
+	}
+	if item.InitialDelaySeconds > item.MaxDelaySeconds {
+		return domain.RetryPolicy{}, fmt.Errorf("%w: initial_delay_seconds must be no greater than max_delay_seconds", app.ErrInvalidInput)
+	}
+	if err := tx.QueryRow(ctx, `SELECT COALESCE(max(version),0)+1 FROM retry_policies WHERE tenant_id=$1 AND name=$2`, tenantID, item.Name).Scan(&item.Version); err != nil {
+		return domain.RetryPolicy{}, err
+	}
+	err = tx.QueryRow(ctx, `
+		INSERT INTO retry_policies(id, tenant_id, name, version, state, max_attempts, max_duration_seconds, initial_delay_seconds, max_delay_seconds, rate_limit_per_minute, created_by)
+		VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+		RETURNING created_at`,
+		item.ID, item.TenantID, item.Name, item.Version, item.State, item.MaxAttempts, item.MaxDurationSeconds,
+		item.InitialDelaySeconds, item.MaxDelaySeconds, item.RateLimitPerMinute, item.CreatedBy,
+	).Scan(&item.CreatedAt)
+	if err != nil {
+		return domain.RetryPolicy{}, err
+	}
+	if _, err := s.insertConfigVersion(ctx, tx, tenantID, domain.ConfigResourceRetryPolicy, item.ID, item.Version, item, actorID); err != nil {
+		return domain.RetryPolicy{}, err
+	}
+	if _, err := recordAuditEventTx(ctx, tx, auditEventInput{TenantID: tenantID, ActorID: actorID, Action: "retry_policy.updated", Resource: "retry_policy", ResourceID: item.ID, Reason: req.Reason}); err != nil {
+		return domain.RetryPolicy{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return domain.RetryPolicy{}, err
+	}
+	return item, nil
+}
+
+func (s *Store) DeleteRetryPolicy(ctx context.Context, tenantID, retryPolicyID, actorID, reason string) (domain.RetryPolicy, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return domain.RetryPolicy{}, err
+	}
+	defer rollback(ctx, tx)
+	item, err := scanRetryPolicy(tx.QueryRow(ctx, `
+		UPDATE retry_policies
+		SET state='disabled'
+		WHERE tenant_id=$1 AND id=$2
+		RETURNING id, tenant_id, name, version, state, max_attempts, max_duration_seconds, initial_delay_seconds, max_delay_seconds, rate_limit_per_minute, created_by, created_at`,
+		tenantID, retryPolicyID))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return domain.RetryPolicy{}, app.ErrNotFound
+	}
+	if err != nil {
+		return domain.RetryPolicy{}, err
+	}
+	if _, err := recordAuditEventTx(ctx, tx, auditEventInput{TenantID: tenantID, ActorID: actorID, Action: "retry_policy.disabled", Resource: "retry_policy", ResourceID: retryPolicyID, Reason: reason}); err != nil {
+		return domain.RetryPolicy{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return domain.RetryPolicy{}, err
+	}
+	return item, nil
+}
+
 func (s *Store) CreateTransformation(ctx context.Context, tenantID, actorID string, req app.CreateTransformationRequest) (domain.Transformation, error) {
 	item := domain.Transformation{
 		ID:        mustID("trn"),

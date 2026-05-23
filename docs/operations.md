@@ -141,6 +141,13 @@ immutable route version for each mutation. `DELETE /v1/routes/{id}` and `whcp
 routes delete` move the route to `inactive`; historical route decisions,
 delivery rows, replay receipts, and config versions are retained.
 
+Retry policy reads, updates, and deletes are tenant-scoped under the routes
+permission family. `PATCH /v1/retry-policies/{id}` and `whcp retry-policies
+update` create a new retry policy version row from the referenced policy
+instead of rewriting it in place. `DELETE /v1/retry-policies/{id}` disables
+future use of the referenced policy row while retaining delivery and audit
+evidence that already points at it.
+
 Endpoints may also be created with a PEM client certificate and private key for
 outbound mTLS. The API accepts `mtls_client_cert_pem` and
 `mtls_client_key_pem` together, validates that they form a client certificate

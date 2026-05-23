@@ -711,6 +711,74 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/RetryPolicy"
+  /v1/retry-policies/{retry_policy_id}:
+    get:
+      summary: Get retry policy
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: retry_policy_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Retry policy metadata.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RetryPolicy"
+        "404":
+          description: Retry policy not found in this tenant.
+    patch:
+      summary: Create a new retry policy version from an existing policy
+      description: Leaves the existing policy row intact and returns the new version row.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: retry_policy_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateRetryPolicyRequest"
+      responses:
+        "200":
+          description: New retry policy version.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RetryPolicy"
+    delete:
+      summary: Disable retry policy
+      description: Disables future use of the referenced retry policy row without deleting historical delivery evidence.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: retry_policy_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ReasonRequest"
+      responses:
+        "200":
+          description: Disabled retry policy metadata.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RetryPolicy"
   /v1/routes:
     get:
       summary: List routes
@@ -2726,12 +2794,39 @@ components:
           type: string
           enum: [active, disabled]
           default: active
-        legal_hold:
-          type: boolean
-          default: false
-        hold_reason:
+    UpdateRetryPolicyRequest:
+      type: object
+      required: [reason]
+      additionalProperties: false
+      properties:
+        name:
           type: string
-          description: Required when legal_hold is true.
+          minLength: 1
+        max_attempts:
+          type: integer
+          minimum: 1
+          maximum: 100
+        max_duration_seconds:
+          type: integer
+          minimum: 1
+          maximum: 2592000
+        initial_delay_seconds:
+          type: integer
+          minimum: 1
+        max_delay_seconds:
+          type: integer
+          minimum: 1
+          maximum: 86400
+        rate_limit_per_minute:
+          type: integer
+          minimum: 0
+          maximum: 60000
+        state:
+          type: string
+          enum: [active, disabled]
+        reason:
+          type: string
+          minLength: 1
     RetryPolicy:
       type: object
       properties:
@@ -2746,10 +2841,6 @@ components:
         state:
           type: string
           enum: [active, disabled]
-        legal_hold:
-          type: boolean
-        hold_reason:
-          type: string
         max_attempts:
           type: integer
         max_duration_seconds:

@@ -88,6 +88,9 @@ func (s *Server) Routes() http.Handler {
 			r.Delete("/subscriptions/{subscription_id}", s.deleteSubscription)
 			r.Get("/retry-policies", s.listRetryPolicies)
 			r.Post("/retry-policies", s.createRetryPolicy)
+			r.Get("/retry-policies/{retry_policy_id}", s.getRetryPolicy)
+			r.Patch("/retry-policies/{retry_policy_id}", s.updateRetryPolicy)
+			r.Delete("/retry-policies/{retry_policy_id}", s.deleteRetryPolicy)
 			r.Get("/routes", s.listRoutes)
 			r.Post("/routes", s.createRoute)
 			r.Get("/routes/{route_id}", s.getRoute)
@@ -548,6 +551,41 @@ func (s *Server) listRetryPolicies(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, page(items))
+}
+
+func (s *Server) getRetryPolicy(w http.ResponseWriter, r *http.Request) {
+	item, err := s.cfg.Control.GetRetryPolicy(r.Context(), actorFrom(r), chi.URLParam(r, "retry_policy_id"))
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, item)
+}
+
+func (s *Server) updateRetryPolicy(w http.ResponseWriter, r *http.Request) {
+	var req app.UpdateRetryPolicyRequest
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	item, err := s.cfg.Control.UpdateRetryPolicy(r.Context(), actorFrom(r), chi.URLParam(r, "retry_policy_id"), req)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, item)
+}
+
+func (s *Server) deleteRetryPolicy(w http.ResponseWriter, r *http.Request) {
+	var req app.StateChangeRequest
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	item, err := s.cfg.Control.DeleteRetryPolicy(r.Context(), actorFrom(r), chi.URLParam(r, "retry_policy_id"), req)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, item)
 }
 
 func (s *Server) createRoute(w http.ResponseWriter, r *http.Request) {

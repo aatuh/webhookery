@@ -53,6 +53,9 @@ type ControlStore interface {
 	DryRunRoute(ctx context.Context, tenantID, routeID, eventID string) (RouteDryRun, error)
 	CreateRetryPolicy(ctx context.Context, tenantID, actorID string, req CreateRetryPolicyRequest) (domain.RetryPolicy, error)
 	ListRetryPolicies(ctx context.Context, tenantID string, limit int) ([]domain.RetryPolicy, error)
+	GetRetryPolicy(ctx context.Context, tenantID, retryPolicyID string) (domain.RetryPolicy, error)
+	UpdateRetryPolicy(ctx context.Context, tenantID, retryPolicyID, actorID string, req UpdateRetryPolicyRequest) (domain.RetryPolicy, error)
+	DeleteRetryPolicy(ctx context.Context, tenantID, retryPolicyID, actorID, reason string) (domain.RetryPolicy, error)
 	CreateEventType(ctx context.Context, eventType domain.EventType) (domain.EventType, error)
 	ListEventTypes(ctx context.Context, tenantID string, limit int) ([]domain.EventType, error)
 	CreateEventSchema(ctx context.Context, schema domain.EventSchema) (domain.EventSchema, error)
@@ -279,6 +282,17 @@ type CreateRetryPolicyRequest struct {
 	MaxDelaySeconds     int    `json:"max_delay_seconds"`
 	RateLimitPerMinute  int    `json:"rate_limit_per_minute,omitempty"`
 	State               string `json:"state,omitempty"`
+}
+
+type UpdateRetryPolicyRequest struct {
+	Name                *string `json:"name,omitempty"`
+	MaxAttempts         *int    `json:"max_attempts,omitempty"`
+	MaxDurationSeconds  *int    `json:"max_duration_seconds,omitempty"`
+	InitialDelaySeconds *int    `json:"initial_delay_seconds,omitempty"`
+	MaxDelaySeconds     *int    `json:"max_delay_seconds,omitempty"`
+	RateLimitPerMinute  *int    `json:"rate_limit_per_minute,omitempty"`
+	State               *string `json:"state,omitempty"`
+	Reason              string  `json:"reason"`
 }
 
 const (
@@ -947,6 +961,71 @@ func (s *ControlService) ListRetryPolicies(ctx context.Context, actor authz.Acto
 		return nil, ErrForbidden
 	}
 	return s.store.ListRetryPolicies(ctx, actor.TenantID, normalizeLimit(limit))
+}
+
+func (s *ControlService) GetRetryPolicy(ctx context.Context, actor authz.Actor, retryPolicyID string) (domain.RetryPolicy, error) {
+	if !authz.Can(actor, "routes:read", actor.TenantID) {
+		return domain.RetryPolicy{}, ErrForbidden
+	}
+	if strings.TrimSpace(retryPolicyID) == "" {
+		return domain.RetryPolicy{}, fmt.Errorf("%w: retry_policy_id is required", ErrInvalidInput)
+	}
+	return s.store.GetRetryPolicy(ctx, actor.TenantID, retryPolicyID)
+}
+
+func (s *ControlService) UpdateRetryPolicy(ctx context.Context, actor authz.Actor, retryPolicyID string, req UpdateRetryPolicyRequest) (domain.RetryPolicy, error) {
+	if !authz.Can(actor, "routes:write", actor.TenantID) {
+		return domain.RetryPolicy{}, ErrForbidden
+	}
+	if strings.TrimSpace(retryPolicyID) == "" || strings.TrimSpace(req.Reason) == "" {
+		return domain.RetryPolicy{}, fmt.Errorf("%w: retry_policy_id and reason are required", ErrInvalidInput)
+	}
+	if req.Name == nil && req.MaxAttempts == nil && req.MaxDurationSeconds == nil && req.InitialDelaySeconds == nil && req.MaxDelaySeconds == nil && req.RateLimitPerMinute == nil && req.State == nil {
+		return domain.RetryPolicy{}, fmt.Errorf("%w: at least one retry policy field is required", ErrInvalidInput)
+	}
+	if req.Name != nil {
+		name := strings.TrimSpace(*req.Name)
+		if name == "" {
+			return domain.RetryPolicy{}, fmt.Errorf("%w: name cannot be empty", ErrInvalidInput)
+		}
+		req.Name = &name
+	}
+	if req.MaxAttempts != nil && (*req.MaxAttempts <= 0 || *req.MaxAttempts > 100) {
+		return domain.RetryPolicy{}, fmt.Errorf("%w: max_attempts must be between 1 and 100", ErrInvalidInput)
+	}
+	if req.MaxDurationSeconds != nil && (*req.MaxDurationSeconds <= 0 || *req.MaxDurationSeconds > int((30*24*time.Hour)/time.Second)) {
+		return domain.RetryPolicy{}, fmt.Errorf("%w: max_duration_seconds must be between 1 and 2592000", ErrInvalidInput)
+	}
+	if req.InitialDelaySeconds != nil && *req.InitialDelaySeconds <= 0 {
+		return domain.RetryPolicy{}, fmt.Errorf("%w: initial_delay_seconds must be positive", ErrInvalidInput)
+	}
+	if req.MaxDelaySeconds != nil && (*req.MaxDelaySeconds <= 0 || *req.MaxDelaySeconds > int((24*time.Hour)/time.Second)) {
+		return domain.RetryPolicy{}, fmt.Errorf("%w: max_delay_seconds must be between 1 and 86400", ErrInvalidInput)
+	}
+	if req.InitialDelaySeconds != nil && req.MaxDelaySeconds != nil && *req.InitialDelaySeconds > *req.MaxDelaySeconds {
+		return domain.RetryPolicy{}, fmt.Errorf("%w: initial_delay_seconds must be no greater than max_delay_seconds", ErrInvalidInput)
+	}
+	if req.RateLimitPerMinute != nil && (*req.RateLimitPerMinute < 0 || *req.RateLimitPerMinute > 60000) {
+		return domain.RetryPolicy{}, fmt.Errorf("%w: rate_limit_per_minute must be between 0 and 60000", ErrInvalidInput)
+	}
+	if req.State != nil {
+		state := strings.TrimSpace(*req.State)
+		if state != domain.StateActive && state != domain.StateDisabled {
+			return domain.RetryPolicy{}, fmt.Errorf("%w: state must be active or disabled", ErrInvalidInput)
+		}
+		req.State = &state
+	}
+	return s.store.UpdateRetryPolicy(ctx, actor.TenantID, retryPolicyID, actor.ID, req)
+}
+
+func (s *ControlService) DeleteRetryPolicy(ctx context.Context, actor authz.Actor, retryPolicyID string, req StateChangeRequest) (domain.RetryPolicy, error) {
+	if !authz.Can(actor, "routes:write", actor.TenantID) {
+		return domain.RetryPolicy{}, ErrForbidden
+	}
+	if strings.TrimSpace(retryPolicyID) == "" || strings.TrimSpace(req.Reason) == "" {
+		return domain.RetryPolicy{}, fmt.Errorf("%w: retry_policy_id and reason are required", ErrInvalidInput)
+	}
+	return s.store.DeleteRetryPolicy(ctx, actor.TenantID, retryPolicyID, actor.ID, req.Reason)
 }
 
 func (s *ControlService) CreateEventType(ctx context.Context, actor authz.Actor, req CreateEventTypeRequest) (domain.EventType, error) {

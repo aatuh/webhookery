@@ -61,6 +61,8 @@ go run ./cmd/whcp reconciliation-jobs items --job-id rec_... --api-key "$WEBHOOK
 go run ./cmd/whcp retry-policies create --name standard --max-attempts 12 --max-duration-seconds 259200 --initial-delay-seconds 10 --max-delay-seconds 21600 --api-key "$WEBHOOKERY_API_KEY"
 go run ./cmd/whcp routes create --source-id src_... --endpoint-id end_... --event-types invoice.paid --retry-policy-id rtp_...
 go run ./cmd/whcp routes versions --route-id rte_... --api-key "$WEBHOOKERY_API_KEY"
+go run ./cmd/whcp retry-policies update --retry-policy-id rtp_... --max-attempts 8 --reason "tune retries" --api-key "$WEBHOOKERY_API_KEY"
+go run ./cmd/whcp retry-policies delete --retry-policy-id rtp_... --reason "retire retry policy" --api-key "$WEBHOOKERY_API_KEY"
 go run ./cmd/whcp sources rotate-secret --source-id src_... --secret whsec_next --reason "scheduled rotation" --api-key "$WEBHOOKERY_API_KEY"
 go run ./cmd/whcp endpoints rotate-secret --endpoint-id end_... --reason "scheduled rotation" --api-key "$WEBHOOKERY_API_KEY"
 go run ./cmd/whcp endpoints create --name mtls-receiver --url https://receiver.example/webhook --mtls-client-cert-file client.crt --mtls-client-key-file client.key --api-key "$WEBHOOKERY_API_KEY"

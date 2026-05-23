@@ -518,36 +518,76 @@ func runSubscriptions(args []string) error {
 
 func runRetryPolicies(args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: whcp retry-policies <list|create>")
+		return fmt.Errorf("usage: whcp retry-policies <list|get|create|update|delete>")
 	}
 	fs := flag.NewFlagSet("retry-policies "+args[0], flag.ContinueOnError)
 	baseURL := fs.String("base-url", "http://localhost:8080", "API base URL")
 	apiKey := fs.String("api-key", os.Getenv("WEBHOOKERY_API_KEY"), "API key")
+	retryPolicyID := fs.String("retry-policy-id", "", "retry policy id")
 	name := fs.String("name", "", "retry policy name")
-	maxAttempts := fs.Int("max-attempts", 12, "maximum attempts")
-	maxDurationSeconds := fs.Int("max-duration-seconds", int((72*time.Hour)/time.Second), "maximum retry duration in seconds")
-	initialDelaySeconds := fs.Int("initial-delay-seconds", 10, "initial retry delay in seconds")
-	maxDelaySeconds := fs.Int("max-delay-seconds", int((6*time.Hour)/time.Second), "maximum retry delay in seconds")
-	rateLimitPerMinute := fs.Int("rate-limit-per-minute", 0, "optional replay/delivery rate hint")
-	state := fs.String("state", "active", "active or disabled")
+	maxAttempts := fs.Int("max-attempts", -1, "maximum attempts")
+	maxDurationSeconds := fs.Int("max-duration-seconds", -1, "maximum retry duration in seconds")
+	initialDelaySeconds := fs.Int("initial-delay-seconds", -1, "initial retry delay in seconds")
+	maxDelaySeconds := fs.Int("max-delay-seconds", -1, "maximum retry delay in seconds")
+	rateLimitPerMinute := fs.Int("rate-limit-per-minute", -1, "optional replay/delivery rate hint")
+	state := fs.String("state", "", "active or disabled")
+	reason := fs.String("reason", "", "operator reason")
 	if err := fs.Parse(args[1:]); err != nil {
 		return err
 	}
 	switch args[0] {
 	case "list":
 		return getJSON(*baseURL, *apiKey, "/v1/retry-policies")
+	case "get":
+		if strings.TrimSpace(*retryPolicyID) == "" {
+			return fmt.Errorf("retry-policy-id is required")
+		}
+		return getJSON(*baseURL, *apiKey, "/v1/retry-policies/"+url.PathEscape(*retryPolicyID))
 	case "create":
-		return postJSON(*baseURL, *apiKey, "/v1/retry-policies", map[string]any{
+		body := map[string]any{
 			"name":                  *name,
-			"max_attempts":          *maxAttempts,
-			"max_duration_seconds":  *maxDurationSeconds,
-			"initial_delay_seconds": *initialDelaySeconds,
-			"max_delay_seconds":     *maxDelaySeconds,
-			"rate_limit_per_minute": *rateLimitPerMinute,
-			"state":                 *state,
-		})
+			"max_attempts":          valueOrDefault(*maxAttempts, 12),
+			"max_duration_seconds":  valueOrDefault(*maxDurationSeconds, int((72*time.Hour)/time.Second)),
+			"initial_delay_seconds": valueOrDefault(*initialDelaySeconds, 10),
+			"max_delay_seconds":     valueOrDefault(*maxDelaySeconds, int((6*time.Hour)/time.Second)),
+			"rate_limit_per_minute": valueOrDefault(*rateLimitPerMinute, 0),
+			"state":                 valueOrDefaultString(*state, domain.StateActive),
+		}
+		return postJSON(*baseURL, *apiKey, "/v1/retry-policies", body)
+	case "update":
+		if strings.TrimSpace(*retryPolicyID) == "" {
+			return fmt.Errorf("retry-policy-id is required")
+		}
+		body := map[string]any{"reason": *reason}
+		if strings.TrimSpace(*name) != "" {
+			body["name"] = *name
+		}
+		if *maxAttempts >= 0 {
+			body["max_attempts"] = *maxAttempts
+		}
+		if *maxDurationSeconds >= 0 {
+			body["max_duration_seconds"] = *maxDurationSeconds
+		}
+		if *initialDelaySeconds >= 0 {
+			body["initial_delay_seconds"] = *initialDelaySeconds
+		}
+		if *maxDelaySeconds >= 0 {
+			body["max_delay_seconds"] = *maxDelaySeconds
+		}
+		if *rateLimitPerMinute >= 0 {
+			body["rate_limit_per_minute"] = *rateLimitPerMinute
+		}
+		if strings.TrimSpace(*state) != "" {
+			body["state"] = *state
+		}
+		return patchJSON(*baseURL, *apiKey, "/v1/retry-policies/"+url.PathEscape(*retryPolicyID), body)
+	case "delete":
+		if strings.TrimSpace(*retryPolicyID) == "" {
+			return fmt.Errorf("retry-policy-id is required")
+		}
+		return deleteJSON(*baseURL, *apiKey, "/v1/retry-policies/"+url.PathEscape(*retryPolicyID), map[string]string{"reason": *reason})
 	default:
-		return fmt.Errorf("usage: whcp retry-policies <list|create>")
+		return fmt.Errorf("usage: whcp retry-policies <list|get|create|update|delete>")
 	}
 }
 
@@ -1476,6 +1516,20 @@ func splitCSV(value string) []string {
 		}
 	}
 	return out
+}
+
+func valueOrDefault(value, fallback int) int {
+	if value < 0 {
+		return fallback
+	}
+	return value
+}
+
+func valueOrDefaultString(value, fallback string) string {
+	if strings.TrimSpace(value) == "" {
+		return fallback
+	}
+	return value
 }
 
 func parseKeyValueCSV(value string) map[string]string {

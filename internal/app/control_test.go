@@ -641,6 +641,70 @@ func TestControlServiceRetryPolicyValidation(t *testing.T) {
 	}
 }
 
+func TestControlServiceScopesRetryPolicyReadsToActorTenant(t *testing.T) {
+	store := &fakeControlStore{}
+	svc := NewControlService(store, ssrf.Validator{Resolver: ssrf.StaticResolver{}})
+	actor := authz.Actor{ID: "usr_1", TenantID: "ten_a", Role: authz.RoleDeveloper, Scopes: []string{"routes:read"}}
+
+	_, err := svc.GetRetryPolicy(context.Background(), actor, "rtp_123")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if store.retryPolicyTenantID != "ten_a" || store.retryPolicyID != "rtp_123" {
+		t.Fatalf("expected tenant-scoped retry policy read, got tenant=%q policy=%q", store.retryPolicyTenantID, store.retryPolicyID)
+	}
+}
+
+func TestControlServiceRetryPolicyMutationRequiresRoutesWrite(t *testing.T) {
+	store := &fakeControlStore{}
+	svc := NewControlService(store, ssrf.Validator{Resolver: ssrf.StaticResolver{}})
+	actor := authz.Actor{ID: "usr_1", TenantID: "ten_a", Role: authz.RoleDeveloper, Scopes: []string{"routes:read"}}
+	maxAttempts := 6
+
+	_, err := svc.UpdateRetryPolicy(context.Background(), actor, "rtp_123", UpdateRetryPolicyRequest{MaxAttempts: &maxAttempts, Reason: "tune retry"})
+	if err != ErrForbidden {
+		t.Fatalf("expected forbidden retry policy update, got %v", err)
+	}
+	_, err = svc.DeleteRetryPolicy(context.Background(), actor, "rtp_123", StateChangeRequest{Reason: "retire policy"})
+	if err != ErrForbidden {
+		t.Fatalf("expected forbidden retry policy delete, got %v", err)
+	}
+	if store.retryPolicyID != "" {
+		t.Fatal("retry policy store must not be called before authorization")
+	}
+}
+
+func TestControlServiceUpdateRetryPolicyValidatesFields(t *testing.T) {
+	store := &fakeControlStore{}
+	svc := NewControlService(store, ssrf.Validator{Resolver: ssrf.StaticResolver{}})
+	actor := authz.Actor{ID: "usr_1", TenantID: "ten_a", Role: authz.RoleAdmin, Scopes: []string{"routes:write"}}
+
+	_, err := svc.UpdateRetryPolicy(context.Background(), actor, "rtp_123", UpdateRetryPolicyRequest{Reason: "noop"})
+	if !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("expected missing field validation, got %v", err)
+	}
+
+	maxAttempts := 6
+	_, err = svc.UpdateRetryPolicy(context.Background(), actor, "rtp_123", UpdateRetryPolicyRequest{MaxAttempts: &maxAttempts, Reason: "tune retry"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if store.retryPolicyTenantID != "ten_a" || store.retryPolicyID != "rtp_123" || store.retryPolicyReq.MaxAttempts == nil || *store.retryPolicyReq.MaxAttempts != 6 {
+		t.Fatalf("expected retry policy update to reach tenant store, tenant=%q policy=%q req=%+v", store.retryPolicyTenantID, store.retryPolicyID, store.retryPolicyReq)
+	}
+}
+
+func TestControlServiceDeleteRetryPolicyRequiresReason(t *testing.T) {
+	store := &fakeControlStore{}
+	svc := NewControlService(store, ssrf.Validator{Resolver: ssrf.StaticResolver{}})
+	actor := authz.Actor{ID: "usr_1", TenantID: "ten_a", Role: authz.RoleAdmin, Scopes: []string{"routes:write"}}
+
+	_, err := svc.DeleteRetryPolicy(context.Background(), actor, "rtp_123", StateChangeRequest{})
+	if !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("expected missing reason validation, got %v", err)
+	}
+}
+
 func TestControlServiceTransformationRequiresRoutesWrite(t *testing.T) {
 	store := &fakeControlStore{}
 	svc := NewControlService(store, ssrf.Validator{Resolver: ssrf.StaticResolver{}})
@@ -808,6 +872,8 @@ type fakeControlStore struct {
 	eventSchema                domain.EventSchema
 	schemaTenantID             string
 	retryPolicyTenantID        string
+	retryPolicyID              string
+	retryPolicyReq             UpdateRetryPolicyRequest
 	normalizedTenantID         string
 	normalizedMetadataOnly     bool
 	sourceTenantID             string
@@ -1026,6 +1092,26 @@ func (f *fakeControlStore) CreateRetryPolicy(_ context.Context, tenantID, actorI
 }
 func (f *fakeControlStore) ListRetryPolicies(context.Context, string, int) ([]domain.RetryPolicy, error) {
 	return nil, nil
+}
+func (f *fakeControlStore) GetRetryPolicy(_ context.Context, tenantID, retryPolicyID string) (domain.RetryPolicy, error) {
+	f.retryPolicyTenantID = tenantID
+	f.retryPolicyID = retryPolicyID
+	return domain.RetryPolicy{ID: retryPolicyID, TenantID: tenantID, Name: "standard", Version: 1, State: domain.StateActive, MaxAttempts: 3, MaxDurationSeconds: 60, InitialDelaySeconds: 1, MaxDelaySeconds: 10}, nil
+}
+func (f *fakeControlStore) UpdateRetryPolicy(_ context.Context, tenantID, retryPolicyID, actorID string, req UpdateRetryPolicyRequest) (domain.RetryPolicy, error) {
+	f.retryPolicyTenantID = tenantID
+	f.retryPolicyID = retryPolicyID
+	f.retryPolicyReq = req
+	maxAttempts := 3
+	if req.MaxAttempts != nil {
+		maxAttempts = *req.MaxAttempts
+	}
+	return domain.RetryPolicy{ID: "rtp_2", TenantID: tenantID, Name: "standard", Version: 2, State: domain.StateActive, MaxAttempts: maxAttempts, MaxDurationSeconds: 60, InitialDelaySeconds: 1, MaxDelaySeconds: 10, CreatedBy: actorID}, nil
+}
+func (f *fakeControlStore) DeleteRetryPolicy(_ context.Context, tenantID, retryPolicyID, actorID, reason string) (domain.RetryPolicy, error) {
+	f.retryPolicyTenantID = tenantID
+	f.retryPolicyID = retryPolicyID
+	return domain.RetryPolicy{ID: retryPolicyID, TenantID: tenantID, Name: "standard", Version: 2, State: domain.StateDisabled, MaxAttempts: 3, MaxDurationSeconds: 60, InitialDelaySeconds: 1, MaxDelaySeconds: 10, CreatedBy: actorID}, nil
 }
 func (f *fakeControlStore) CreateEventType(context.Context, domain.EventType) (domain.EventType, error) {
 	return domain.EventType{}, nil

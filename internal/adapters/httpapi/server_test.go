@@ -292,6 +292,20 @@ func TestRouteUpdateRequiresRoutesWrite(t *testing.T) {
 	}
 }
 
+func TestRetryPolicyUpdateRequiresRoutesWrite(t *testing.T) {
+	server := testServerWithActor(authz.Actor{ID: "usr_1", TenantID: "ten_1", Role: authz.RoleDeveloper, Scopes: []string{"routes:read"}})
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPatch, "/v1/retry-policies/rtp_1", bytes.NewBufferString(`{"max_attempts":6,"reason":"tune"}`))
+	req.Header.Set("Authorization", "Bearer token")
+	req.Header.Set("Content-Type", "application/json")
+
+	server.Routes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("expected 403, got %d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
 func TestReconciliationCreateRequiresReplayWrite(t *testing.T) {
 	server := testServerWithActor(authz.Actor{ID: "usr_1", TenantID: "ten_1", Role: authz.RoleSupport, Scopes: []string{"replay:read"}})
 	rec := httptest.NewRecorder()
@@ -456,6 +470,15 @@ func (noopControlStore) CreateRetryPolicy(context.Context, string, string, app.C
 }
 func (noopControlStore) ListRetryPolicies(context.Context, string, int) ([]domain.RetryPolicy, error) {
 	return nil, nil
+}
+func (noopControlStore) GetRetryPolicy(context.Context, string, string) (domain.RetryPolicy, error) {
+	return domain.RetryPolicy{}, nil
+}
+func (noopControlStore) UpdateRetryPolicy(context.Context, string, string, string, app.UpdateRetryPolicyRequest) (domain.RetryPolicy, error) {
+	return domain.RetryPolicy{}, nil
+}
+func (noopControlStore) DeleteRetryPolicy(context.Context, string, string, string, string) (domain.RetryPolicy, error) {
+	return domain.RetryPolicy{}, nil
 }
 func (noopControlStore) CreateEventType(context.Context, domain.EventType) (domain.EventType, error) {
 	return domain.EventType{}, nil
