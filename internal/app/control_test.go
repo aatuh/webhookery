@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"testing"
 
@@ -35,6 +36,34 @@ func TestControlServiceRequiresRawPayloadScope(t *testing.T) {
 	}
 }
 
+func TestControlServiceNormalizedEventDataRequiresRawScope(t *testing.T) {
+	store := &fakeControlStore{}
+	svc := NewControlService(store, ssrf.Validator{Resolver: ssrf.StaticResolver{}})
+	actor := authz.Actor{ID: "usr_1", TenantID: "ten_a", Role: authz.RoleDeveloper, Scopes: []string{"events:read"}}
+
+	_, err := svc.GetNormalizedEvent(context.Background(), actor, "evt_123", true)
+	if err != ErrForbidden {
+		t.Fatalf("expected forbidden normalized data access, got %v", err)
+	}
+	if store.normalizedTenantID != "" {
+		t.Fatal("normalized body lookup should not happen before authorization")
+	}
+}
+
+func TestControlServiceScopesNormalizedMetadataRead(t *testing.T) {
+	store := &fakeControlStore{}
+	svc := NewControlService(store, ssrf.Validator{Resolver: ssrf.StaticResolver{}})
+	actor := authz.Actor{ID: "usr_1", TenantID: "ten_a", Role: authz.RoleDeveloper, Scopes: []string{"events:read"}}
+
+	_, err := svc.GetNormalizedEvent(context.Background(), actor, "evt_123", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if store.normalizedTenantID != "ten_a" || !store.normalizedMetadataOnly {
+		t.Fatalf("expected tenant-scoped metadata-only read, got tenant=%q metadataOnly=%v", store.normalizedTenantID, store.normalizedMetadataOnly)
+	}
+}
+
 func TestControlServiceForbidsRawInclusiveAuditExportWithoutRawScope(t *testing.T) {
 	store := &fakeControlStore{}
 	svc := NewControlService(store, ssrf.Validator{Resolver: ssrf.StaticResolver{}})
@@ -43,6 +72,17 @@ func TestControlServiceForbidsRawInclusiveAuditExportWithoutRawScope(t *testing.
 	_, err := svc.CreateAuditExport(context.Background(), actor, CreateAuditExportRequest{IncludeRawPayloads: true})
 	if err != ErrForbidden {
 		t.Fatalf("expected forbidden raw-inclusive export, got %v", err)
+	}
+}
+
+func TestControlServiceForbidsPayloadInclusiveAuditExportWithoutRawScope(t *testing.T) {
+	store := &fakeControlStore{}
+	svc := NewControlService(store, ssrf.Validator{Resolver: ssrf.StaticResolver{}})
+	actor := authz.Actor{ID: "usr_1", TenantID: "ten_a", Role: authz.RoleAdmin, Scopes: []string{"audit:read"}}
+
+	_, err := svc.CreateAuditExport(context.Background(), actor, CreateAuditExportRequest{IncludePayloadBodies: true})
+	if err != ErrForbidden {
+		t.Fatalf("expected forbidden payload-inclusive export, got %v", err)
 	}
 }
 
@@ -74,11 +114,26 @@ func TestControlServiceForbidsRawInclusiveDownloadBeforeBundleRead(t *testing.T)
 	}
 }
 
+func TestControlServiceForbidsPayloadInclusiveDownloadBeforeBundleRead(t *testing.T) {
+	store := &fakeControlStore{auditExport: domain.EvidenceExport{ID: "exp_payload", TenantID: "ten_a", IncludePayloadBodies: true}}
+	svc := NewControlService(store, ssrf.Validator{Resolver: ssrf.StaticResolver{}})
+	actor := authz.Actor{ID: "usr_1", TenantID: "ten_a", Role: authz.RoleAdmin, Scopes: []string{"audit:read"}}
+
+	_, err := svc.DownloadAuditExport(context.Background(), actor, "exp_payload")
+	if err != ErrForbidden {
+		t.Fatalf("expected forbidden payload-inclusive download, got %v", err)
+	}
+	if store.auditExportDownloaded {
+		t.Fatal("payload-inclusive export bundle was read before authorization")
+	}
+}
+
 func TestControlServiceHidesRawInclusiveAuditExportsWithoutRawScope(t *testing.T) {
 	store := &fakeControlStore{
 		auditExports: []domain.EvidenceExport{
 			{ID: "exp_public", TenantID: "ten_a"},
 			{ID: "exp_raw", TenantID: "ten_a", IncludeRawPayloads: true},
+			{ID: "exp_payload", TenantID: "ten_a", IncludePayloadBodies: true},
 		},
 	}
 	svc := NewControlService(store, ssrf.Validator{Resolver: ssrf.StaticResolver{}})
@@ -218,16 +273,48 @@ func TestControlServiceRetryPolicyValidation(t *testing.T) {
 	}
 }
 
+func TestControlServiceTransformationRequiresRoutesWrite(t *testing.T) {
+	store := &fakeControlStore{}
+	svc := NewControlService(store, ssrf.Validator{Resolver: ssrf.StaticResolver{}})
+	actor := authz.Actor{ID: "usr_1", TenantID: "ten_a", Role: authz.RoleDeveloper, Scopes: []string{"routes:read"}}
+
+	_, err := svc.CreateTransformation(context.Background(), actor, CreateTransformationRequest{Name: "redact", Operations: json.RawMessage(`[{"op":"redact","path":"/data/email"}]`)})
+	if err != ErrForbidden {
+		t.Fatalf("expected forbidden transformation write, got %v", err)
+	}
+}
+
+func TestControlServiceValidatesTransformationOperations(t *testing.T) {
+	store := &fakeControlStore{}
+	svc := NewControlService(store, ssrf.Validator{Resolver: ssrf.StaticResolver{}})
+	actor := authz.Actor{ID: "usr_1", TenantID: "ten_a", Role: authz.RoleDeveloper, Scopes: []string{"routes:write"}}
+
+	_, err := svc.CreateTransformation(context.Background(), actor, CreateTransformationRequest{Name: "bad", Operations: json.RawMessage(`[{"op":"drop","path":"/raw_payload_hash"}]`)})
+	if !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("expected invalid protected path, got %v", err)
+	}
+	_, err = svc.CreateTransformation(context.Background(), actor, CreateTransformationRequest{Name: "redact", Operations: json.RawMessage(`[{"op":"redact","path":"/data/email"}]`)})
+	if err != nil {
+		t.Fatalf("expected valid transformation, got %v", err)
+	}
+	if store.transformationTenantID != "ten_a" {
+		t.Fatalf("transformation create was not tenant scoped: %q", store.transformationTenantID)
+	}
+}
+
 type fakeControlStore struct {
-	eventTenantID         string
-	auditExportTenantID   string
-	auditExport           domain.EvidenceExport
-	auditExportDownloaded bool
-	auditExports          []domain.EvidenceExport
-	apiKeyInput           APIKeyCreateInput
-	eventSchema           domain.EventSchema
-	schemaTenantID        string
-	retryPolicyTenantID   string
+	eventTenantID          string
+	auditExportTenantID    string
+	auditExport            domain.EvidenceExport
+	auditExportDownloaded  bool
+	auditExports           []domain.EvidenceExport
+	apiKeyInput            APIKeyCreateInput
+	eventSchema            domain.EventSchema
+	schemaTenantID         string
+	retryPolicyTenantID    string
+	normalizedTenantID     string
+	normalizedMetadataOnly bool
+	transformationTenantID string
 }
 
 func (f *fakeControlStore) CreateAPIKey(_ context.Context, input APIKeyCreateInput) (domain.APIKey, error) {
@@ -322,6 +409,11 @@ func (f *fakeControlStore) GetEvent(_ context.Context, tenantID, eventID string)
 func (f *fakeControlStore) GetRawPayload(context.Context, string, string, string) (domain.RawPayload, error) {
 	return domain.RawPayload{}, nil
 }
+func (f *fakeControlStore) GetNormalizedEvent(_ context.Context, tenantID, eventID, actorID string, includeData bool) (domain.NormalizedEnvelope, error) {
+	f.normalizedTenantID = tenantID
+	f.normalizedMetadataOnly = !includeData
+	return domain.NormalizedEnvelope{ID: "nenv_1", TenantID: tenantID, EventID: eventID}, nil
+}
 func (f *fakeControlStore) ListEventTimeline(context.Context, string, string, int) ([]map[string]any, error) {
 	return nil, nil
 }
@@ -363,7 +455,7 @@ func (f *fakeControlStore) UpdateRetentionPolicy(_ context.Context, tenantID, po
 	return domain.RetentionPolicy{ID: policyID, TenantID: tenantID, RetentionDays: days, CreatedBy: actorID}, nil
 }
 func (f *fakeControlStore) CreateAuditExport(_ context.Context, tenantID, actorID string, req CreateAuditExportRequest) (domain.EvidenceExport, error) {
-	return domain.EvidenceExport{ID: "exp_1", TenantID: tenantID, IncludeRawPayloads: req.IncludeRawPayloads, CreatedBy: actorID}, nil
+	return domain.EvidenceExport{ID: "exp_1", TenantID: tenantID, IncludeRawPayloads: req.IncludeRawPayloads, IncludePayloadBodies: req.IncludePayloadBodies, CreatedBy: actorID}, nil
 }
 func (f *fakeControlStore) ListAuditExports(context.Context, string, int) ([]domain.EvidenceExport, error) {
 	return f.auditExports, nil
@@ -415,4 +507,23 @@ func (f *fakeControlStore) ResumeReplayJob(context.Context, string, string, stri
 }
 func (f *fakeControlStore) CancelReplayJob(context.Context, string, string, string, string) (ReplayJob, error) {
 	return ReplayJob{}, nil
+}
+func (f *fakeControlStore) CreateTransformation(_ context.Context, tenantID, actorID string, req CreateTransformationRequest) (domain.Transformation, error) {
+	f.transformationTenantID = tenantID
+	return domain.Transformation{ID: "trn_1", TenantID: tenantID, Name: req.Name, CreatedBy: actorID}, nil
+}
+func (f *fakeControlStore) ListTransformations(context.Context, string, int) ([]domain.Transformation, error) {
+	return nil, nil
+}
+func (f *fakeControlStore) GetTransformation(context.Context, string, string) (domain.Transformation, error) {
+	return domain.Transformation{}, nil
+}
+func (f *fakeControlStore) CreateTransformationVersion(context.Context, string, string, string, CreateTransformationVersionRequest) (domain.TransformationVersion, error) {
+	return domain.TransformationVersion{}, nil
+}
+func (f *fakeControlStore) ListTransformationVersions(context.Context, string, string, int) ([]domain.TransformationVersion, error) {
+	return nil, nil
+}
+func (f *fakeControlStore) ActivateTransformationVersion(context.Context, string, string, string, string, string) (domain.TransformationVersion, error) {
+	return domain.TransformationVersion{}, nil
 }

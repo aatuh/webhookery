@@ -3,6 +3,7 @@ package domain
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"strings"
 	"time"
 )
@@ -17,8 +18,10 @@ const (
 	StorageStatusStored  = "stored"
 	StorageStatusDeleted = "deleted"
 
-	RetentionResourceRawPayload = "raw_payload"
-	RetentionResourceAuditEvent = "audit_event"
+	RetentionResourceRawPayload      = "raw_payload"
+	RetentionResourceAuditEvent      = "audit_event"
+	RetentionResourceNormalized      = "normalized_envelope_data"
+	RetentionResourceDeliveryPayload = "delivery_payload"
 
 	RetentionRunStateRunning   = "running"
 	RetentionRunStateCompleted = "completed"
@@ -31,12 +34,13 @@ const (
 	DedupeDuplicateSuppressed = "duplicate_suppressed"
 	DedupeCollision           = "collision"
 
-	ConfigResourceSource       = "source"
-	ConfigResourceEndpoint     = "endpoint"
-	ConfigResourceSubscription = "subscription"
-	ConfigResourceRoute        = "route"
-	ConfigResourceRetryPolicy  = "retry_policy"
-	ConfigResourceSchema       = "event_schema"
+	ConfigResourceSource         = "source"
+	ConfigResourceEndpoint       = "endpoint"
+	ConfigResourceSubscription   = "subscription"
+	ConfigResourceRoute          = "route"
+	ConfigResourceRetryPolicy    = "retry_policy"
+	ConfigResourceSchema         = "event_schema"
+	ConfigResourceTransformation = "transformation"
 
 	SecretStateActive   = "active"
 	SecretStatePrevious = "previous"
@@ -114,30 +118,34 @@ type APIKey struct {
 }
 
 type Subscription struct {
-	ID              string    `json:"id"`
-	TenantID        string    `json:"tenant_id"`
-	EndpointID      string    `json:"endpoint_id"`
-	EventTypes      []string  `json:"event_types"`
-	PayloadFormat   string    `json:"payload_format"`
-	State           string    `json:"state"`
-	Version         int       `json:"version"`
-	ActiveVersionID string    `json:"active_version_id,omitempty"`
-	CreatedAt       time.Time `json:"created_at"`
+	ID                      string    `json:"id"`
+	TenantID                string    `json:"tenant_id"`
+	EndpointID              string    `json:"endpoint_id"`
+	EventTypes              []string  `json:"event_types"`
+	PayloadFormat           string    `json:"payload_format"`
+	TransformationID        string    `json:"transformation_id,omitempty"`
+	TransformationVersionID string    `json:"transformation_version_id,omitempty"`
+	State                   string    `json:"state"`
+	Version                 int       `json:"version"`
+	ActiveVersionID         string    `json:"active_version_id,omitempty"`
+	CreatedAt               time.Time `json:"created_at"`
 }
 
 type Route struct {
-	ID              string    `json:"id"`
-	TenantID        string    `json:"tenant_id"`
-	SourceID        string    `json:"source_id"`
-	Name            string    `json:"name"`
-	Priority        int       `json:"priority"`
-	EventTypes      []string  `json:"event_types"`
-	EndpointID      string    `json:"endpoint_id"`
-	State           string    `json:"state"`
-	Version         int       `json:"version"`
-	ActiveVersionID string    `json:"active_version_id,omitempty"`
-	RetryPolicyID   string    `json:"retry_policy_id,omitempty"`
-	CreatedAt       time.Time `json:"created_at"`
+	ID                      string    `json:"id"`
+	TenantID                string    `json:"tenant_id"`
+	SourceID                string    `json:"source_id"`
+	Name                    string    `json:"name"`
+	Priority                int       `json:"priority"`
+	EventTypes              []string  `json:"event_types"`
+	EndpointID              string    `json:"endpoint_id"`
+	State                   string    `json:"state"`
+	Version                 int       `json:"version"`
+	ActiveVersionID         string    `json:"active_version_id,omitempty"`
+	RetryPolicyID           string    `json:"retry_policy_id,omitempty"`
+	TransformationID        string    `json:"transformation_id,omitempty"`
+	TransformationVersionID string    `json:"transformation_version_id,omitempty"`
+	CreatedAt               time.Time `json:"created_at"`
 }
 
 type ConfigVersion struct {
@@ -152,34 +160,38 @@ type ConfigVersion struct {
 }
 
 type RouteVersion struct {
-	ID            string    `json:"id"`
-	TenantID      string    `json:"tenant_id"`
-	RouteID       string    `json:"route_id"`
-	Version       int       `json:"version"`
-	ConfigHash    string    `json:"config_hash"`
-	SourceID      string    `json:"source_id"`
-	Name          string    `json:"name"`
-	Priority      int       `json:"priority"`
-	EventTypes    []string  `json:"event_types"`
-	EndpointID    string    `json:"endpoint_id"`
-	RetryPolicyID string    `json:"retry_policy_id,omitempty"`
-	State         string    `json:"state"`
-	CreatedBy     string    `json:"created_by"`
-	CreatedAt     time.Time `json:"created_at"`
+	ID                      string    `json:"id"`
+	TenantID                string    `json:"tenant_id"`
+	RouteID                 string    `json:"route_id"`
+	Version                 int       `json:"version"`
+	ConfigHash              string    `json:"config_hash"`
+	SourceID                string    `json:"source_id"`
+	Name                    string    `json:"name"`
+	Priority                int       `json:"priority"`
+	EventTypes              []string  `json:"event_types"`
+	EndpointID              string    `json:"endpoint_id"`
+	RetryPolicyID           string    `json:"retry_policy_id,omitempty"`
+	TransformationID        string    `json:"transformation_id,omitempty"`
+	TransformationVersionID string    `json:"transformation_version_id,omitempty"`
+	State                   string    `json:"state"`
+	CreatedBy               string    `json:"created_by"`
+	CreatedAt               time.Time `json:"created_at"`
 }
 
 type SubscriptionVersion struct {
-	ID             string    `json:"id"`
-	TenantID       string    `json:"tenant_id"`
-	SubscriptionID string    `json:"subscription_id"`
-	Version        int       `json:"version"`
-	ConfigHash     string    `json:"config_hash"`
-	EndpointID     string    `json:"endpoint_id"`
-	EventTypes     []string  `json:"event_types"`
-	PayloadFormat  string    `json:"payload_format"`
-	State          string    `json:"state"`
-	CreatedBy      string    `json:"created_by"`
-	CreatedAt      time.Time `json:"created_at"`
+	ID                      string    `json:"id"`
+	TenantID                string    `json:"tenant_id"`
+	SubscriptionID          string    `json:"subscription_id"`
+	Version                 int       `json:"version"`
+	ConfigHash              string    `json:"config_hash"`
+	EndpointID              string    `json:"endpoint_id"`
+	EventTypes              []string  `json:"event_types"`
+	PayloadFormat           string    `json:"payload_format"`
+	TransformationID        string    `json:"transformation_id,omitempty"`
+	TransformationVersionID string    `json:"transformation_version_id,omitempty"`
+	State                   string    `json:"state"`
+	CreatedBy               string    `json:"created_by"`
+	CreatedAt               time.Time `json:"created_at"`
 }
 
 type RetryPolicy struct {
@@ -259,6 +271,83 @@ type Event struct {
 	TraceID        string    `json:"trace_id"`
 }
 
+type ProviderAdapter struct {
+	ID        string    `json:"id"`
+	Name      string    `json:"name"`
+	State     string    `json:"state"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+type AdapterVersion struct {
+	ID         string    `json:"id"`
+	AdapterID  string    `json:"adapter_id"`
+	Name       string    `json:"name"`
+	Version    string    `json:"version"`
+	ConfigHash string    `json:"config_hash"`
+	State      string    `json:"state"`
+	CreatedAt  time.Time `json:"created_at"`
+}
+
+type NormalizedEnvelope struct {
+	ID               string          `json:"id"`
+	TenantID         string          `json:"tenant_id"`
+	EventID          string          `json:"event_id"`
+	AdapterVersionID string          `json:"adapter_version_id,omitempty"`
+	Provider         string          `json:"provider"`
+	ProviderEventID  string          `json:"provider_event_id,omitempty"`
+	Type             string          `json:"type"`
+	Source           string          `json:"source"`
+	Subject          string          `json:"subject,omitempty"`
+	Envelope         json.RawMessage `json:"envelope"`
+	Data             json.RawMessage `json:"data,omitempty"`
+	Metadata         json.RawMessage `json:"metadata"`
+	EnvelopeSHA256   string          `json:"envelope_sha256"`
+	DataSHA256       string          `json:"data_sha256"`
+	MetadataSHA256   string          `json:"metadata_sha256"`
+	StorageStatus    string          `json:"storage_status"`
+	StorageDeletedAt time.Time       `json:"storage_deleted_at,omitempty"`
+	CreatedAt        time.Time       `json:"created_at"`
+}
+
+type Transformation struct {
+	ID              string    `json:"id"`
+	TenantID        string    `json:"tenant_id"`
+	Name            string    `json:"name"`
+	State           string    `json:"state"`
+	ActiveVersionID string    `json:"active_version_id,omitempty"`
+	CreatedBy       string    `json:"created_by"`
+	CreatedAt       time.Time `json:"created_at"`
+	UpdatedAt       time.Time `json:"updated_at"`
+}
+
+type TransformationVersion struct {
+	ID               string          `json:"id"`
+	TenantID         string          `json:"tenant_id"`
+	TransformationID string          `json:"transformation_id"`
+	Version          int             `json:"version"`
+	ConfigHash       string          `json:"config_hash"`
+	Operations       json.RawMessage `json:"operations"`
+	State            string          `json:"state"`
+	CreatedBy        string          `json:"created_by"`
+	CreatedAt        time.Time       `json:"created_at"`
+}
+
+type DeliveryPayload struct {
+	ID                      string    `json:"id"`
+	TenantID                string    `json:"tenant_id"`
+	DeliveryID              string    `json:"delivery_id"`
+	EventID                 string    `json:"event_id"`
+	NormalizedEnvelopeID    string    `json:"normalized_envelope_id,omitempty"`
+	TransformationVersionID string    `json:"transformation_version_id,omitempty"`
+	ContentType             string    `json:"content_type"`
+	SHA256                  string    `json:"sha256"`
+	SizeBytes               int64     `json:"size_bytes"`
+	Body                    []byte    `json:"-"`
+	StorageStatus           string    `json:"storage_status"`
+	StorageDeletedAt        time.Time `json:"storage_deleted_at,omitempty"`
+	CreatedAt               time.Time `json:"created_at"`
+}
+
 type RawPayload struct {
 	ID               string
 	TenantID         string
@@ -288,19 +377,23 @@ type Receipt struct {
 }
 
 type Delivery struct {
-	ID                    string    `json:"id"`
-	TenantID              string    `json:"tenant_id"`
-	EventID               string    `json:"event_id"`
-	EndpointID            string    `json:"endpoint_id"`
-	RouteID               string    `json:"route_id,omitempty"`
-	RouteVersionID        string    `json:"route_version_id,omitempty"`
-	SubscriptionID        string    `json:"subscription_id,omitempty"`
-	SubscriptionVersionID string    `json:"subscription_version_id,omitempty"`
-	RetryPolicyID         string    `json:"retry_policy_id,omitempty"`
-	ReplayJobID           string    `json:"replay_job_id,omitempty"`
-	State                 string    `json:"state"`
-	AttemptCount          int       `json:"attempt_count"`
-	NextAttemptAt         time.Time `json:"next_attempt_at,omitempty"`
+	ID                      string    `json:"id"`
+	TenantID                string    `json:"tenant_id"`
+	EventID                 string    `json:"event_id"`
+	EndpointID              string    `json:"endpoint_id"`
+	RouteID                 string    `json:"route_id,omitempty"`
+	RouteVersionID          string    `json:"route_version_id,omitempty"`
+	SubscriptionID          string    `json:"subscription_id,omitempty"`
+	SubscriptionVersionID   string    `json:"subscription_version_id,omitempty"`
+	RetryPolicyID           string    `json:"retry_policy_id,omitempty"`
+	ReplayJobID             string    `json:"replay_job_id,omitempty"`
+	AdapterVersionID        string    `json:"adapter_version_id,omitempty"`
+	NormalizedEnvelopeID    string    `json:"normalized_envelope_id,omitempty"`
+	TransformationVersionID string    `json:"transformation_version_id,omitempty"`
+	DeliveryPayloadID       string    `json:"delivery_payload_id,omitempty"`
+	State                   string    `json:"state"`
+	AttemptCount            int       `json:"attempt_count"`
+	NextAttemptAt           time.Time `json:"next_attempt_at,omitempty"`
 }
 
 type EndpointHealth struct {
@@ -373,24 +466,25 @@ type RetentionRun struct {
 }
 
 type EvidenceExport struct {
-	ID                 string    `json:"id"`
-	TenantID           string    `json:"tenant_id"`
-	State              string    `json:"state"`
-	From               time.Time `json:"from,omitempty"`
-	To                 time.Time `json:"to,omitempty"`
-	IncludeRawPayloads bool      `json:"include_raw_payloads"`
-	IncludeTimelines   bool      `json:"include_timelines"`
-	Format             string    `json:"format"`
-	StorageBackend     string    `json:"storage_backend"`
-	ObjectBucket       string    `json:"object_bucket,omitempty"`
-	ObjectKey          string    `json:"object_key,omitempty"`
-	SHA256             string    `json:"sha256"`
-	ManifestSHA256     string    `json:"manifest_sha256"`
-	SizeBytes          int64     `json:"size_bytes"`
-	Error              string    `json:"error,omitempty"`
-	CreatedBy          string    `json:"created_by"`
-	CreatedAt          time.Time `json:"created_at"`
-	CompletedAt        time.Time `json:"completed_at,omitempty"`
+	ID                   string    `json:"id"`
+	TenantID             string    `json:"tenant_id"`
+	State                string    `json:"state"`
+	From                 time.Time `json:"from,omitempty"`
+	To                   time.Time `json:"to,omitempty"`
+	IncludeRawPayloads   bool      `json:"include_raw_payloads"`
+	IncludeTimelines     bool      `json:"include_timelines"`
+	IncludePayloadBodies bool      `json:"include_payload_bodies"`
+	Format               string    `json:"format"`
+	StorageBackend       string    `json:"storage_backend"`
+	ObjectBucket         string    `json:"object_bucket,omitempty"`
+	ObjectKey            string    `json:"object_key,omitempty"`
+	SHA256               string    `json:"sha256"`
+	ManifestSHA256       string    `json:"manifest_sha256"`
+	SizeBytes            int64     `json:"size_bytes"`
+	Error                string    `json:"error,omitempty"`
+	CreatedBy            string    `json:"created_by"`
+	CreatedAt            time.Time `json:"created_at"`
+	CompletedAt          time.Time `json:"completed_at,omitempty"`
 }
 
 type OpsMetrics struct {

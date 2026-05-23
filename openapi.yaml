@@ -213,9 +213,135 @@ paths:
       summary: Create subscription
       security:
         - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateSubscriptionRequest"
       responses:
         "201":
           description: Subscription created.
+  /v1/transformations:
+    get:
+      summary: List deterministic transformations
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: Paginated transformation list.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TransformationPage"
+    post:
+      summary: Create deterministic transformation
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateTransformationRequest"
+      responses:
+        "201":
+          description: Transformation created.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Transformation"
+  /v1/transformations/{transformation_id}:
+    get:
+      summary: Get deterministic transformation
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: transformation_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Transformation metadata.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Transformation"
+  /v1/transformations/{transformation_id}/versions:
+    get:
+      summary: List immutable transformation versions
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: transformation_id
+          in: path
+          required: true
+          schema:
+            type: string
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: Transformation version snapshots.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TransformationVersionPage"
+    post:
+      summary: Create immutable transformation version
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: transformation_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateTransformationVersionRequest"
+      responses:
+        "201":
+          description: Transformation version created.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TransformationVersion"
+  /v1/transformations/{transformation_id}/versions/{version_id}:activate:
+    post:
+      summary: Activate transformation version
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: transformation_id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: version_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ReasonRequest"
+      responses:
+        "200":
+          description: Transformation version activated.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TransformationVersion"
   /v1/retry-policies:
     get:
       summary: List retry policies
@@ -257,6 +383,12 @@ paths:
       summary: Create route
       security:
         - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateRouteRequest"
       responses:
         "201":
           description: Route created.
@@ -457,6 +589,35 @@ paths:
           description: Actor lacks raw payload permission.
         "410":
           description: Raw payload body has expired or was deleted by retention; metadata remains on related records.
+  /v1/events/{event_id}/normalized:
+    get:
+      summary: Get normalized event evidence
+      description: Metadata and hashes require events:read. Including normalized data requires events:raw and writes an audit event.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: event_id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: include_data
+          in: query
+          required: false
+          schema:
+            type: boolean
+            default: false
+      responses:
+        "200":
+          description: Normalized envelope metadata, hashes, and optionally body data.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/NormalizedEnvelope"
+        "403":
+          description: Actor lacks events:raw for include_data=true.
+        "410":
+          description: Normalized data was deleted by retention; metadata and hashes remain.
   /v1/events/{event_id}/timeline:
     get:
       summary: Get event timeline
@@ -1148,6 +1309,204 @@ components:
         revoked_at:
           type: string
           format: date-time
+    CreateSubscriptionRequest:
+      type: object
+      required: [endpoint_id, event_types]
+      additionalProperties: false
+      properties:
+        endpoint_id:
+          type: string
+        event_types:
+          type: array
+          items:
+            type: string
+        payload_format:
+          type: string
+          default: canonical_json
+        transformation_id:
+          type: string
+          description: Optional active transformation to snapshot onto new delivery payloads.
+    CreateRouteRequest:
+      type: object
+      required: [source_id, name, endpoint_id]
+      additionalProperties: false
+      properties:
+        source_id:
+          type: string
+        name:
+          type: string
+        priority:
+          type: integer
+          default: 100
+        event_types:
+          type: array
+          items:
+            type: string
+        endpoint_id:
+          type: string
+        retry_policy_id:
+          type: string
+        transformation_id:
+          type: string
+          description: Optional active transformation to snapshot onto new delivery payloads.
+    NormalizedEnvelope:
+      type: object
+      required: [id, tenant_id, event_id, provider, type, source, envelope_sha256, data_sha256, metadata_sha256, storage_status, created_at]
+      properties:
+        id:
+          type: string
+        tenant_id:
+          type: string
+        event_id:
+          type: string
+        adapter_version_id:
+          type: string
+        provider:
+          type: string
+        provider_event_id:
+          type: string
+        type:
+          type: string
+        source:
+          type: string
+        subject:
+          type: string
+        envelope:
+          type: object
+          additionalProperties: true
+          description: Included only when include_data=true and the body has not been retained.
+        data:
+          type: object
+          additionalProperties: true
+          description: Included only when include_data=true and the body has not been retained.
+        metadata:
+          type: object
+          additionalProperties: true
+        envelope_sha256:
+          type: string
+        data_sha256:
+          type: string
+        metadata_sha256:
+          type: string
+        storage_status:
+          type: string
+          enum: [stored, deleted, metadata_only]
+        storage_deleted_at:
+          type: string
+          format: date-time
+        created_at:
+          type: string
+          format: date-time
+    CreateTransformationRequest:
+      type: object
+      required: [name]
+      additionalProperties: false
+      properties:
+        name:
+          type: string
+        operations:
+          type: array
+          description: JSON Pointer operations. Supported op values are set, copy, drop, and redact.
+          items:
+            $ref: "#/components/schemas/TransformationOperation"
+    CreateTransformationVersionRequest:
+      type: object
+      required: [operations]
+      additionalProperties: false
+      properties:
+        operations:
+          type: array
+          items:
+            $ref: "#/components/schemas/TransformationOperation"
+    TransformationOperation:
+      type: object
+      required: [op, path]
+      additionalProperties: false
+      properties:
+        op:
+          type: string
+          enum: [set, copy, drop, redact]
+        path:
+          type: string
+          description: JSON Pointer path.
+        from:
+          type: string
+          description: JSON Pointer source path for copy.
+        value:
+          description: Value used by set.
+    Transformation:
+      type: object
+      required: [id, tenant_id, name, state, created_by, created_at, updated_at]
+      properties:
+        id:
+          type: string
+        tenant_id:
+          type: string
+        name:
+          type: string
+        state:
+          type: string
+          enum: [active, disabled]
+        active_version_id:
+          type: string
+        created_by:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+    TransformationVersion:
+      type: object
+      required: [id, tenant_id, transformation_id, version, config_hash, operations, state, created_by, created_at]
+      properties:
+        id:
+          type: string
+        tenant_id:
+          type: string
+        transformation_id:
+          type: string
+        version:
+          type: integer
+        config_hash:
+          type: string
+        operations:
+          type: array
+          items:
+            $ref: "#/components/schemas/TransformationOperation"
+        state:
+          type: string
+          enum: [draft, active, inactive]
+        created_by:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+    TransformationPage:
+      type: object
+      properties:
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/Transformation"
+        next_cursor:
+          type: string
+          nullable: true
+        has_more:
+          type: boolean
+    TransformationVersionPage:
+      type: object
+      properties:
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/TransformationVersion"
+        next_cursor:
+          type: string
+          nullable: true
+        has_more:
+          type: boolean
     CreateRetryPolicyRequest:
       type: object
       required: [name, max_attempts, max_duration_seconds, initial_delay_seconds, max_delay_seconds]
@@ -1246,6 +1605,10 @@ components:
         endpoint_id:
           type: string
         retry_policy_id:
+          type: string
+        transformation_id:
+          type: string
+        transformation_version_id:
           type: string
         state:
           type: string
@@ -1348,6 +1711,9 @@ components:
         include_raw_payloads:
           type: boolean
           default: false
+        include_payload_bodies:
+          type: boolean
+          default: false
         include_timelines:
           type: boolean
           default: false
@@ -1356,7 +1722,7 @@ components:
           maxLength: 500
     EvidenceExport:
       type: object
-      required: [id, tenant_id, state, include_raw_payloads, include_timelines, format, storage_backend, sha256, manifest_sha256, size_bytes, created_by, created_at]
+      required: [id, tenant_id, state, include_raw_payloads, include_timelines, include_payload_bodies, format, storage_backend, sha256, manifest_sha256, size_bytes, created_by, created_at]
       properties:
         id:
           type: string
@@ -1374,6 +1740,8 @@ components:
         include_raw_payloads:
           type: boolean
         include_timelines:
+          type: boolean
+        include_payload_bodies:
           type: boolean
         format:
           type: string
@@ -1422,7 +1790,7 @@ components:
       properties:
         resource_type:
           type: string
-          enum: [raw_payload, audit_event]
+          enum: [raw_payload, normalized_envelope_data, delivery_payload, audit_event]
         source_id:
           type: string
           description: Optional source filter for raw payload policies.
@@ -1457,7 +1825,7 @@ components:
           type: string
         resource_type:
           type: string
-          enum: [raw_payload, audit_event]
+          enum: [raw_payload, normalized_envelope_data, delivery_payload, audit_event]
         source_id:
           type: string
         retention_days:

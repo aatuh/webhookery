@@ -28,6 +28,7 @@ import (
 	"webhookery/internal/domain"
 	"webhookery/internal/provider"
 	"webhookery/internal/ssrf"
+	"webhookery/internal/transform"
 	"webhookery/internal/worker"
 )
 
@@ -65,6 +66,8 @@ func run(args []string) error {
 		return runRetryPolicies(args[1:])
 	case "routes":
 		return runRoutes(args[1:])
+	case "transformations":
+		return runTransformations(args[1:])
 	case "deliveries":
 		return runDeliveries(args[1:])
 	case "replay-jobs":
@@ -89,7 +92,7 @@ func run(args []string) error {
 }
 
 func usage() error {
-	return fmt.Errorf("usage: whcp <api|worker|scheduler|migrate|admin|api-keys|events|sources|endpoints|subscriptions|retry-policies|routes|deliveries|replay-jobs|ops|audit|retention|schemas|dead-letter|quarantine|signatures>")
+	return fmt.Errorf("usage: whcp <api|worker|scheduler|migrate|admin|api-keys|events|sources|endpoints|subscriptions|retry-policies|routes|transformations|deliveries|replay-jobs|ops|audit|retention|schemas|dead-letter|quarantine|signatures>")
 }
 
 func runAPI() error {
@@ -235,7 +238,7 @@ func runAPIKeys(args []string) error {
 
 func runEvents(args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: whcp events <list|get|timeline|raw-export>")
+		return fmt.Errorf("usage: whcp events <list|get|timeline|raw-export|normalized>")
 	}
 	fs := flag.NewFlagSet("events "+args[0], flag.ContinueOnError)
 	baseURL := fs.String("base-url", "http://localhost:8080", "API base URL")
@@ -252,10 +255,12 @@ func runEvents(args []string) error {
 		return getJSON(*baseURL, *apiKey, "/v1/events/"+url.PathEscape(*eventID))
 	case "timeline":
 		return getJSON(*baseURL, *apiKey, "/v1/events/"+url.PathEscape(*eventID)+"/timeline")
+	case "normalized":
+		return getJSON(*baseURL, *apiKey, "/v1/events/"+url.PathEscape(*eventID)+"/normalized")
 	case "raw-export":
 		return exportRawPayload(*baseURL, *apiKey, *eventID, *output)
 	default:
-		return fmt.Errorf("usage: whcp events <list|get|timeline|raw-export>")
+		return fmt.Errorf("usage: whcp events <list|get|timeline|raw-export|normalized>")
 	}
 }
 
@@ -328,12 +333,14 @@ func runSubscriptions(args []string) error {
 	apiKey := fs.String("api-key", os.Getenv("WEBHOOKERY_API_KEY"), "API key")
 	endpointID := fs.String("endpoint-id", "", "endpoint id")
 	eventTypes := fs.String("event-types", "", "comma-separated event types")
+	transformationID := fs.String("transformation-id", "", "optional transformation id")
 	if err := fs.Parse(args[1:]); err != nil {
 		return err
 	}
 	return postJSON(*baseURL, *apiKey, "/v1/subscriptions", map[string]any{
-		"endpoint_id": *endpointID,
-		"event_types": splitCSV(*eventTypes),
+		"endpoint_id":       *endpointID,
+		"event_types":       splitCSV(*eventTypes),
+		"transformation_id": *transformationID,
 	})
 }
 
@@ -387,12 +394,13 @@ func runRoutes(args []string) error {
 	reason := fs.String("reason", "", "change reason")
 	name := fs.String("name", "", "route name")
 	retryPolicyID := fs.String("retry-policy-id", "", "retry policy id")
+	transformationID := fs.String("transformation-id", "", "optional transformation id")
 	if err := fs.Parse(args[1:]); err != nil {
 		return err
 	}
 	switch args[0] {
 	case "create":
-		return postJSON(*baseURL, *apiKey, "/v1/routes", map[string]any{"name": *name, "source_id": *sourceID, "endpoint_id": *endpointID, "event_types": splitCSV(*eventTypes), "retry_policy_id": *retryPolicyID})
+		return postJSON(*baseURL, *apiKey, "/v1/routes", map[string]any{"name": *name, "source_id": *sourceID, "endpoint_id": *endpointID, "event_types": splitCSV(*eventTypes), "retry_policy_id": *retryPolicyID, "transformation_id": *transformationID})
 	case "activate":
 		return postJSON(*baseURL, *apiKey, "/v1/routes/"+*routeID+":activate", map[string]string{"reason": *reason})
 	case "dry-run":
@@ -401,6 +409,73 @@ func runRoutes(args []string) error {
 		return getJSON(*baseURL, *apiKey, "/v1/routes/"+url.PathEscape(*routeID)+"/versions")
 	default:
 		return fmt.Errorf("usage: whcp routes <create|activate|dry-run|versions>")
+	}
+}
+
+func runTransformations(args []string) error {
+	if len(args) == 0 {
+		return fmt.Errorf("usage: whcp transformations <list|create|version|activate|dry-run>")
+	}
+	fs := flag.NewFlagSet("transformations "+args[0], flag.ContinueOnError)
+	baseURL := fs.String("base-url", "http://localhost:8080", "API base URL")
+	apiKey := fs.String("api-key", os.Getenv("WEBHOOKERY_API_KEY"), "API key")
+	transformationID := fs.String("transformation-id", "", "transformation id")
+	versionID := fs.String("version-id", "", "transformation version id")
+	name := fs.String("name", "", "transformation name")
+	operationsPath := fs.String("operations-file", "", "JSON operations file")
+	payloadPath := fs.String("payload-file", "", "JSON payload file for local dry-run")
+	reason := fs.String("reason", "", "activation reason")
+	if err := fs.Parse(args[1:]); err != nil {
+		return err
+	}
+	switch args[0] {
+	case "list":
+		return getJSON(*baseURL, *apiKey, "/v1/transformations")
+	case "create":
+		operations, err := readOptionalOperatorFile(*operationsPath)
+		if err != nil {
+			return err
+		}
+		body := map[string]any{"name": *name}
+		if strings.TrimSpace(operations) != "" {
+			body["operations"] = json.RawMessage(operations)
+		}
+		return postJSON(*baseURL, *apiKey, "/v1/transformations", body)
+	case "version":
+		if strings.TrimSpace(*transformationID) == "" {
+			return fmt.Errorf("transformation-id is required")
+		}
+		operations, err := readRequiredOperatorFile(*operationsPath, "operations-file")
+		if err != nil {
+			return err
+		}
+		return postJSON(*baseURL, *apiKey, "/v1/transformations/"+url.PathEscape(*transformationID)+"/versions", map[string]any{"operations": json.RawMessage(operations)})
+	case "activate":
+		if strings.TrimSpace(*transformationID) == "" || strings.TrimSpace(*versionID) == "" {
+			return fmt.Errorf("transformation-id and version-id are required")
+		}
+		return postJSON(*baseURL, *apiKey, "/v1/transformations/"+url.PathEscape(*transformationID)+"/versions/"+url.PathEscape(*versionID)+":activate", map[string]string{"reason": *reason})
+	case "dry-run":
+		payload, err := readRequiredOperatorFile(*payloadPath, "payload-file")
+		if err != nil {
+			return err
+		}
+		operations, err := readRequiredOperatorFile(*operationsPath, "operations-file")
+		if err != nil {
+			return err
+		}
+		ops, err := transform.ParseOperations([]byte(operations))
+		if err != nil {
+			return err
+		}
+		out, err := transform.Apply([]byte(payload), ops)
+		if err != nil {
+			return err
+		}
+		_, err = os.Stdout.Write(append(out, '\n'))
+		return err
+	default:
+		return fmt.Errorf("usage: whcp transformations <list|create|version|activate|dry-run>")
 	}
 }
 
@@ -496,6 +571,7 @@ func runAudit(args []string) error {
 	fromRaw := fs.String("from", "", "RFC3339 lower bound")
 	toRaw := fs.String("to", "", "RFC3339 upper bound")
 	includeRaw := fs.Bool("include-raw", false, "include raw payload bodies when authorized")
+	includePayloads := fs.Bool("include-payloads", false, "include normalized and delivery payload bodies when authorized")
 	includeTimelines := fs.Bool("include-timelines", false, "include event, receipt, delivery, and audit timelines")
 	reason := fs.String("reason", "", "operator reason")
 	output := fs.String("output", "", "download output path")
@@ -513,11 +589,12 @@ func runAudit(args []string) error {
 			return err
 		}
 		return postJSON(*baseURL, *apiKey, "/v1/audit-events:export", map[string]any{
-			"from":                 nullableCLITime(from),
-			"to":                   nullableCLITime(to),
-			"include_raw_payloads": *includeRaw,
-			"include_timelines":    *includeTimelines,
-			"reason":               *reason,
+			"from":                   nullableCLITime(from),
+			"to":                     nullableCLITime(to),
+			"include_raw_payloads":   *includeRaw,
+			"include_payload_bodies": *includePayloads,
+			"include_timelines":      *includeTimelines,
+			"reason":                 *reason,
 		})
 	case "export-status":
 		if strings.TrimSpace(*exportID) == "" {
@@ -542,7 +619,7 @@ func runRetention(args []string) error {
 	baseURL := fs.String("base-url", "http://localhost:8080", "API base URL")
 	apiKey := fs.String("api-key", os.Getenv("WEBHOOKERY_API_KEY"), "API key")
 	policyID := fs.String("policy-id", "", "retention policy id")
-	resourceType := fs.String("resource-type", domain.RetentionResourceRawPayload, "raw_payload or audit_event")
+	resourceType := fs.String("resource-type", domain.RetentionResourceRawPayload, "raw_payload, normalized_envelope_data, delivery_payload, or audit_event")
 	sourceID := fs.String("source-id", "", "optional source id for raw payload retention")
 	retentionDays := fs.Int("retention-days", 0, "retention period in days")
 	state := fs.String("state", "", "active or disabled")
@@ -903,6 +980,24 @@ func exportRawPayload(baseURL, apiKey, eventID, outputPath string) error {
 		return err
 	}
 	return writePrivateFile(outputPath, raw)
+}
+
+func readRequiredOperatorFile(path, flagName string) (string, error) {
+	if strings.TrimSpace(path) == "" {
+		return "", fmt.Errorf("%s is required", flagName)
+	}
+	body, err := os.ReadFile(path) // #nosec G304,G703 -- CLI reads an operator-selected local file.
+	if err != nil {
+		return "", err
+	}
+	return string(body), nil
+}
+
+func readOptionalOperatorFile(path string) (string, error) {
+	if strings.TrimSpace(path) == "" {
+		return "", nil
+	}
+	return readRequiredOperatorFile(path, "file")
 }
 
 func writePrivateFile(outputPath string, body []byte) error {

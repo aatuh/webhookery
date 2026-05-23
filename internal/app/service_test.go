@@ -46,6 +46,9 @@ func TestIngestCapturesBeforeAccepted(t *testing.T) {
 	if store.last.RawPayload.SHA256 != domain.HashSHA256(body) {
 		t.Fatalf("raw hash mismatch: %+v", store.last.RawPayload)
 	}
+	if len(store.last.Normalized.Envelope) == 0 || store.last.Normalized.Type != "push" {
+		t.Fatalf("expected normalized envelope for verified provider payload, got %+v", store.last.Normalized)
+	}
 }
 
 func TestIngestInvalidSignatureCapturesEvidenceButDoesNotAccept(t *testing.T) {
@@ -78,6 +81,9 @@ func TestIngestInvalidSignatureCapturesEvidenceButDoesNotAccept(t *testing.T) {
 	}
 	if !store.captured || store.last.VerificationOK {
 		t.Fatalf("expected rejected evidence capture, captured=%v input=%+v", store.captured, store.last)
+	}
+	if len(store.last.Normalized.Envelope) != 0 {
+		t.Fatal("unverified provider payload must not create a normalized envelope")
 	}
 }
 

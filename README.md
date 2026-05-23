@@ -32,8 +32,11 @@ go run ./cmd/whcp api-keys create --api-key dev-bootstrap-key --name local-opera
 go run ./cmd/whcp events list --base-url http://localhost:8080 --api-key "$WEBHOOKERY_API_KEY"
 go run ./cmd/whcp events get --event-id evt_... --api-key "$WEBHOOKERY_API_KEY"
 go run ./cmd/whcp events timeline --event-id evt_... --api-key "$WEBHOOKERY_API_KEY"
+go run ./cmd/whcp events normalized --event-id evt_... --api-key "$WEBHOOKERY_API_KEY"
 go run ./cmd/whcp events raw-export --event-id evt_... --output payload.bin --api-key "$WEBHOOKERY_API_KEY"
-go run ./cmd/whcp audit export --include-timelines --reason "support case" --api-key "$WEBHOOKERY_API_KEY"
+go run ./cmd/whcp transformations create --name redact-email --operations-file operations.json --api-key "$WEBHOOKERY_API_KEY"
+go run ./cmd/whcp transformations dry-run --payload-file payload.json --operations-file operations.json
+go run ./cmd/whcp audit export --include-timelines --include-payloads --reason "support case" --api-key "$WEBHOOKERY_API_KEY"
 go run ./cmd/whcp audit export-status --export-id exp_... --api-key "$WEBHOOKERY_API_KEY"
 go run ./cmd/whcp audit download --export-id exp_... --output evidence.tar.gz --api-key "$WEBHOOKERY_API_KEY"
 go run ./cmd/whcp retention create --resource-type raw_payload --retention-days 30 --api-key "$WEBHOOKERY_API_KEY"
@@ -58,6 +61,12 @@ Raw payload bodies are stored in PostgreSQL by default. To use S3-compatible
 storage, set `WEBHOOKERY_RAW_STORAGE_MODE=s3` plus the
 `WEBHOOKERY_OBJECT_STORAGE_*` variables. In S3 mode, inbound success requires
 the object write and PostgreSQL metadata commit to both succeed.
+
+Verified events also get canonical normalized envelope records. Routes and
+subscriptions can reference deterministic JSON Pointer transformations; new
+deliveries snapshot the exact outbound payload bytes and sign those stored
+bytes. Transformation payloads may contain PII, so body reads and payload-body
+exports require `events:raw`.
 
 For local MinIO testing:
 

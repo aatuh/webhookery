@@ -125,6 +125,33 @@ func TestAuditExportDownloadReturnsBundleWithHashHeader(t *testing.T) {
 	}
 }
 
+func TestNormalizedEventBodyRequiresRawScope(t *testing.T) {
+	server := testServerWithActor(authz.Actor{ID: "usr_1", TenantID: "ten_1", Role: authz.RoleDeveloper, Scopes: []string{"events:read"}})
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/v1/events/evt_1/normalized?include_data=true", nil)
+	req.Header.Set("Authorization", "Bearer token")
+
+	server.Routes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("expected 403, got %d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestTransformationWriteRequiresRoutesWrite(t *testing.T) {
+	server := testServerWithActor(authz.Actor{ID: "usr_1", TenantID: "ten_1", Role: authz.RoleDeveloper, Scopes: []string{"routes:read"}})
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/v1/transformations", bytes.NewBufferString(`{"name":"redact","operations":[{"op":"redact","path":"/data/email"}]}`))
+	req.Header.Set("Authorization", "Bearer token")
+	req.Header.Set("Content-Type", "application/json")
+
+	server.Routes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("expected 403, got %d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
 type fakeIngestStore struct{}
 
 func (fakeIngestStore) FindSource(context.Context, string, string) (domain.Source, error) {
@@ -233,6 +260,9 @@ func (noopControlStore) GetEvent(context.Context, string, string) (domain.Event,
 func (noopControlStore) GetRawPayload(context.Context, string, string, string) (domain.RawPayload, error) {
 	return domain.RawPayload{}, nil
 }
+func (noopControlStore) GetNormalizedEvent(_ context.Context, tenantID, eventID, actorID string, includeData bool) (domain.NormalizedEnvelope, error) {
+	return domain.NormalizedEnvelope{ID: "nenv_1", TenantID: tenantID, EventID: eventID, StorageStatus: domain.StorageStatusStored}, nil
+}
 func (noopControlStore) ListEventTimeline(context.Context, string, string, int) ([]map[string]any, error) {
 	return nil, nil
 }
@@ -320,4 +350,22 @@ func (noopControlStore) ResumeReplayJob(context.Context, string, string, string,
 }
 func (noopControlStore) CancelReplayJob(context.Context, string, string, string, string) (app.ReplayJob, error) {
 	return app.ReplayJob{}, nil
+}
+func (noopControlStore) CreateTransformation(_ context.Context, tenantID, actorID string, req app.CreateTransformationRequest) (domain.Transformation, error) {
+	return domain.Transformation{ID: "trn_1", TenantID: tenantID, Name: req.Name, CreatedBy: actorID}, nil
+}
+func (noopControlStore) ListTransformations(context.Context, string, int) ([]domain.Transformation, error) {
+	return nil, nil
+}
+func (noopControlStore) GetTransformation(context.Context, string, string) (domain.Transformation, error) {
+	return domain.Transformation{}, nil
+}
+func (noopControlStore) CreateTransformationVersion(context.Context, string, string, string, app.CreateTransformationVersionRequest) (domain.TransformationVersion, error) {
+	return domain.TransformationVersion{}, nil
+}
+func (noopControlStore) ListTransformationVersions(context.Context, string, string, int) ([]domain.TransformationVersion, error) {
+	return nil, nil
+}
+func (noopControlStore) ActivateTransformationVersion(context.Context, string, string, string, string, string) (domain.TransformationVersion, error) {
+	return domain.TransformationVersion{}, nil
 }

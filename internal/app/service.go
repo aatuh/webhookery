@@ -69,6 +69,7 @@ type CaptureInboundInput struct {
 	RawPayload     domain.RawPayload
 	Receipt        domain.Receipt
 	Event          domain.Event
+	Normalized     domain.NormalizedEnvelope
 	VerificationOK bool
 	VerifyReason   string
 }
@@ -131,6 +132,45 @@ func (s *IngestService) capture(ctx context.Context, source domain.Source, req I
 	rawHash := domain.HashSHA256(req.RawBody)
 	providerEventID, eventType := extractEventMetadataForProvider(source.Adapter, req.RawBody, headers)
 	dedupeKey := dedupeKey(source, providerEventID, rawHash)
+	normalized := domain.NormalizedEnvelope{}
+	if verify.Verified {
+		env, err := provider.Normalize(provider.NormalizeInput{
+			Adapter:      source.Adapter,
+			Provider:     source.Provider,
+			TenantID:     source.TenantID,
+			SourceID:     source.ID,
+			RawBody:      req.RawBody,
+			Headers:      headers,
+			Verified:     verify.Verified,
+			VerifyReason: verify.Reason,
+			RawHash:      rawHash,
+		})
+		if err == nil {
+			normalized = domain.NormalizedEnvelope{
+				TenantID:         source.TenantID,
+				AdapterVersionID: "",
+				Provider:         source.Provider,
+				ProviderEventID:  env.ProviderEventID,
+				Type:             env.Type,
+				Source:           env.Source,
+				Subject:          env.Subject,
+				Envelope:         append([]byte(nil), env.Envelope...),
+				Data:             append([]byte(nil), env.Data...),
+				Metadata:         append([]byte(nil), env.Metadata...),
+				EnvelopeSHA256:   env.EnvelopeHash,
+				DataSHA256:       env.DataHash,
+				MetadataSHA256:   env.MetadataHash,
+				StorageStatus:    domain.StorageStatusStored,
+				CreatedAt:        now,
+			}
+			if providerEventID == "" {
+				providerEventID = env.ProviderEventID
+			}
+			if eventType == "" {
+				eventType = env.Type
+			}
+		}
+	}
 	input := CaptureInboundInput{
 		Source: source,
 		RawPayload: domain.RawPayload{
@@ -163,6 +203,7 @@ func (s *IngestService) capture(ctx context.Context, source domain.Source, req I
 			DedupeStatus:   domain.DedupeUnique,
 			ReceivedAt:     now,
 		},
+		Normalized:     normalized,
 		VerificationOK: verify.Verified,
 		VerifyReason:   verify.Reason,
 	}

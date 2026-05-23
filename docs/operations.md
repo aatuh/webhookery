@@ -118,12 +118,48 @@ record.
 ## Reproducible Configuration
 
 `config_versions` records immutable JSON snapshots and hashes for sources,
-endpoints, subscriptions, routes, retry policies, schemas, and secret-version
-metadata when those resources are created or rotated through the implemented
-code paths. `route_versions` and `subscription_versions` store the fields used
-for matching and delivery creation. This is a reproducibility foundation; it
-does not yet implement full adapter/transformation versioning, deterministic
-jitter seeds, or a hash-chained audit log.
+endpoints, subscriptions, routes, retry policies, schemas, transformation
+versions, and secret-version metadata when those resources are created or
+rotated through the implemented code paths. `route_versions` and
+`subscription_versions` store the fields used for matching and delivery
+creation, including optional `transformation_id` and
+`transformation_version_id`. This is a reproducibility foundation; it does not
+yet implement deterministic jitter seeds or a hash-chained audit log.
+
+## Normalization And Transformations
+
+Verified inbound events are normalized into `normalized_envelopes` after raw
+body capture and provider verification. Raw payloads remain authoritative:
+normalization does not replace raw evidence and unverified requests do not
+produce routed normalized payloads by default. Normalized event metadata is
+available through `GET /v1/events/{event_id}/normalized` with `events:read`;
+including normalized data requires `events:raw` and emits an audit event.
+
+Built-in adapter versions are recorded in `provider_adapters` and
+`adapter_versions`. Each normalized envelope stores the selected
+`adapter_version_id`, provider identifiers, stable hashes for the envelope,
+data, and metadata, and retention state. Existing verified events are backfilled
+as `legacy_metadata_only` envelopes so historical event metadata remains visible
+without inventing payload data.
+
+Transformations are tenant-scoped configuration resources managed through
+`/v1/transformations` and `whcp transformations`. A transformation version is
+immutable and declarative. Implemented operations are JSON Pointer based only:
+`set`, `copy`, `drop`, and `redact`. Transformations cannot change provider
+evidence, verification fields, tenant/source identifiers, hashes, or audit
+metadata. There is no arbitrary scripting, network access, plugin marketplace,
+or custom runtime in this slice.
+
+Routes and subscriptions may reference an active transformation. New delivery
+work snapshots the exact transformed outbound bytes into `delivery_payloads`
+before the delivery becomes claimable. Workers deliver and sign those stored
+bytes instead of rebuilding payloads at claim time. Legacy deliveries without a
+payload snapshot retain the previous fallback behavior.
+
+Replay with `config_mode=original` clones the original delivery payload and
+evidence identifiers when available. Replay with `config_mode=current`
+regenerates delivery payloads from the current active route, subscription, and
+transformation configuration.
 
 Event schemas support a conservative JSON Schema subset for validation:
 `type`, `required`, object `properties`, and array `items`. Compatibility
@@ -149,6 +185,12 @@ types are:
 
 - `raw_payload`: deletes PostgreSQL raw bodies or S3 objects after the policy
   age, optionally scoped to a source.
+- `normalized_envelope_data`: deletes normalized envelope and data JSON while
+  preserving envelope ids, provider metadata, hashes, event records, receipts,
+  deliveries, and audit rows.
+- `delivery_payload`: deletes stored outbound delivery payload bodies while
+  preserving delivery ids, hashes, transformation evidence, attempts, and audit
+  rows.
 - `audit_event`: deletes audit rows after the policy age.
 
 The worker applies active policies in bounded batches and records
@@ -159,10 +201,14 @@ write audit events.
 
 `POST /v1/audit-events:export` creates a tenant-scoped `tar.gz` bundle
 synchronously for this implementation slice. The bundle contains
-`manifest.json`, `audit_events.jsonl`, and optional `timelines.jsonl` and
-`raw_payloads.jsonl`. Raw payload bodies are included only when the actor has
-both `audit:read` and `events:raw`; actors without `events:raw` cannot see or
-download raw-inclusive exports.
+`manifest.json`, `audit_events.jsonl`, `payload_evidence.jsonl`, and optional
+`timelines.jsonl` and `raw_payloads.jsonl`. Payload evidence includes
+normalized envelope metadata, delivery payload metadata, and hashes. Raw payload
+bodies are included only with `include_raw_payloads=true` when the actor has
+both `audit:read` and `events:raw`. Normalized and delivery payload bodies are
+included only with `include_payload_bodies=true` and the same permissions.
+Actors without `events:raw` cannot see or download raw- or payload-body
+inclusive exports.
 
 Each export row stores the bundle SHA-256, manifest SHA-256, file hashes,
 storage backend, size, creator, and completion timestamp. This is a

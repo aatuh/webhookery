@@ -14,14 +14,15 @@ import (
 )
 
 type Manifest struct {
-	ExportID           string         `json:"export_id"`
-	TenantID           string         `json:"tenant_id"`
-	CreatedAt          time.Time      `json:"created_at"`
-	From               time.Time      `json:"from,omitempty"`
-	To                 time.Time      `json:"to,omitempty"`
-	IncludeRawPayloads bool           `json:"include_raw_payloads"`
-	IncludeTimelines   bool           `json:"include_timelines"`
-	Files              []ManifestFile `json:"files"`
+	ExportID             string         `json:"export_id"`
+	TenantID             string         `json:"tenant_id"`
+	CreatedAt            time.Time      `json:"created_at"`
+	From                 time.Time      `json:"from,omitempty"`
+	To                   time.Time      `json:"to,omitempty"`
+	IncludeRawPayloads   bool           `json:"include_raw_payloads"`
+	IncludeTimelines     bool           `json:"include_timelines"`
+	IncludePayloadBodies bool           `json:"include_payload_bodies"`
+	Files                []ManifestFile `json:"files"`
 }
 
 type ManifestFile struct {

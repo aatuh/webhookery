@@ -56,6 +56,7 @@ var indexTemplate = template.Must(template.New("index").Parse(`<!doctype html>
       ["sources", "/v1/sources"],
       ["endpoints", "/v1/endpoints"],
       ["subscriptions", "/v1/subscriptions"],
+      ["transformations", "/v1/transformations"],
       ["retry policies", "/v1/retry-policies"],
       ["routes", "/v1/routes"],
       ["schemas", "/v1/event-types"],
@@ -134,6 +135,11 @@ var indexTemplate = template.Must(template.New("index").Parse(`<!doctype html>
         th.textContent = key;
         head.append(th);
       }
+      if (name === "events") {
+        const th = document.createElement("th");
+        th.textContent = "normalized";
+        head.append(th);
+      }
       if (name === "audit exports") {
         const th = document.createElement("th");
         th.textContent = "download";
@@ -146,6 +152,16 @@ var indexTemplate = template.Must(template.New("index").Parse(`<!doctype html>
           const td = document.createElement("td");
           const value = row[key];
           td.textContent = typeof value === "object" && value !== null ? JSON.stringify(value) : String(value ?? "");
+          tr.append(td);
+        }
+        if (name === "events") {
+          const td = document.createElement("td");
+          if (row.id) {
+            const button = document.createElement("button");
+            button.textContent = "View";
+            button.onclick = () => showNormalized(row.id);
+            td.append(button);
+          }
           tr.append(td);
         }
         if (name === "audit exports") {
@@ -161,6 +177,18 @@ var indexTemplate = template.Must(template.New("index").Parse(`<!doctype html>
         table.append(tr);
       }
       view.append(table);
+    }
+
+    async function showNormalized(id) {
+      try {
+        const body = await request("/v1/events/" + encodeURIComponent(id) + "/normalized");
+        raw.hidden = false;
+        raw.textContent = JSON.stringify(body, null, 2);
+      } catch (error) {
+        raw.hidden = false;
+        raw.textContent = JSON.stringify(error, null, 2);
+        status.textContent = "Normalized read failed";
+      }
     }
 
     async function downloadExport(id) {

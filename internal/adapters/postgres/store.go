@@ -20,6 +20,7 @@ import (
 	"webhookery/internal/evidence"
 	"webhookery/internal/random"
 	"webhookery/internal/retry"
+	"webhookery/internal/transform"
 	"webhookery/internal/worker"
 )
 
@@ -490,11 +491,19 @@ func (s *Store) CreateSubscription(ctx context.Context, subscription domain.Subs
 		return domain.Subscription{}, err
 	}
 	defer rollback(ctx, tx)
+	if subscription.TransformationID != "" {
+		versionID, err := s.activeTransformationVersionID(ctx, tx, subscription.TenantID, subscription.TransformationID)
+		if err != nil {
+			return domain.Subscription{}, err
+		}
+		subscription.TransformationVersionID = versionID
+	}
 	err = tx.QueryRow(ctx, `
-		INSERT INTO subscriptions(id, tenant_id, endpoint_id, event_types, payload_format, state, version)
-		VALUES($1,$2,$3,$4,$5,$6,$7)
+		INSERT INTO subscriptions(id, tenant_id, endpoint_id, event_types, payload_format, transformation_id, transformation_version_id, state, version)
+		VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)
 		RETURNING created_at`,
-		subscription.ID, subscription.TenantID, subscription.EndpointID, subscription.EventTypes, subscription.PayloadFormat, subscription.State, subscription.Version,
+		subscription.ID, subscription.TenantID, subscription.EndpointID, subscription.EventTypes, subscription.PayloadFormat,
+		subscription.TransformationID, subscription.TransformationVersionID, subscription.State, subscription.Version,
 	).Scan(&subscription.CreatedAt)
 	if err != nil {
 		return domain.Subscription{}, err
@@ -514,7 +523,7 @@ func (s *Store) CreateSubscription(ctx context.Context, subscription domain.Subs
 }
 
 func (s *Store) ListSubscriptions(ctx context.Context, tenantID string, limit int) ([]domain.Subscription, error) {
-	rows, err := s.pool.Query(ctx, `SELECT id, tenant_id, endpoint_id, event_types, payload_format, state, version, active_version_id, created_at FROM subscriptions WHERE tenant_id=$1 ORDER BY created_at DESC LIMIT $2`, tenantID, limit)
+	rows, err := s.pool.Query(ctx, `SELECT id, tenant_id, endpoint_id, event_types, payload_format, transformation_id, transformation_version_id, state, version, active_version_id, created_at FROM subscriptions WHERE tenant_id=$1 ORDER BY created_at DESC LIMIT $2`, tenantID, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -548,11 +557,19 @@ func (s *Store) CreateRoute(ctx context.Context, route domain.Route) (domain.Rou
 		return domain.Route{}, err
 	}
 	defer rollback(ctx, tx)
+	if route.TransformationID != "" {
+		versionID, err := s.activeTransformationVersionID(ctx, tx, route.TenantID, route.TransformationID)
+		if err != nil {
+			return domain.Route{}, err
+		}
+		route.TransformationVersionID = versionID
+	}
 	err = tx.QueryRow(ctx, `
-		INSERT INTO routes(id, tenant_id, source_id, name, priority, event_types, endpoint_id, state, version, retry_policy_id)
-		VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+		INSERT INTO routes(id, tenant_id, source_id, name, priority, event_types, endpoint_id, state, version, retry_policy_id, transformation_id, transformation_version_id)
+		VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
 		RETURNING created_at`,
-		route.ID, route.TenantID, route.SourceID, route.Name, route.Priority, route.EventTypes, route.EndpointID, route.State, route.Version, route.RetryPolicyID,
+		route.ID, route.TenantID, route.SourceID, route.Name, route.Priority, route.EventTypes, route.EndpointID,
+		route.State, route.Version, route.RetryPolicyID, route.TransformationID, route.TransformationVersionID,
 	).Scan(&route.CreatedAt)
 	if err != nil {
 		return domain.Route{}, err
@@ -572,7 +589,7 @@ func (s *Store) CreateRoute(ctx context.Context, route domain.Route) (domain.Rou
 }
 
 func (s *Store) ListRoutes(ctx context.Context, tenantID string, limit int) ([]domain.Route, error) {
-	rows, err := s.pool.Query(ctx, `SELECT id, tenant_id, source_id, name, priority, event_types, endpoint_id, state, version, active_version_id, retry_policy_id, created_at FROM routes WHERE tenant_id=$1 ORDER BY priority ASC, created_at DESC LIMIT $2`, tenantID, limit)
+	rows, err := s.pool.Query(ctx, `SELECT id, tenant_id, source_id, name, priority, event_types, endpoint_id, state, version, active_version_id, retry_policy_id, transformation_id, transformation_version_id, created_at FROM routes WHERE tenant_id=$1 ORDER BY priority ASC, created_at DESC LIMIT $2`, tenantID, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -590,7 +607,7 @@ func (s *Store) ListRoutes(ctx context.Context, tenantID string, limit int) ([]d
 
 func (s *Store) ListRouteVersions(ctx context.Context, tenantID, routeID string, limit int) ([]domain.RouteVersion, error) {
 	rows, err := s.pool.Query(ctx, `
-		SELECT id, tenant_id, route_id, version, config_hash, source_id, name, priority, event_types, endpoint_id, retry_policy_id, state, created_by, created_at
+		SELECT id, tenant_id, route_id, version, config_hash, source_id, name, priority, event_types, endpoint_id, retry_policy_id, transformation_id, transformation_version_id, state, created_by, created_at
 		FROM route_versions
 		WHERE tenant_id=$1 AND route_id=$2
 		ORDER BY version DESC
@@ -617,7 +634,7 @@ func (s *Store) ActivateRoute(ctx context.Context, tenantID, routeID, actorID, r
 		return domain.Route{}, err
 	}
 	defer rollback(ctx, tx)
-	err = tx.QueryRow(ctx, `UPDATE routes SET state='active', version=version+1 WHERE tenant_id=$1 AND id=$2 RETURNING id, tenant_id, source_id, name, priority, event_types, endpoint_id, state, version, active_version_id, retry_policy_id, created_at`, tenantID, routeID).Scan(&route.ID, &route.TenantID, &route.SourceID, &route.Name, &route.Priority, &route.EventTypes, &route.EndpointID, &route.State, &route.Version, &route.ActiveVersionID, &route.RetryPolicyID, &route.CreatedAt)
+	err = tx.QueryRow(ctx, `UPDATE routes SET state='active', version=version+1 WHERE tenant_id=$1 AND id=$2 RETURNING id, tenant_id, source_id, name, priority, event_types, endpoint_id, state, version, active_version_id, retry_policy_id, transformation_id, transformation_version_id, created_at`, tenantID, routeID).Scan(&route.ID, &route.TenantID, &route.SourceID, &route.Name, &route.Priority, &route.EventTypes, &route.EndpointID, &route.State, &route.Version, &route.ActiveVersionID, &route.RetryPolicyID, &route.TransformationID, &route.TransformationVersionID, &route.CreatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return domain.Route{}, app.ErrNotFound
 	}
@@ -659,7 +676,7 @@ func (s *Store) DryRunRoute(ctx context.Context, tenantID, routeID, eventID stri
 		},
 	}
 	if matched {
-		out.WouldCreateDeliveries = append(out.WouldCreateDeliveries, map[string]any{"endpoint_id": route.EndpointID, "route_id": route.ID, "route_version_id": route.ActiveVersionID, "retry_policy_id": route.RetryPolicyID})
+		out.WouldCreateDeliveries = append(out.WouldCreateDeliveries, map[string]any{"endpoint_id": route.EndpointID, "route_id": route.ID, "route_version_id": route.ActiveVersionID, "retry_policy_id": route.RetryPolicyID, "transformation_id": route.TransformationID, "transformation_version_id": route.TransformationVersionID})
 	}
 	return out, nil
 }
@@ -729,6 +746,159 @@ func (s *Store) ListRetryPolicies(ctx context.Context, tenantID string, limit in
 		out = append(out, item)
 	}
 	return out, rows.Err()
+}
+
+func (s *Store) CreateTransformation(ctx context.Context, tenantID, actorID string, req app.CreateTransformationRequest) (domain.Transformation, error) {
+	item := domain.Transformation{
+		ID:        mustID("trn"),
+		TenantID:  tenantID,
+		Name:      strings.TrimSpace(req.Name),
+		State:     domain.StateActive,
+		CreatedBy: actorID,
+	}
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return domain.Transformation{}, err
+	}
+	defer rollback(ctx, tx)
+	err = tx.QueryRow(ctx, `
+		INSERT INTO transformations(id, tenant_id, name, state, created_by)
+		VALUES($1,$2,$3,$4,$5)
+		RETURNING created_at, updated_at`,
+		item.ID, item.TenantID, item.Name, item.State, item.CreatedBy,
+	).Scan(&item.CreatedAt, &item.UpdatedAt)
+	if err != nil {
+		return domain.Transformation{}, err
+	}
+	if len(req.Operations) != 0 {
+		version, err := s.insertTransformationVersion(ctx, tx, tenantID, item.ID, actorID, req.Operations, domain.StateActive)
+		if err != nil {
+			return domain.Transformation{}, err
+		}
+		item.ActiveVersionID = version.ID
+		if _, err := tx.Exec(ctx, `UPDATE transformations SET active_version_id=$1, updated_at=now() WHERE tenant_id=$2 AND id=$3`, version.ID, tenantID, item.ID); err != nil {
+			return domain.Transformation{}, err
+		}
+	}
+	if _, err := tx.Exec(ctx, `INSERT INTO audit_events(id, tenant_id, actor_id, action, resource, resource_id, reason) VALUES($1,$2,$3,'transformation.created','transformation',$4,$5)`, mustID("aud"), tenantID, actorID, item.ID, item.Name); err != nil {
+		return domain.Transformation{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return domain.Transformation{}, err
+	}
+	return item, nil
+}
+
+func (s *Store) ListTransformations(ctx context.Context, tenantID string, limit int) ([]domain.Transformation, error) {
+	rows, err := s.pool.Query(ctx, `SELECT id, tenant_id, name, state, active_version_id, created_by, created_at, updated_at FROM transformations WHERE tenant_id=$1 ORDER BY updated_at DESC LIMIT $2`, tenantID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []domain.Transformation
+	for rows.Next() {
+		item, err := scanTransformation(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, item)
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) GetTransformation(ctx context.Context, tenantID, transformationID string) (domain.Transformation, error) {
+	row := s.pool.QueryRow(ctx, `SELECT id, tenant_id, name, state, active_version_id, created_by, created_at, updated_at FROM transformations WHERE tenant_id=$1 AND id=$2`, tenantID, transformationID)
+	item, err := scanTransformation(row)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return domain.Transformation{}, app.ErrNotFound
+	}
+	return item, err
+}
+
+func (s *Store) CreateTransformationVersion(ctx context.Context, tenantID, transformationID, actorID string, req app.CreateTransformationVersionRequest) (domain.TransformationVersion, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return domain.TransformationVersion{}, err
+	}
+	defer rollback(ctx, tx)
+	var exists bool
+	if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM transformations WHERE tenant_id=$1 AND id=$2)`, tenantID, transformationID).Scan(&exists); err != nil {
+		return domain.TransformationVersion{}, err
+	}
+	if !exists {
+		return domain.TransformationVersion{}, app.ErrNotFound
+	}
+	item, err := s.insertTransformationVersion(ctx, tx, tenantID, transformationID, actorID, req.Operations, "draft")
+	if err != nil {
+		return domain.TransformationVersion{}, err
+	}
+	if _, err := tx.Exec(ctx, `UPDATE transformations SET updated_at=now() WHERE tenant_id=$1 AND id=$2`, tenantID, transformationID); err != nil {
+		return domain.TransformationVersion{}, err
+	}
+	if _, err := tx.Exec(ctx, `INSERT INTO audit_events(id, tenant_id, actor_id, action, resource, resource_id, reason) VALUES($1,$2,$3,'transformation_version.created','transformation',$4,$5)`, mustID("aud"), tenantID, actorID, transformationID, item.ConfigHash); err != nil {
+		return domain.TransformationVersion{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return domain.TransformationVersion{}, err
+	}
+	return item, nil
+}
+
+func (s *Store) ListTransformationVersions(ctx context.Context, tenantID, transformationID string, limit int) ([]domain.TransformationVersion, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT id, tenant_id, transformation_id, version, config_hash, operations_json, state, created_by, created_at
+		FROM transformation_versions
+		WHERE tenant_id=$1 AND transformation_id=$2
+		ORDER BY version DESC
+		LIMIT $3`, tenantID, transformationID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []domain.TransformationVersion
+	for rows.Next() {
+		item, err := scanTransformationVersion(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, item)
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) ActivateTransformationVersion(ctx context.Context, tenantID, transformationID, versionID, actorID, reason string) (domain.TransformationVersion, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return domain.TransformationVersion{}, err
+	}
+	defer rollback(ctx, tx)
+	var item domain.TransformationVersion
+	err = tx.QueryRow(ctx, `
+		UPDATE transformation_versions
+		SET state='active'
+		WHERE tenant_id=$1 AND transformation_id=$2 AND id=$3
+		RETURNING id, tenant_id, transformation_id, version, config_hash, operations_json, state, created_by, created_at`,
+		tenantID, transformationID, versionID,
+	).Scan(&item.ID, &item.TenantID, &item.TransformationID, &item.Version, &item.ConfigHash, &item.Operations, &item.State, &item.CreatedBy, &item.CreatedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return domain.TransformationVersion{}, app.ErrNotFound
+	}
+	if err != nil {
+		return domain.TransformationVersion{}, err
+	}
+	if _, err := tx.Exec(ctx, `UPDATE transformation_versions SET state='inactive' WHERE tenant_id=$1 AND transformation_id=$2 AND id<>$3 AND state='active'`, tenantID, transformationID, versionID); err != nil {
+		return domain.TransformationVersion{}, err
+	}
+	if _, err := tx.Exec(ctx, `UPDATE transformations SET active_version_id=$1, updated_at=now() WHERE tenant_id=$2 AND id=$3`, versionID, tenantID, transformationID); err != nil {
+		return domain.TransformationVersion{}, err
+	}
+	if _, err := tx.Exec(ctx, `INSERT INTO audit_events(id, tenant_id, actor_id, action, resource, resource_id, reason) VALUES($1,$2,$3,'transformation_version.activated','transformation',$4,$5)`, mustID("aud"), tenantID, actorID, transformationID, reason); err != nil {
+		return domain.TransformationVersion{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return domain.TransformationVersion{}, err
+	}
+	return item, nil
 }
 
 func (s *Store) CreateEventType(ctx context.Context, eventType domain.EventType) (domain.EventType, error) {
@@ -1000,6 +1170,24 @@ func (s *Store) CaptureInbound(ctx context.Context, input app.CaptureInboundInpu
 		if _, err := tx.Exec(ctx, `UPDATE raw_payloads SET event_id=$1 WHERE id=$2`, eventID, rawID); err != nil {
 			return app.CaptureInboundResult{}, err
 		}
+		if len(input.Normalized.Envelope) > 0 {
+			adapterVersionID, err := s.lookupAdapterVersionID(ctx, tx, firstNonEmpty(input.Source.Adapter, input.Source.Provider))
+			if err != nil {
+				return app.CaptureInboundResult{}, err
+			}
+			normalizedID := mustID("nenv")
+			if _, err := tx.Exec(ctx, `
+				INSERT INTO normalized_envelopes(id, tenant_id, event_id, adapter_version_id, provider, provider_event_id, type, source, subject,
+					envelope_json, data_json, metadata_json, envelope_sha256, data_sha256, metadata_sha256, storage_status, created_at)
+				VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,$11::jsonb,$12::jsonb,$13,$14,$15,$16,$17)`,
+				normalizedID, input.Source.TenantID, eventID, adapterVersionID, input.Normalized.Provider, input.Normalized.ProviderEventID,
+				input.Normalized.Type, input.Normalized.Source, input.Normalized.Subject, string(input.Normalized.Envelope),
+				string(input.Normalized.Data), string(input.Normalized.Metadata), input.Normalized.EnvelopeSHA256, input.Normalized.DataSHA256,
+				input.Normalized.MetadataSHA256, domain.StorageStatusStored, input.Normalized.CreatedAt,
+			); err != nil {
+				return app.CaptureInboundResult{}, err
+			}
+		}
 		payload, _ := json.Marshal(map[string]any{"event_id": eventID})
 		if _, err := tx.Exec(ctx, `INSERT INTO outbox(id, tenant_id, kind, resource_id, payload) VALUES($1,$2,$3,$4,$5)`, outboxID, input.Source.TenantID, "route_event", eventID, payload); err != nil {
 			return app.CaptureInboundResult{}, err
@@ -1075,6 +1263,34 @@ func (s *Store) prepareRawPayloadStorage(ctx context.Context, tenantID, rawID st
 	return rawPayloadStorage{backend: domain.RawStorageS3, bucket: s.objectBucket, key: key}, []byte{}, nil
 }
 
+func (s *Store) lookupAdapterVersionID(ctx context.Context, tx pgx.Tx, adapter string) (string, error) {
+	adapter = strings.ToLower(strings.TrimSpace(adapter))
+	if adapter == "" {
+		return "", nil
+	}
+	var id string
+	err := tx.QueryRow(ctx, `SELECT id FROM adapter_versions WHERE name=$1 AND state='active' ORDER BY created_at DESC LIMIT 1`, adapter).Scan(&id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", nil
+	}
+	return id, err
+}
+
+func (s *Store) activeTransformationVersionID(ctx context.Context, tx pgx.Tx, tenantID, transformationID string) (string, error) {
+	var versionID string
+	err := tx.QueryRow(ctx, `
+		SELECT tv.id
+		FROM transformations t
+		JOIN transformation_versions tv ON tv.tenant_id=t.tenant_id AND tv.id=t.active_version_id
+		WHERE t.tenant_id=$1 AND t.id=$2 AND t.state='active' AND tv.state='active'`,
+		tenantID, transformationID,
+	).Scan(&versionID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", app.ErrNotFound
+	}
+	return versionID, err
+}
+
 func (s *Store) ListEvents(ctx context.Context, tenantID string, limit int) ([]domain.Event, error) {
 	rows, err := s.pool.Query(ctx, `SELECT id, tenant_id, source_id, provider, type, provider_event_id, raw_payload_id, raw_payload_hash, signature_verified, verification_reason, dedupe_key, dedupe_status, received_at, trace_id FROM events WHERE tenant_id=$1 ORDER BY received_at DESC LIMIT $2`, tenantID, limit)
 	if err != nil {
@@ -1142,6 +1358,35 @@ func (s *Store) GetRawPayload(ctx context.Context, tenantID, eventID, actorID st
 	return raw, nil
 }
 
+func (s *Store) GetNormalizedEvent(ctx context.Context, tenantID, eventID, actorID string, includeData bool) (domain.NormalizedEnvelope, error) {
+	var item domain.NormalizedEnvelope
+	err := s.pool.QueryRow(ctx, `
+		SELECT id, tenant_id, event_id, adapter_version_id, provider, provider_event_id, type, source, subject,
+			envelope_json, data_json, metadata_json, envelope_sha256, data_sha256, metadata_sha256,
+			storage_status, COALESCE(storage_deleted_at, 'epoch'::timestamptz), created_at
+		FROM normalized_envelopes
+		WHERE tenant_id=$1 AND event_id=$2`,
+		tenantID, eventID,
+	).Scan(&item.ID, &item.TenantID, &item.EventID, &item.AdapterVersionID, &item.Provider, &item.ProviderEventID,
+		&item.Type, &item.Source, &item.Subject, &item.Envelope, &item.Data, &item.Metadata, &item.EnvelopeSHA256,
+		&item.DataSHA256, &item.MetadataSHA256, &item.StorageStatus, &item.StorageDeletedAt, &item.CreatedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return domain.NormalizedEnvelope{}, app.ErrNotFound
+	}
+	if err != nil {
+		return domain.NormalizedEnvelope{}, err
+	}
+	if includeData {
+		if item.StorageStatus == domain.StorageStatusDeleted {
+			return domain.NormalizedEnvelope{}, app.ErrGone
+		}
+		_, _ = s.pool.Exec(ctx, `INSERT INTO audit_events(id, tenant_id, actor_id, action, resource, resource_id, reason) VALUES($1,$2,$3,'normalized_envelope.data_read','event',$4,'')`, mustID("aud"), tenantID, actorID, eventID)
+	} else {
+		item.Data = nil
+	}
+	return item, nil
+}
+
 func (s *Store) ListEventTimeline(ctx context.Context, tenantID, eventID string, limit int) ([]map[string]any, error) {
 	var exists bool
 	if err := s.pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM events WHERE tenant_id=$1 AND id=$2)`, tenantID, eventID).Scan(&exists); err != nil {
@@ -1158,14 +1403,32 @@ func (s *Store) ListEventTimeline(ctx context.Context, tenantID, eventID string,
 			SELECT 'receipt' AS kind, id AS ref_id, CASE WHEN verification_ok THEN 'verified' ELSE 'rejected' END AS state, verification_reason AS detail, received_at AS occurred_at
 			FROM provider_receipts WHERE tenant_id=$1 AND event_id=$2
 			UNION ALL
+			SELECT 'normalized' AS kind, id AS ref_id, storage_status AS state,
+			       'adapter_version=' || COALESCE(NULLIF(adapter_version_id,''),'none') ||
+			       ' envelope_sha256=' || envelope_sha256 ||
+			       ' data_sha256=' || data_sha256 AS detail,
+			       created_at AS occurred_at
+			FROM normalized_envelopes WHERE tenant_id=$1 AND event_id=$2
+			UNION ALL
 			SELECT 'delivery' AS kind, id AS ref_id, state,
 			       endpoint_id ||
 			       ' route_version=' || COALESCE(NULLIF(route_version_id,''),'none') ||
 			       ' subscription_version=' || COALESCE(NULLIF(subscription_version_id,''),'none') ||
 			       ' retry_policy=' || COALESCE(NULLIF(retry_policy_id,''),'default') ||
+			       ' adapter_version=' || COALESCE(NULLIF(adapter_version_id,''),'none') ||
+			       ' normalized_envelope=' || COALESCE(NULLIF(normalized_envelope_id,''),'none') ||
+			       ' transformation_version=' || COALESCE(NULLIF(transformation_version_id,''),'identity') ||
+			       ' delivery_payload=' || COALESCE(NULLIF(delivery_payload_id,''),'none') ||
 			       ' replay_job=' || COALESCE(NULLIF(replay_job_id,''),'none') AS detail,
 			       created_at AS occurred_at
 			FROM deliveries WHERE tenant_id=$1 AND event_id=$2
+			UNION ALL
+			SELECT 'delivery_payload' AS kind, id AS ref_id, storage_status AS state,
+			       'delivery=' || delivery_id ||
+			       ' transformation_version=' || COALESCE(NULLIF(transformation_version_id,''),'identity') ||
+			       ' sha256=' || sha256 AS detail,
+			       created_at AS occurred_at
+			FROM delivery_payloads WHERE tenant_id=$1 AND event_id=$2
 			UNION ALL
 			SELECT 'attempt' AS kind, id AS ref_id, state, failure_class AS detail, COALESCE(completed_at, started_at) AS occurred_at
 			FROM delivery_attempts WHERE tenant_id=$1 AND event_id=$2
@@ -1178,7 +1441,7 @@ func (s *Store) ListEventTimeline(ctx context.Context, tenantID, eventID string,
 }
 
 func (s *Store) ListDeliveries(ctx context.Context, tenantID string, limit int) ([]domain.Delivery, error) {
-	rows, err := s.pool.Query(ctx, `SELECT id, tenant_id, event_id, endpoint_id, COALESCE(route_id,''), COALESCE(route_version_id,''), COALESCE(subscription_id,''), COALESCE(subscription_version_id,''), COALESCE(retry_policy_id,''), COALESCE(replay_job_id,''), state, attempt_count, COALESCE(next_attempt_at, 'epoch'::timestamptz) FROM deliveries WHERE tenant_id=$1 ORDER BY created_at DESC LIMIT $2`, tenantID, limit)
+	rows, err := s.pool.Query(ctx, `SELECT id, tenant_id, event_id, endpoint_id, COALESCE(route_id,''), COALESCE(route_version_id,''), COALESCE(subscription_id,''), COALESCE(subscription_version_id,''), COALESCE(retry_policy_id,''), COALESCE(replay_job_id,''), COALESCE(adapter_version_id,''), COALESCE(normalized_envelope_id,''), COALESCE(transformation_version_id,''), COALESCE(delivery_payload_id,''), state, attempt_count, COALESCE(next_attempt_at, 'epoch'::timestamptz) FROM deliveries WHERE tenant_id=$1 ORDER BY created_at DESC LIMIT $2`, tenantID, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -1221,7 +1484,7 @@ func (s *Store) GetDeliveryAttempt(ctx context.Context, tenantID, attemptID stri
 }
 
 func (s *Store) RetryDelivery(ctx context.Context, tenantID, deliveryID, actorID, reason string) (domain.Delivery, error) {
-	row := s.pool.QueryRow(ctx, `UPDATE deliveries SET state='scheduled', next_attempt_at=now(), locked_by=NULL, lock_expires_at=NULL WHERE tenant_id=$1 AND id=$2 RETURNING id, tenant_id, event_id, endpoint_id, COALESCE(route_id,''), COALESCE(route_version_id,''), COALESCE(subscription_id,''), COALESCE(subscription_version_id,''), COALESCE(retry_policy_id,''), COALESCE(replay_job_id,''), state, attempt_count, COALESCE(next_attempt_at, 'epoch'::timestamptz)`, tenantID, deliveryID)
+	row := s.pool.QueryRow(ctx, `UPDATE deliveries SET state='scheduled', next_attempt_at=now(), locked_by=NULL, lock_expires_at=NULL WHERE tenant_id=$1 AND id=$2 RETURNING id, tenant_id, event_id, endpoint_id, COALESCE(route_id,''), COALESCE(route_version_id,''), COALESCE(subscription_id,''), COALESCE(subscription_version_id,''), COALESCE(retry_policy_id,''), COALESCE(replay_job_id,''), COALESCE(adapter_version_id,''), COALESCE(normalized_envelope_id,''), COALESCE(transformation_version_id,''), COALESCE(delivery_payload_id,''), state, attempt_count, COALESCE(next_attempt_at, 'epoch'::timestamptz)`, tenantID, deliveryID)
 	item, err := scanDelivery(row)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return domain.Delivery{}, app.ErrNotFound
@@ -1234,7 +1497,7 @@ func (s *Store) RetryDelivery(ctx context.Context, tenantID, deliveryID, actorID
 }
 
 func (s *Store) CancelDelivery(ctx context.Context, tenantID, deliveryID, actorID, reason string) (domain.Delivery, error) {
-	row := s.pool.QueryRow(ctx, `UPDATE deliveries SET state='canceled', locked_by=NULL, lock_expires_at=NULL WHERE tenant_id=$1 AND id=$2 AND state NOT IN ('succeeded','dead_lettered','canceled') RETURNING id, tenant_id, event_id, endpoint_id, COALESCE(route_id,''), COALESCE(route_version_id,''), COALESCE(subscription_id,''), COALESCE(subscription_version_id,''), COALESCE(retry_policy_id,''), COALESCE(replay_job_id,''), state, attempt_count, COALESCE(next_attempt_at, 'epoch'::timestamptz)`, tenantID, deliveryID)
+	row := s.pool.QueryRow(ctx, `UPDATE deliveries SET state='canceled', locked_by=NULL, lock_expires_at=NULL WHERE tenant_id=$1 AND id=$2 AND state NOT IN ('succeeded','dead_lettered','canceled') RETURNING id, tenant_id, event_id, endpoint_id, COALESCE(route_id,''), COALESCE(route_version_id,''), COALESCE(subscription_id,''), COALESCE(subscription_version_id,''), COALESCE(retry_policy_id,''), COALESCE(replay_job_id,''), COALESCE(adapter_version_id,''), COALESCE(normalized_envelope_id,''), COALESCE(transformation_version_id,''), COALESCE(delivery_payload_id,''), state, attempt_count, COALESCE(next_attempt_at, 'epoch'::timestamptz)`, tenantID, deliveryID)
 	item, err := scanDelivery(row)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return domain.Delivery{}, app.ErrNotFound
@@ -1430,14 +1693,20 @@ func (s *Store) CreateAuditExport(ctx context.Context, tenantID, actorID string,
 		}
 		files["raw_payloads.jsonl"] = raw
 	}
+	payloadEvidence, err := s.payloadEvidenceJSONLForExport(ctx, tenantID, req.From, req.To, req.IncludePayloadBodies)
+	if err != nil {
+		return domain.EvidenceExport{}, err
+	}
+	files["payload_evidence.jsonl"] = payloadEvidence
 	bundle, err := evidence.BuildTarGzipBundle(evidence.Manifest{
-		ExportID:           id,
-		TenantID:           tenantID,
-		CreatedAt:          now,
-		From:               req.From,
-		To:                 req.To,
-		IncludeRawPayloads: req.IncludeRawPayloads,
-		IncludeTimelines:   req.IncludeTimelines,
+		ExportID:             id,
+		TenantID:             tenantID,
+		CreatedAt:            now,
+		From:                 req.From,
+		To:                   req.To,
+		IncludeRawPayloads:   req.IncludeRawPayloads,
+		IncludeTimelines:     req.IncludeTimelines,
+		IncludePayloadBodies: req.IncludePayloadBodies,
 	}, files)
 	if err != nil {
 		return domain.EvidenceExport{}, err
@@ -1475,17 +1744,17 @@ func (s *Store) CreateAuditExport(ctx context.Context, tenantID, actorID string,
 	defer rollback(ctx, tx)
 	var out domain.EvidenceExport
 	err = tx.QueryRow(ctx, `
-		INSERT INTO evidence_exports(id, tenant_id, state, from_time, to_time, include_raw_payloads, include_timelines, format,
+		INSERT INTO evidence_exports(id, tenant_id, state, from_time, to_time, include_raw_payloads, include_timelines, include_payload_bodies, format,
 			storage_backend, object_bucket, object_key, sha256, manifest_sha256, size_bytes, bundle, manifest, file_hashes,
 			created_by, completed_at)
-		VALUES($1,$2,$3,$4,$5,$6,$7,'tar+gzip+jsonl',$8,$9,$10,$11,$12,$13,$14,$15::jsonb,$16::jsonb,$17,now())
+		VALUES($1,$2,$3,$4,$5,$6,$7,$8,'tar+gzip+jsonl',$9,$10,$11,$12,$13,$14,$15,$16::jsonb,$17::jsonb,$18,now())
 		RETURNING id, tenant_id, state, COALESCE(from_time, 'epoch'::timestamptz), COALESCE(to_time, 'epoch'::timestamptz),
-			include_raw_payloads, include_timelines, format, storage_backend, object_bucket, object_key, sha256,
+			include_raw_payloads, include_timelines, include_payload_bodies, format, storage_backend, object_bucket, object_key, sha256,
 			manifest_sha256, size_bytes, error, created_by, created_at, COALESCE(completed_at, 'epoch'::timestamptz)`,
 		id, tenantID, domain.EvidenceExportStateReady, nullableTime(req.From), nullableTime(req.To),
-		req.IncludeRawPayloads, req.IncludeTimelines, storageBackend, objectBucket, objectKey,
+		req.IncludeRawPayloads, req.IncludeTimelines, req.IncludePayloadBodies, storageBackend, objectBucket, objectKey,
 		bundle.BundleSHA256, bundle.ManifestSHA256, int64(len(bundle.Bytes)), bodyForDB, manifestJSON, string(filesJSON), actorID,
-	).Scan(&out.ID, &out.TenantID, &out.State, &out.From, &out.To, &out.IncludeRawPayloads, &out.IncludeTimelines,
+	).Scan(&out.ID, &out.TenantID, &out.State, &out.From, &out.To, &out.IncludeRawPayloads, &out.IncludeTimelines, &out.IncludePayloadBodies,
 		&out.Format, &out.StorageBackend, &out.ObjectBucket, &out.ObjectKey, &out.SHA256, &out.ManifestSHA256,
 		&out.SizeBytes, &out.Error, &out.CreatedBy, &out.CreatedAt, &out.CompletedAt)
 	if err != nil {
@@ -1536,7 +1805,7 @@ func (s *Store) GetAuditExport(ctx context.Context, tenantID, exportID string) (
 func (s *Store) ListAuditExports(ctx context.Context, tenantID string, limit int) ([]domain.EvidenceExport, error) {
 	rows, err := s.pool.Query(ctx, `
 		SELECT id, tenant_id, state, COALESCE(from_time, 'epoch'::timestamptz), COALESCE(to_time, 'epoch'::timestamptz),
-			include_raw_payloads, include_timelines, format, storage_backend, object_bucket, object_key, sha256,
+			include_raw_payloads, include_timelines, include_payload_bodies, format, storage_backend, object_bucket, object_key, sha256,
 			manifest_sha256, size_bytes, error, created_by, created_at, COALESCE(completed_at, 'epoch'::timestamptz)
 		FROM evidence_exports
 		WHERE tenant_id=$1
@@ -1549,7 +1818,7 @@ func (s *Store) ListAuditExports(ctx context.Context, tenantID string, limit int
 	var out []domain.EvidenceExport
 	for rows.Next() {
 		var item domain.EvidenceExport
-		if err := rows.Scan(&item.ID, &item.TenantID, &item.State, &item.From, &item.To, &item.IncludeRawPayloads, &item.IncludeTimelines,
+		if err := rows.Scan(&item.ID, &item.TenantID, &item.State, &item.From, &item.To, &item.IncludeRawPayloads, &item.IncludeTimelines, &item.IncludePayloadBodies,
 			&item.Format, &item.StorageBackend, &item.ObjectBucket, &item.ObjectKey, &item.SHA256, &item.ManifestSHA256,
 			&item.SizeBytes, &item.Error, &item.CreatedBy, &item.CreatedAt, &item.CompletedAt); err != nil {
 			return nil, err
@@ -1750,6 +2019,35 @@ func (s *Store) DryRunReplay(ctx context.Context, tenantID string, req app.Repla
 	if req.ConfigMode == app.ReplayConfigOriginal && req.EventID != "" && total == 0 {
 		warnings = append(warnings, "original config event replay found no original delivery decisions")
 	}
+	if req.ConfigMode == app.ReplayConfigOriginal && req.EventID != "" {
+		var deletedPayloads int
+		if err := s.pool.QueryRow(ctx, `
+			SELECT count(*)
+			FROM deliveries d
+			JOIN delivery_payloads p ON p.tenant_id=d.tenant_id AND p.id=d.delivery_payload_id
+			WHERE d.tenant_id=$1
+			  AND d.event_id=$2
+			  AND COALESCE(d.replay_job_id,'')=''
+			  AND p.storage_status <> 'stored'`, tenantID, req.EventID).Scan(&deletedPayloads); err != nil {
+			return app.ReplayDryRun{}, err
+		}
+		if deletedPayloads > 0 {
+			warnings = append(warnings, "original config replay includes delivery payload bodies deleted by retention")
+		}
+	}
+	if req.DeliveryID != "" {
+		var deletedPayloads int
+		if err := s.pool.QueryRow(ctx, `
+			SELECT count(*)
+			FROM deliveries d
+			JOIN delivery_payloads p ON p.tenant_id=d.tenant_id AND p.id=d.delivery_payload_id
+			WHERE d.tenant_id=$1 AND d.id=$2 AND p.storage_status <> 'stored'`, tenantID, req.DeliveryID).Scan(&deletedPayloads); err != nil {
+			return app.ReplayDryRun{}, err
+		}
+		if deletedPayloads > 0 {
+			warnings = append(warnings, "selected delivery payload body was deleted by retention")
+		}
+	}
 	if req.RateLimitPerMinute > 0 {
 		warnings = append(warnings, "rate limit applies to replay scheduling and does not change live delivery priority")
 	}
@@ -1921,7 +2219,7 @@ func (s *Store) createDeliveriesForEventWithOptions(ctx context.Context, tenantI
 	created := 0
 
 	subRows, err := tx.Query(ctx, `
-		SELECT s.id, s.endpoint_id, s.active_version_id, COALESCE(NULLIF(e.retry_policy_id,''),'')
+		SELECT s.id, s.endpoint_id, s.active_version_id, COALESCE(NULLIF(e.retry_policy_id,''),''), COALESCE(NULLIF(s.transformation_version_id,''),'')
 		FROM subscriptions s
 		JOIN endpoints e ON e.tenant_id=s.tenant_id AND e.id=s.endpoint_id
 		WHERE s.tenant_id=$1 AND s.state='active' AND $2 = ANY(s.event_types)`, tenantID, event.Type)
@@ -1929,18 +2227,27 @@ func (s *Store) createDeliveriesForEventWithOptions(ctx context.Context, tenantI
 		return 0, err
 	}
 	for subRows.Next() {
-		var subID, endpointID, subscriptionVersionID, retryPolicyID string
-		if err := subRows.Scan(&subID, &endpointID, &subscriptionVersionID, &retryPolicyID); err != nil {
+		var subID, endpointID, subscriptionVersionID, retryPolicyID, transformationVersionID string
+		if err := subRows.Scan(&subID, &endpointID, &subscriptionVersionID, &retryPolicyID, &transformationVersionID); err != nil {
 			subRows.Close()
 			return 0, err
 		}
 		deliveryID := mustID("del")
-		if _, err := tx.Exec(ctx, `INSERT INTO deliveries(id, tenant_id, event_id, endpoint_id, subscription_id, subscription_version_id, retry_policy_id, replay_job_id, state, next_attempt_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,'scheduled',$9)`, deliveryID, tenantID, eventID, endpointID, subID, subscriptionVersionID, retryPolicyID, opts.ReplayJobID, scheduledDeliveryAt(created, opts.RateLimitPerMinute)); err != nil {
+		if _, err := tx.Exec(ctx, `INSERT INTO deliveries(id, tenant_id, event_id, endpoint_id, subscription_id, subscription_version_id, retry_policy_id, replay_job_id, transformation_version_id, state, next_attempt_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,'scheduled',$10)`, deliveryID, tenantID, eventID, endpointID, subID, subscriptionVersionID, retryPolicyID, opts.ReplayJobID, transformationVersionID, scheduledDeliveryAt(created, opts.RateLimitPerMinute)); err != nil {
+			subRows.Close()
+			return 0, err
+		}
+		payloadID, normalizedID, adapterVersionID, err := s.createDeliveryPayload(ctx, tx, tenantID, eventID, deliveryID, transformationVersionID)
+		if err != nil {
 			subRows.Close()
 			return 0, err
 		}
 		if opts.ReplayJobID != "" {
-			if err := insertReplayDecisionEvidence(ctx, tx, tenantID, opts.ReplayJobID, eventID, "", deliveryID, opts.ConfigMode, "", subscriptionVersionID, retryPolicyID); err != nil {
+			if err := insertReplayDecisionEvidence(ctx, tx, replayEvidence{
+				tenantID: tenantID, replayJobID: opts.ReplayJobID, eventID: eventID, newDeliveryID: deliveryID,
+				configMode: opts.ConfigMode, subscriptionVersionID: subscriptionVersionID, retryPolicyID: retryPolicyID,
+				adapterVersionID: adapterVersionID, normalizedEnvelopeID: normalizedID, transformationVersionID: transformationVersionID, deliveryPayloadID: payloadID,
+			}); err != nil {
 				subRows.Close()
 				return 0, err
 			}
@@ -1953,7 +2260,7 @@ func (s *Store) createDeliveriesForEventWithOptions(ctx context.Context, tenantI
 	}
 
 	routeRows, err := tx.Query(ctx, `
-		SELECT r.id, r.endpoint_id, r.active_version_id, COALESCE(NULLIF(r.retry_policy_id,''), NULLIF(e.retry_policy_id,''), '')
+		SELECT r.id, r.endpoint_id, r.active_version_id, COALESCE(NULLIF(r.retry_policy_id,''), NULLIF(e.retry_policy_id,''), ''), COALESCE(NULLIF(r.transformation_version_id,''),'')
 		FROM routes r
 		JOIN endpoints e ON e.tenant_id=r.tenant_id AND e.id=r.endpoint_id
 		WHERE r.tenant_id=$1 AND r.source_id=$2 AND r.state='active' AND $3 = ANY(r.event_types)
@@ -1962,18 +2269,27 @@ func (s *Store) createDeliveriesForEventWithOptions(ctx context.Context, tenantI
 		return 0, err
 	}
 	for routeRows.Next() {
-		var routeID, endpointID, routeVersionID, retryPolicyID string
-		if err := routeRows.Scan(&routeID, &endpointID, &routeVersionID, &retryPolicyID); err != nil {
+		var routeID, endpointID, routeVersionID, retryPolicyID, transformationVersionID string
+		if err := routeRows.Scan(&routeID, &endpointID, &routeVersionID, &retryPolicyID, &transformationVersionID); err != nil {
 			routeRows.Close()
 			return 0, err
 		}
 		deliveryID := mustID("del")
-		if _, err := tx.Exec(ctx, `INSERT INTO deliveries(id, tenant_id, event_id, endpoint_id, route_id, route_version_id, retry_policy_id, replay_job_id, state, next_attempt_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,'scheduled',$9)`, deliveryID, tenantID, eventID, endpointID, routeID, routeVersionID, retryPolicyID, opts.ReplayJobID, scheduledDeliveryAt(created, opts.RateLimitPerMinute)); err != nil {
+		if _, err := tx.Exec(ctx, `INSERT INTO deliveries(id, tenant_id, event_id, endpoint_id, route_id, route_version_id, retry_policy_id, replay_job_id, transformation_version_id, state, next_attempt_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,'scheduled',$10)`, deliveryID, tenantID, eventID, endpointID, routeID, routeVersionID, retryPolicyID, opts.ReplayJobID, transformationVersionID, scheduledDeliveryAt(created, opts.RateLimitPerMinute)); err != nil {
+			routeRows.Close()
+			return 0, err
+		}
+		payloadID, normalizedID, adapterVersionID, err := s.createDeliveryPayload(ctx, tx, tenantID, eventID, deliveryID, transformationVersionID)
+		if err != nil {
 			routeRows.Close()
 			return 0, err
 		}
 		if opts.ReplayJobID != "" {
-			if err := insertReplayDecisionEvidence(ctx, tx, tenantID, opts.ReplayJobID, eventID, "", deliveryID, opts.ConfigMode, routeVersionID, "", retryPolicyID); err != nil {
+			if err := insertReplayDecisionEvidence(ctx, tx, replayEvidence{
+				tenantID: tenantID, replayJobID: opts.ReplayJobID, eventID: eventID, newDeliveryID: deliveryID,
+				configMode: opts.ConfigMode, routeVersionID: routeVersionID, retryPolicyID: retryPolicyID,
+				adapterVersionID: adapterVersionID, normalizedEnvelopeID: normalizedID, transformationVersionID: transformationVersionID, deliveryPayloadID: payloadID,
+			}); err != nil {
 				routeRows.Close()
 				return 0, err
 			}
@@ -1985,6 +2301,130 @@ func (s *Store) createDeliveriesForEventWithOptions(ctx context.Context, tenantI
 		return 0, err
 	}
 	return created, tx.Commit(ctx)
+}
+
+func (s *Store) createDeliveryPayload(ctx context.Context, tx pgx.Tx, tenantID, eventID, deliveryID, transformationVersionID string) (payloadID, normalizedID, adapterVersionID string, err error) {
+	var envelope, data []byte
+	var storageStatus string
+	err = tx.QueryRow(ctx, `
+		SELECT id, adapter_version_id, envelope_json, data_json, storage_status
+		FROM normalized_envelopes
+		WHERE tenant_id=$1 AND event_id=$2`,
+		tenantID, eventID,
+	).Scan(&normalizedID, &adapterVersionID, &envelope, &data, &storageStatus)
+	if errors.Is(err, pgx.ErrNoRows) {
+		envelope, err = s.legacyDeliveryEnvelope(ctx, tx, tenantID, eventID)
+		if err != nil {
+			return "", "", "", err
+		}
+	} else if err != nil {
+		return "", "", "", err
+	} else if storageStatus == domain.StorageStatusDeleted {
+		return "", "", "", app.ErrGone
+	}
+	body := envelope
+	if transformationVersionID != "" {
+		var operations []byte
+		if err := tx.QueryRow(ctx, `SELECT operations_json FROM transformation_versions WHERE tenant_id=$1 AND id=$2`, tenantID, transformationVersionID).Scan(&operations); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return "", "", "", app.ErrNotFound
+			}
+			return "", "", "", err
+		}
+		ops, err := transform.ParseOperations(operations)
+		if err != nil {
+			return "", "", "", err
+		}
+		body, err = transform.Apply(body, ops)
+		if err != nil {
+			return "", "", "", err
+		}
+	}
+	payloadID = mustID("dpl")
+	hash := domain.HashSHA256(body)
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO delivery_payloads(id, tenant_id, delivery_id, event_id, normalized_envelope_id, transformation_version_id, content_type, sha256, size_bytes, body, storage_status)
+		VALUES($1,$2,$3,$4,$5,$6,'application/json',$7,$8,$9,$10)`,
+		payloadID, tenantID, deliveryID, eventID, normalizedID, transformationVersionID, hash, int64(len(body)), body, domain.StorageStatusStored,
+	); err != nil {
+		return "", "", "", err
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE deliveries
+		SET adapter_version_id=$1, normalized_envelope_id=$2, transformation_version_id=$3, delivery_payload_id=$4
+		WHERE tenant_id=$5 AND id=$6`,
+		adapterVersionID, normalizedID, transformationVersionID, payloadID, tenantID, deliveryID,
+	); err != nil {
+		return "", "", "", err
+	}
+	_ = data
+	return payloadID, normalizedID, adapterVersionID, nil
+}
+
+func (s *Store) cloneDeliveryPayload(ctx context.Context, tx pgx.Tx, tenantID, sourcePayloadID, newDeliveryID string) (payloadID, normalizedID, adapterVersionID, transformationVersionID string, err error) {
+	if sourcePayloadID == "" {
+		var eventID string
+		if err := tx.QueryRow(ctx, `SELECT event_id, COALESCE(transformation_version_id,'') FROM deliveries WHERE tenant_id=$1 AND id=$2`, tenantID, newDeliveryID).Scan(&eventID, &transformationVersionID); err != nil {
+			return "", "", "", "", err
+		}
+		payloadID, normalizedID, adapterVersionID, err = s.createDeliveryPayload(ctx, tx, tenantID, eventID, newDeliveryID, transformationVersionID)
+		return payloadID, normalizedID, adapterVersionID, transformationVersionID, err
+	}
+	var eventID, contentType, hash, storageStatus string
+	var size int64
+	var body []byte
+	err = tx.QueryRow(ctx, `
+		SELECT p.event_id, p.normalized_envelope_id, COALESCE(n.adapter_version_id,''), p.transformation_version_id,
+		       p.content_type, p.sha256, p.size_bytes, p.body, p.storage_status
+		FROM delivery_payloads p
+		LEFT JOIN normalized_envelopes n ON n.tenant_id=p.tenant_id AND n.id=p.normalized_envelope_id
+		WHERE p.tenant_id=$1 AND p.id=$2`,
+		tenantID, sourcePayloadID,
+	).Scan(&eventID, &normalizedID, &adapterVersionID, &transformationVersionID, &contentType, &hash, &size, &body, &storageStatus)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", "", "", "", app.ErrNotFound
+	}
+	if err != nil {
+		return "", "", "", "", err
+	}
+	if storageStatus == domain.StorageStatusDeleted {
+		return "", "", "", "", app.ErrGone
+	}
+	payloadID = mustID("dpl")
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO delivery_payloads(id, tenant_id, delivery_id, event_id, normalized_envelope_id, transformation_version_id, content_type, sha256, size_bytes, body, storage_status)
+		VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
+		payloadID, tenantID, newDeliveryID, eventID, normalizedID, transformationVersionID, contentType, hash, size, body, domain.StorageStatusStored,
+	); err != nil {
+		return "", "", "", "", err
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE deliveries
+		SET adapter_version_id=$1, normalized_envelope_id=$2, transformation_version_id=$3, delivery_payload_id=$4
+		WHERE tenant_id=$5 AND id=$6`,
+		adapterVersionID, normalizedID, transformationVersionID, payloadID, tenantID, newDeliveryID,
+	); err != nil {
+		return "", "", "", "", err
+	}
+	return payloadID, normalizedID, adapterVersionID, transformationVersionID, nil
+}
+
+func (s *Store) legacyDeliveryEnvelope(ctx context.Context, tx pgx.Tx, tenantID, eventID string) ([]byte, error) {
+	var eventType, provider, providerEventID, rawPayloadHash string
+	err := tx.QueryRow(ctx, `SELECT type, provider, provider_event_id, raw_payload_hash FROM events WHERE tenant_id=$1 AND id=$2`, tenantID, eventID).Scan(&eventType, &provider, &providerEventID, &rawPayloadHash)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, app.ErrNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(map[string]any{
+		"id":                eventID,
+		"type":              eventType,
+		"provider":          provider,
+		"provider_event_id": providerEventID,
+		"raw_payload_hash":  rawPayloadHash,
+	})
 }
 
 func (s *Store) createReplayDeliveries(ctx context.Context, tenantID, replayJobID string) error {
@@ -2040,16 +2480,21 @@ func (s *Store) createReplayDeliveries(ctx context.Context, tenantID, replayJobI
 		}
 	}
 	if req.DeliveryID != "" {
-		count, newDeliveryID, routeVersionID, subscriptionVersionID, retryPolicyID, err := s.createDeliveryFromExisting(ctx, tenantID, req.DeliveryID, deliveryCreationOptions{ReplayJobID: replayJobID, ConfigMode: configMode, RateLimitPerMinute: rateLimitPerMinute})
+		count, evidence, err := s.createDeliveryFromExisting(ctx, tenantID, req.DeliveryID, deliveryCreationOptions{ReplayJobID: replayJobID, ConfigMode: configMode, RateLimitPerMinute: rateLimitPerMinute})
 		if err != nil {
 			return err
 		}
 		created += count
 		if count > 0 {
-			if _, err := s.pool.Exec(ctx, `INSERT INTO replay_items(id, tenant_id, replay_job_id, original_delivery_id, new_delivery_id, state, config_mode, route_version_id, subscription_version_id, retry_policy_id, completed_at) VALUES($1,$2,$3,$4,$5,'completed',$6,$7,$8,$9,now())`, mustID("rpi"), tenantID, replayJobID, req.DeliveryID, newDeliveryID, configMode, routeVersionID, subscriptionVersionID, retryPolicyID); err != nil {
+			tx, err := s.pool.Begin(ctx)
+			if err != nil {
 				return err
 			}
-			if _, err := s.pool.Exec(ctx, `INSERT INTO replay_receipts(id, tenant_id, replay_job_id, delivery_id, config_mode, route_version_id, subscription_version_id, retry_policy_id) VALUES($1,$2,$3,$4,$5,$6,$7,$8)`, mustID("rrc"), tenantID, replayJobID, req.DeliveryID, configMode, routeVersionID, subscriptionVersionID, retryPolicyID); err != nil {
+			if err := insertReplayDecisionEvidence(ctx, tx, evidence); err != nil {
+				_ = tx.Rollback(ctx)
+				return err
+			}
+			if err := tx.Commit(ctx); err != nil {
 				return err
 			}
 		}
@@ -2058,27 +2503,47 @@ func (s *Store) createReplayDeliveries(ctx context.Context, tenantID, replayJobI
 	return err
 }
 
-func (s *Store) createDeliveryFromExisting(ctx context.Context, tenantID, deliveryID string, opts deliveryCreationOptions) (int, string, string, string, string, error) {
-	var eventID, endpointID, routeID, routeVersionID, subscriptionID, subscriptionVersionID, retryPolicyID string
-	err := s.pool.QueryRow(ctx, `SELECT event_id, endpoint_id, COALESCE(route_id,''), COALESCE(route_version_id,''), COALESCE(subscription_id,''), COALESCE(subscription_version_id,''), COALESCE(retry_policy_id,'') FROM deliveries WHERE tenant_id=$1 AND id=$2`, tenantID, deliveryID).
-		Scan(&eventID, &endpointID, &routeID, &routeVersionID, &subscriptionID, &subscriptionVersionID, &retryPolicyID)
+func (s *Store) createDeliveryFromExisting(ctx context.Context, tenantID, deliveryID string, opts deliveryCreationOptions) (int, replayEvidence, error) {
+	var eventID, endpointID, routeID, routeVersionID, subscriptionID, subscriptionVersionID, retryPolicyID, adapterVersionID, normalizedID, transformationVersionID, deliveryPayloadID string
+	err := s.pool.QueryRow(ctx, `SELECT event_id, endpoint_id, COALESCE(route_id,''), COALESCE(route_version_id,''), COALESCE(subscription_id,''), COALESCE(subscription_version_id,''), COALESCE(retry_policy_id,''), COALESCE(adapter_version_id,''), COALESCE(normalized_envelope_id,''), COALESCE(transformation_version_id,''), COALESCE(delivery_payload_id,'') FROM deliveries WHERE tenant_id=$1 AND id=$2`, tenantID, deliveryID).
+		Scan(&eventID, &endpointID, &routeID, &routeVersionID, &subscriptionID, &subscriptionVersionID, &retryPolicyID, &adapterVersionID, &normalizedID, &transformationVersionID, &deliveryPayloadID)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return 0, "", "", "", "", app.ErrNotFound
+		return 0, replayEvidence{}, app.ErrNotFound
 	}
 	if err != nil {
-		return 0, "", "", "", "", err
+		return 0, replayEvidence{}, err
 	}
 	newDeliveryID := mustID("del")
-	_, err = s.pool.Exec(ctx, `INSERT INTO deliveries(id, tenant_id, event_id, endpoint_id, route_id, route_version_id, subscription_id, subscription_version_id, retry_policy_id, replay_job_id, state, next_attempt_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'scheduled',$11)`, newDeliveryID, tenantID, eventID, endpointID, routeID, routeVersionID, subscriptionID, subscriptionVersionID, retryPolicyID, opts.ReplayJobID, scheduledDeliveryAt(0, opts.RateLimitPerMinute))
+	tx, err := s.pool.Begin(ctx)
 	if err != nil {
-		return 0, "", "", "", "", err
+		return 0, replayEvidence{}, err
 	}
-	return 1, newDeliveryID, routeVersionID, subscriptionVersionID, retryPolicyID, nil
+	defer rollback(ctx, tx)
+	if _, err = tx.Exec(ctx, `INSERT INTO deliveries(id, tenant_id, event_id, endpoint_id, route_id, route_version_id, subscription_id, subscription_version_id, retry_policy_id, replay_job_id, adapter_version_id, normalized_envelope_id, transformation_version_id, state, next_attempt_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,'scheduled',$14)`, newDeliveryID, tenantID, eventID, endpointID, routeID, routeVersionID, subscriptionID, subscriptionVersionID, retryPolicyID, opts.ReplayJobID, adapterVersionID, normalizedID, transformationVersionID, scheduledDeliveryAt(0, opts.RateLimitPerMinute)); err != nil {
+		return 0, replayEvidence{}, err
+	}
+	newPayloadID := ""
+	if deliveryPayloadID != "" {
+		newPayloadID, normalizedID, adapterVersionID, transformationVersionID, err = s.cloneDeliveryPayload(ctx, tx, tenantID, deliveryPayloadID, newDeliveryID)
+	} else {
+		newPayloadID, normalizedID, adapterVersionID, err = s.createDeliveryPayload(ctx, tx, tenantID, eventID, newDeliveryID, transformationVersionID)
+	}
+	if err != nil {
+		return 0, replayEvidence{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return 0, replayEvidence{}, err
+	}
+	return 1, replayEvidence{
+		tenantID: tenantID, replayJobID: opts.ReplayJobID, eventID: eventID, originalDeliveryID: deliveryID, newDeliveryID: newDeliveryID,
+		configMode: opts.ConfigMode, routeVersionID: routeVersionID, subscriptionVersionID: subscriptionVersionID, retryPolicyID: retryPolicyID,
+		adapterVersionID: adapterVersionID, normalizedEnvelopeID: normalizedID, transformationVersionID: transformationVersionID, deliveryPayloadID: newPayloadID,
+	}, nil
 }
 
 func (s *Store) createDeliveriesFromOriginalEvent(ctx context.Context, tenantID, eventID string, opts deliveryCreationOptions) (int, error) {
 	rows, err := s.pool.Query(ctx, `
-		SELECT id, endpoint_id, COALESCE(route_id,''), COALESCE(route_version_id,''), COALESCE(subscription_id,''), COALESCE(subscription_version_id,''), COALESCE(retry_policy_id,'')
+		SELECT id, endpoint_id, COALESCE(route_id,''), COALESCE(route_version_id,''), COALESCE(subscription_id,''), COALESCE(subscription_version_id,''), COALESCE(retry_policy_id,''), COALESCE(adapter_version_id,''), COALESCE(normalized_envelope_id,''), COALESCE(transformation_version_id,''), COALESCE(delivery_payload_id,'')
 		FROM deliveries
 		WHERE tenant_id=$1
 		  AND event_id=$2
@@ -2091,18 +2556,22 @@ func (s *Store) createDeliveriesFromOriginalEvent(ctx context.Context, tenantID,
 	}
 	defer rows.Close()
 	type originalDelivery struct {
-		id                    string
-		endpointID            string
-		routeID               string
-		routeVersionID        string
-		subscriptionID        string
-		subscriptionVersionID string
-		retryPolicyID         string
+		id                      string
+		endpointID              string
+		routeID                 string
+		routeVersionID          string
+		subscriptionID          string
+		subscriptionVersionID   string
+		retryPolicyID           string
+		adapterVersionID        string
+		normalizedEnvelopeID    string
+		transformationVersionID string
+		deliveryPayloadID       string
 	}
 	var originals []originalDelivery
 	for rows.Next() {
 		var item originalDelivery
-		if err := rows.Scan(&item.id, &item.endpointID, &item.routeID, &item.routeVersionID, &item.subscriptionID, &item.subscriptionVersionID, &item.retryPolicyID); err != nil {
+		if err := rows.Scan(&item.id, &item.endpointID, &item.routeID, &item.routeVersionID, &item.subscriptionID, &item.subscriptionVersionID, &item.retryPolicyID, &item.adapterVersionID, &item.normalizedEnvelopeID, &item.transformationVersionID, &item.deliveryPayloadID); err != nil {
 			return 0, err
 		}
 		originals = append(originals, item)
@@ -2121,28 +2590,24 @@ func (s *Store) createDeliveriesFromOriginalEvent(ctx context.Context, tenantID,
 	for i, original := range originals {
 		newDeliveryID := mustID("del")
 		if _, err := tx.Exec(ctx, `
-			INSERT INTO deliveries(id, tenant_id, event_id, endpoint_id, route_id, route_version_id, subscription_id, subscription_version_id, retry_policy_id, replay_job_id, state, next_attempt_at)
-			VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'scheduled',$11)`,
+			INSERT INTO deliveries(id, tenant_id, event_id, endpoint_id, route_id, route_version_id, subscription_id, subscription_version_id, retry_policy_id, replay_job_id, adapter_version_id, normalized_envelope_id, transformation_version_id, state, next_attempt_at)
+			VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,'scheduled',$14)`,
 			newDeliveryID, tenantID, eventID, original.endpointID, original.routeID, original.routeVersionID,
 			original.subscriptionID, original.subscriptionVersionID, original.retryPolicyID, opts.ReplayJobID,
+			original.adapterVersionID, original.normalizedEnvelopeID, original.transformationVersionID,
 			scheduledDeliveryAt(i, opts.RateLimitPerMinute),
 		); err != nil {
 			return 0, err
 		}
-		if _, err := tx.Exec(ctx, `
-			INSERT INTO replay_items(id, tenant_id, replay_job_id, event_id, original_delivery_id, new_delivery_id, state, config_mode, route_version_id, subscription_version_id, retry_policy_id, completed_at)
-			VALUES($1,$2,$3,$4,$5,$6,'completed',$7,$8,$9,$10,now())`,
-			mustID("rpi"), tenantID, opts.ReplayJobID, eventID, original.id, newDeliveryID, opts.ConfigMode,
-			original.routeVersionID, original.subscriptionVersionID, original.retryPolicyID,
-		); err != nil {
+		newPayloadID, normalizedID, adapterVersionID, transformationVersionID, err := s.cloneDeliveryPayload(ctx, tx, tenantID, original.deliveryPayloadID, newDeliveryID)
+		if err != nil {
 			return 0, err
 		}
-		if _, err := tx.Exec(ctx, `
-			INSERT INTO replay_receipts(id, tenant_id, replay_job_id, event_id, delivery_id, config_mode, route_version_id, subscription_version_id, retry_policy_id)
-			VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
-			mustID("rrc"), tenantID, opts.ReplayJobID, eventID, original.id, opts.ConfigMode,
-			original.routeVersionID, original.subscriptionVersionID, original.retryPolicyID,
-		); err != nil {
+		if err := insertReplayDecisionEvidence(ctx, tx, replayEvidence{
+			tenantID: tenantID, replayJobID: opts.ReplayJobID, eventID: eventID, originalDeliveryID: original.id, newDeliveryID: newDeliveryID,
+			configMode: opts.ConfigMode, routeVersionID: original.routeVersionID, subscriptionVersionID: original.subscriptionVersionID, retryPolicyID: original.retryPolicyID,
+			adapterVersionID: adapterVersionID, normalizedEnvelopeID: normalizedID, transformationVersionID: transformationVersionID, deliveryPayloadID: newPayloadID,
+		}); err != nil {
 			return 0, err
 		}
 	}
@@ -2152,27 +2617,45 @@ func (s *Store) createDeliveriesFromOriginalEvent(ctx context.Context, tenantID,
 	return len(originals), nil
 }
 
-func insertReplayDecisionEvidence(ctx context.Context, tx pgx.Tx, tenantID, replayJobID, eventID, originalDeliveryID, newDeliveryID, configMode, routeVersionID, subscriptionVersionID, retryPolicyID string) error {
-	if configMode == "" {
-		configMode = app.ReplayConfigCurrent
+type replayEvidence struct {
+	tenantID                string
+	replayJobID             string
+	eventID                 string
+	originalDeliveryID      string
+	newDeliveryID           string
+	configMode              string
+	routeVersionID          string
+	subscriptionVersionID   string
+	retryPolicyID           string
+	adapterVersionID        string
+	normalizedEnvelopeID    string
+	transformationVersionID string
+	deliveryPayloadID       string
+}
+
+func insertReplayDecisionEvidence(ctx context.Context, tx pgx.Tx, ev replayEvidence) error {
+	if ev.configMode == "" {
+		ev.configMode = app.ReplayConfigCurrent
 	}
 	if _, err := tx.Exec(ctx, `
-		INSERT INTO replay_items(id, tenant_id, replay_job_id, event_id, original_delivery_id, new_delivery_id, state, config_mode, route_version_id, subscription_version_id, retry_policy_id, completed_at)
-		VALUES($1,$2,$3,$4,$5,$6,'completed',$7,$8,$9,$10,now())`,
-		mustID("rpi"), tenantID, replayJobID, eventID, originalDeliveryID, newDeliveryID, configMode,
-		routeVersionID, subscriptionVersionID, retryPolicyID,
+		INSERT INTO replay_items(id, tenant_id, replay_job_id, event_id, original_delivery_id, new_delivery_id, state, config_mode,
+			route_version_id, subscription_version_id, retry_policy_id, adapter_version_id, normalized_envelope_id, transformation_version_id, delivery_payload_id, completed_at)
+		VALUES($1,$2,$3,$4,$5,$6,'completed',$7,$8,$9,$10,$11,$12,$13,$14,now())`,
+		mustID("rpi"), ev.tenantID, ev.replayJobID, ev.eventID, ev.originalDeliveryID, ev.newDeliveryID, ev.configMode,
+		ev.routeVersionID, ev.subscriptionVersionID, ev.retryPolicyID, ev.adapterVersionID, ev.normalizedEnvelopeID, ev.transformationVersionID, ev.deliveryPayloadID,
 	); err != nil {
 		return err
 	}
-	receiptDeliveryID := originalDeliveryID
+	receiptDeliveryID := ev.originalDeliveryID
 	if receiptDeliveryID == "" {
-		receiptDeliveryID = newDeliveryID
+		receiptDeliveryID = ev.newDeliveryID
 	}
 	_, err := tx.Exec(ctx, `
-		INSERT INTO replay_receipts(id, tenant_id, replay_job_id, event_id, delivery_id, config_mode, route_version_id, subscription_version_id, retry_policy_id)
-		VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
-		mustID("rrc"), tenantID, replayJobID, eventID, receiptDeliveryID, configMode,
-		routeVersionID, subscriptionVersionID, retryPolicyID,
+		INSERT INTO replay_receipts(id, tenant_id, replay_job_id, event_id, delivery_id, config_mode,
+			route_version_id, subscription_version_id, retry_policy_id, adapter_version_id, normalized_envelope_id, transformation_version_id, delivery_payload_id)
+		VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
+		mustID("rrc"), ev.tenantID, ev.replayJobID, ev.eventID, receiptDeliveryID, ev.configMode,
+		ev.routeVersionID, ev.subscriptionVersionID, ev.retryPolicyID, ev.adapterVersionID, ev.normalizedEnvelopeID, ev.transformationVersionID, ev.deliveryPayloadID,
 	)
 	return err
 }
@@ -2230,36 +2713,36 @@ func (s *Store) ClaimDueDeliveries(ctx context.Context, workerID string, limit i
 
 func (s *Store) populateDeliveryItem(ctx context.Context, tx pgx.Tx, item *worker.DeliveryItem) error {
 	var encrypted []byte
-	var eventType, provider, providerEventID, rawPayloadHash string
+	var payloadID, payloadStatus string
 	err := tx.QueryRow(ctx, `
-		SELECT e.url, es.id, es.version, es.encrypted_secret, ev.type, ev.provider, ev.provider_event_id, ev.raw_payload_hash
-		FROM endpoints e
+		SELECT e.url, es.id, es.version, es.encrypted_secret, COALESCE(d.delivery_payload_id,''), COALESCE(p.body,''::bytea), COALESCE(p.storage_status,'')
+		FROM deliveries d
+		JOIN endpoints e ON e.tenant_id=d.tenant_id AND e.id=d.endpoint_id
 		JOIN endpoint_secrets es ON es.tenant_id=e.tenant_id AND es.endpoint_id=e.id AND es.state='active'
-		JOIN events ev ON ev.tenant_id=e.tenant_id AND ev.id=$3
-		WHERE e.tenant_id=$1 AND e.id=$2
+		LEFT JOIN delivery_payloads p ON p.tenant_id=d.tenant_id AND p.id=d.delivery_payload_id
+		WHERE d.tenant_id=$1 AND d.id=$2
 		ORDER BY es.version DESC
 		LIMIT 1`,
-		item.TenantID, item.EndpointID, item.EventID,
-	).Scan(&item.EndpointURL, &item.SigningKeyID, &item.SigningKeyVersion, &encrypted, &eventType, &provider, &providerEventID, &rawPayloadHash)
+		item.TenantID, item.ID,
+	).Scan(&item.EndpointURL, &item.SigningKeyID, &item.SigningKeyVersion, &encrypted, &payloadID, &item.Body, &payloadStatus)
 	if err != nil {
 		return err
+	}
+	if payloadID != "" && payloadStatus == domain.StorageStatusDeleted {
+		return app.ErrGone
 	}
 	secret, err := s.box.Decrypt(encrypted)
 	if err != nil {
 		return err
 	}
 	item.SigningSecret = secret
-	body, err := json.Marshal(map[string]any{
-		"id":                item.EventID,
-		"type":              eventType,
-		"provider":          provider,
-		"provider_event_id": providerEventID,
-		"raw_payload_hash":  rawPayloadHash,
-	})
-	if err != nil {
-		return err
+	if payloadID == "" {
+		body, err := s.legacyDeliveryEnvelope(ctx, tx, item.TenantID, item.EventID)
+		if err != nil {
+			return err
+		}
+		item.Body = body
 	}
-	item.Body = body
 	return nil
 }
 
@@ -2472,16 +2955,166 @@ func (s *Store) rawPayloadsJSONLForExport(ctx context.Context, tenantID string, 
 	return evidence.JSONLines(lines)
 }
 
+func (s *Store) payloadEvidenceJSONLForExport(ctx context.Context, tenantID string, from, to time.Time, includeBodies bool) ([]byte, error) {
+	lines, err := s.normalizedEvidenceLines(ctx, tenantID, from, to, includeBodies)
+	if err != nil {
+		return nil, err
+	}
+	payloadLines, err := s.deliveryPayloadEvidenceLines(ctx, tenantID, from, to, includeBodies)
+	if err != nil {
+		return nil, err
+	}
+	lines = append(lines, payloadLines...)
+	return evidence.JSONLines(lines)
+}
+
+func (s *Store) normalizedEvidenceLines(ctx context.Context, tenantID string, from, to time.Time, includeBodies bool) ([]any, error) {
+	query := `
+		SELECT n.id, n.event_id, n.adapter_version_id, n.provider, n.provider_event_id, n.type, n.source, n.subject,
+			n.envelope_sha256, n.data_sha256, n.metadata_sha256, n.storage_status,
+			COALESCE(n.storage_deleted_at, 'epoch'::timestamptz), n.created_at, n.metadata_json,
+			CASE WHEN $2::boolean AND n.storage_status='stored' THEN n.envelope_json ELSE '{}'::jsonb END,
+			CASE WHEN $2::boolean AND n.storage_status='stored' THEN n.data_json ELSE '{}'::jsonb END
+		FROM normalized_envelopes n
+		JOIN events ev ON ev.tenant_id=n.tenant_id AND ev.id=n.event_id
+		WHERE n.tenant_id=$1`
+	args := []any{tenantID, includeBodies}
+	if !from.IsZero() {
+		args = append(args, from)
+		query += fmt.Sprintf(" AND ev.received_at >= $%d", len(args))
+	}
+	if !to.IsZero() {
+		args = append(args, to)
+		query += fmt.Sprintf(" AND ev.received_at <= $%d", len(args))
+	}
+	query += " ORDER BY ev.received_at ASC, n.id ASC"
+	rows, err := s.pool.Query(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var lines []any
+	for rows.Next() {
+		var id, eventID, adapterVersionID, provider, providerEventID, eventType, source, subject string
+		var envelopeHash, dataHash, metadataHash, storageStatus string
+		var storageDeletedAt, createdAt time.Time
+		var metadata, envelope, data json.RawMessage
+		if err := rows.Scan(&id, &eventID, &adapterVersionID, &provider, &providerEventID, &eventType, &source, &subject,
+			&envelopeHash, &dataHash, &metadataHash, &storageStatus, &storageDeletedAt, &createdAt, &metadata, &envelope, &data); err != nil {
+			return nil, err
+		}
+		bodyAvailable := storageStatus == domain.StorageStatusStored
+		item := map[string]any{
+			"resource_type":      "normalized_envelope",
+			"id":                 id,
+			"event_id":           eventID,
+			"adapter_version_id": adapterVersionID,
+			"provider":           provider,
+			"provider_event_id":  providerEventID,
+			"type":               eventType,
+			"source":             source,
+			"subject":            subject,
+			"envelope_sha256":    envelopeHash,
+			"data_sha256":        dataHash,
+			"metadata_sha256":    metadataHash,
+			"metadata":           metadata,
+			"storage_status":     storageStatus,
+			"body_available":     bodyAvailable,
+			"body_included":      includeBodies && bodyAvailable,
+			"storage_deleted_at": zeroTimeOmit(storageDeletedAt),
+			"created_at":         createdAt,
+		}
+		if includeBodies && bodyAvailable {
+			item["envelope"] = envelope
+			item["data"] = data
+		}
+		lines = append(lines, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return lines, nil
+}
+
+func (s *Store) deliveryPayloadEvidenceLines(ctx context.Context, tenantID string, from, to time.Time, includeBodies bool) ([]any, error) {
+	query := `
+		SELECT p.id, p.delivery_id, p.event_id, p.normalized_envelope_id, p.transformation_version_id,
+			p.content_type, p.sha256, p.size_bytes, p.storage_status,
+			COALESCE(p.storage_deleted_at, 'epoch'::timestamptz), p.created_at,
+			CASE WHEN $2::boolean AND p.storage_status='stored' THEN p.body ELSE ''::bytea END
+		FROM delivery_payloads p
+		JOIN events ev ON ev.tenant_id=p.tenant_id AND ev.id=p.event_id
+		WHERE p.tenant_id=$1`
+	args := []any{tenantID, includeBodies}
+	if !from.IsZero() {
+		args = append(args, from)
+		query += fmt.Sprintf(" AND ev.received_at >= $%d", len(args))
+	}
+	if !to.IsZero() {
+		args = append(args, to)
+		query += fmt.Sprintf(" AND ev.received_at <= $%d", len(args))
+	}
+	query += " ORDER BY ev.received_at ASC, p.id ASC"
+	rows, err := s.pool.Query(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var lines []any
+	for rows.Next() {
+		var id, deliveryID, eventID, normalizedID, transformationVersionID, contentType, hash, storageStatus string
+		var sizeBytes int64
+		var storageDeletedAt, createdAt time.Time
+		var body []byte
+		if err := rows.Scan(&id, &deliveryID, &eventID, &normalizedID, &transformationVersionID, &contentType, &hash, &sizeBytes,
+			&storageStatus, &storageDeletedAt, &createdAt, &body); err != nil {
+			return nil, err
+		}
+		bodyAvailable := storageStatus == domain.StorageStatusStored
+		item := map[string]any{
+			"resource_type":             "delivery_payload",
+			"id":                        id,
+			"delivery_id":               deliveryID,
+			"event_id":                  eventID,
+			"normalized_envelope_id":    normalizedID,
+			"transformation_version_id": transformationVersionID,
+			"content_type":              contentType,
+			"sha256":                    hash,
+			"size_bytes":                sizeBytes,
+			"storage_status":            storageStatus,
+			"body_available":            bodyAvailable,
+			"body_included":             includeBodies && bodyAvailable,
+			"storage_deleted_at":        zeroTimeOmit(storageDeletedAt),
+			"created_at":                createdAt,
+		}
+		if includeBodies && bodyAvailable {
+			item["body_base64"] = base64.StdEncoding.EncodeToString(body)
+		}
+		lines = append(lines, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return lines, nil
+}
+
+func zeroTimeOmit(value time.Time) any {
+	if value.Equal(time.Unix(0, 0).UTC()) {
+		return nil
+	}
+	return value
+}
+
 func (s *Store) getAuditExportWithBundle(ctx context.Context, tenantID, exportID string) (domain.EvidenceExport, []byte, error) {
 	var out domain.EvidenceExport
 	var body []byte
 	err := s.pool.QueryRow(ctx, `
 		SELECT id, tenant_id, state, COALESCE(from_time, 'epoch'::timestamptz), COALESCE(to_time, 'epoch'::timestamptz),
-			include_raw_payloads, include_timelines, format, storage_backend, object_bucket, object_key, sha256,
+			include_raw_payloads, include_timelines, include_payload_bodies, format, storage_backend, object_bucket, object_key, sha256,
 			manifest_sha256, size_bytes, error, created_by, created_at, COALESCE(completed_at, 'epoch'::timestamptz), bundle
 		FROM evidence_exports
 		WHERE tenant_id=$1 AND id=$2`, tenantID, exportID).
-		Scan(&out.ID, &out.TenantID, &out.State, &out.From, &out.To, &out.IncludeRawPayloads, &out.IncludeTimelines,
+		Scan(&out.ID, &out.TenantID, &out.State, &out.From, &out.To, &out.IncludeRawPayloads, &out.IncludeTimelines, &out.IncludePayloadBodies,
 			&out.Format, &out.StorageBackend, &out.ObjectBucket, &out.ObjectKey, &out.SHA256, &out.ManifestSHA256,
 			&out.SizeBytes, &out.Error, &out.CreatedBy, &out.CreatedAt, &out.CompletedAt, &body)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -2527,6 +3160,10 @@ func (s *Store) applyRetentionPolicy(ctx context.Context, workerID string, polic
 	switch policy.ResourceType {
 	case domain.RetentionResourceRawPayload:
 		processed, err = s.applyRawPayloadRetention(ctx, tx, policy, runID, cutoff)
+	case domain.RetentionResourceNormalized:
+		processed, err = s.applyNormalizedEnvelopeRetention(ctx, tx, policy, runID, cutoff)
+	case domain.RetentionResourceDeliveryPayload:
+		processed, err = s.applyDeliveryPayloadRetention(ctx, tx, policy, runID, cutoff)
 	case domain.RetentionResourceAuditEvent:
 		processed, err = s.applyAuditEventRetention(ctx, tx, policy, runID, cutoff)
 	default:
@@ -2604,6 +3241,98 @@ func (s *Store) applyRawPayloadRetention(ctx context.Context, tx pgx.Tx, policy 
 	return len(candidates), nil
 }
 
+func (s *Store) applyNormalizedEnvelopeRetention(ctx context.Context, tx pgx.Tx, policy domain.RetentionPolicy, runID string, cutoff time.Time) (int, error) {
+	query := `
+		SELECT n.id
+		FROM normalized_envelopes n
+		LEFT JOIN events ev ON ev.tenant_id=n.tenant_id AND ev.id=n.event_id
+		WHERE n.tenant_id=$1 AND n.storage_status='stored' AND n.created_at < $2`
+	args := []any{policy.TenantID, cutoff}
+	if policy.SourceID != "" {
+		args = append(args, policy.SourceID)
+		query += fmt.Sprintf(" AND ev.source_id=$%d", len(args))
+	}
+	query += " ORDER BY n.created_at ASC LIMIT 100"
+	rows, err := tx.Query(ctx, query, args...)
+	if err != nil {
+		return 0, err
+	}
+	defer rows.Close()
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return 0, err
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		return 0, err
+	}
+	for _, id := range ids {
+		if _, err := tx.Exec(ctx, `
+			UPDATE normalized_envelopes
+			SET envelope_json='{}'::jsonb, data_json='{}'::jsonb, storage_status='deleted', storage_deleted_at=now()
+			WHERE tenant_id=$1 AND id=$2`, policy.TenantID, id); err != nil {
+			return 0, err
+		}
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO retention_run_items(id, tenant_id, retention_run_id, resource_type, resource_id, action, state)
+			VALUES($1,$2,$3,$4,$5,'delete_body','completed')`,
+			mustID("rri"), policy.TenantID, runID, domain.RetentionResourceNormalized, id,
+		); err != nil {
+			return 0, err
+		}
+	}
+	return len(ids), nil
+}
+
+func (s *Store) applyDeliveryPayloadRetention(ctx context.Context, tx pgx.Tx, policy domain.RetentionPolicy, runID string, cutoff time.Time) (int, error) {
+	query := `
+		SELECT p.id
+		FROM delivery_payloads p
+		LEFT JOIN events ev ON ev.tenant_id=p.tenant_id AND ev.id=p.event_id
+		WHERE p.tenant_id=$1 AND p.storage_status='stored' AND p.created_at < $2`
+	args := []any{policy.TenantID, cutoff}
+	if policy.SourceID != "" {
+		args = append(args, policy.SourceID)
+		query += fmt.Sprintf(" AND ev.source_id=$%d", len(args))
+	}
+	query += " ORDER BY p.created_at ASC LIMIT 100"
+	rows, err := tx.Query(ctx, query, args...)
+	if err != nil {
+		return 0, err
+	}
+	defer rows.Close()
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return 0, err
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		return 0, err
+	}
+	for _, id := range ids {
+		if _, err := tx.Exec(ctx, `
+			UPDATE delivery_payloads
+			SET body='', storage_status='deleted', storage_deleted_at=now()
+			WHERE tenant_id=$1 AND id=$2`, policy.TenantID, id); err != nil {
+			return 0, err
+		}
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO retention_run_items(id, tenant_id, retention_run_id, resource_type, resource_id, action, state)
+			VALUES($1,$2,$3,$4,$5,'delete_body','completed')`,
+			mustID("rri"), policy.TenantID, runID, domain.RetentionResourceDeliveryPayload, id,
+		); err != nil {
+			return 0, err
+		}
+	}
+	return len(ids), nil
+}
+
 func (s *Store) applyAuditEventRetention(ctx context.Context, tx pgx.Tx, policy domain.RetentionPolicy, runID string, cutoff time.Time) (int, error) {
 	rows, err := tx.Query(ctx, `
 		SELECT id
@@ -2653,19 +3382,19 @@ func scanEvent(row rowScanner) (domain.Event, error) {
 
 func scanRoute(row rowScanner) (domain.Route, error) {
 	var item domain.Route
-	err := row.Scan(&item.ID, &item.TenantID, &item.SourceID, &item.Name, &item.Priority, &item.EventTypes, &item.EndpointID, &item.State, &item.Version, &item.ActiveVersionID, &item.RetryPolicyID, &item.CreatedAt)
+	err := row.Scan(&item.ID, &item.TenantID, &item.SourceID, &item.Name, &item.Priority, &item.EventTypes, &item.EndpointID, &item.State, &item.Version, &item.ActiveVersionID, &item.RetryPolicyID, &item.TransformationID, &item.TransformationVersionID, &item.CreatedAt)
 	return item, err
 }
 
 func scanSubscription(row rowScanner) (domain.Subscription, error) {
 	var item domain.Subscription
-	err := row.Scan(&item.ID, &item.TenantID, &item.EndpointID, &item.EventTypes, &item.PayloadFormat, &item.State, &item.Version, &item.ActiveVersionID, &item.CreatedAt)
+	err := row.Scan(&item.ID, &item.TenantID, &item.EndpointID, &item.EventTypes, &item.PayloadFormat, &item.TransformationID, &item.TransformationVersionID, &item.State, &item.Version, &item.ActiveVersionID, &item.CreatedAt)
 	return item, err
 }
 
 func scanRouteVersion(row rowScanner) (domain.RouteVersion, error) {
 	var item domain.RouteVersion
-	err := row.Scan(&item.ID, &item.TenantID, &item.RouteID, &item.Version, &item.ConfigHash, &item.SourceID, &item.Name, &item.Priority, &item.EventTypes, &item.EndpointID, &item.RetryPolicyID, &item.State, &item.CreatedBy, &item.CreatedAt)
+	err := row.Scan(&item.ID, &item.TenantID, &item.RouteID, &item.Version, &item.ConfigHash, &item.SourceID, &item.Name, &item.Priority, &item.EventTypes, &item.EndpointID, &item.RetryPolicyID, &item.TransformationID, &item.TransformationVersionID, &item.State, &item.CreatedBy, &item.CreatedAt)
 	return item, err
 }
 
@@ -2675,9 +3404,21 @@ func scanRetryPolicy(row rowScanner) (domain.RetryPolicy, error) {
 	return item, err
 }
 
+func scanTransformation(row rowScanner) (domain.Transformation, error) {
+	var item domain.Transformation
+	err := row.Scan(&item.ID, &item.TenantID, &item.Name, &item.State, &item.ActiveVersionID, &item.CreatedBy, &item.CreatedAt, &item.UpdatedAt)
+	return item, err
+}
+
+func scanTransformationVersion(row rowScanner) (domain.TransformationVersion, error) {
+	var item domain.TransformationVersion
+	err := row.Scan(&item.ID, &item.TenantID, &item.TransformationID, &item.Version, &item.ConfigHash, &item.Operations, &item.State, &item.CreatedBy, &item.CreatedAt)
+	return item, err
+}
+
 func scanDelivery(row rowScanner) (domain.Delivery, error) {
 	var item domain.Delivery
-	err := row.Scan(&item.ID, &item.TenantID, &item.EventID, &item.EndpointID, &item.RouteID, &item.RouteVersionID, &item.SubscriptionID, &item.SubscriptionVersionID, &item.RetryPolicyID, &item.ReplayJobID, &item.State, &item.AttemptCount, &item.NextAttemptAt)
+	err := row.Scan(&item.ID, &item.TenantID, &item.EventID, &item.EndpointID, &item.RouteID, &item.RouteVersionID, &item.SubscriptionID, &item.SubscriptionVersionID, &item.RetryPolicyID, &item.ReplayJobID, &item.AdapterVersionID, &item.NormalizedEnvelopeID, &item.TransformationVersionID, &item.DeliveryPayloadID, &item.State, &item.AttemptCount, &item.NextAttemptAt)
 	return item, err
 }
 
@@ -2688,7 +3429,7 @@ func scanDeliveryAttempt(row rowScanner) (domain.DeliveryAttempt, error) {
 }
 
 func (s *Store) getRoute(ctx context.Context, tenantID, routeID string) (domain.Route, error) {
-	row := s.pool.QueryRow(ctx, `SELECT id, tenant_id, source_id, name, priority, event_types, endpoint_id, state, version, active_version_id, retry_policy_id, created_at FROM routes WHERE tenant_id=$1 AND id=$2`, tenantID, routeID)
+	row := s.pool.QueryRow(ctx, `SELECT id, tenant_id, source_id, name, priority, event_types, endpoint_id, state, version, active_version_id, retry_policy_id, transformation_id, transformation_version_id, created_at FROM routes WHERE tenant_id=$1 AND id=$2`, tenantID, routeID)
 	item, err := scanRoute(row)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return domain.Route{}, app.ErrNotFound
@@ -2698,76 +3439,127 @@ func (s *Store) getRoute(ctx context.Context, tenantID, routeID string) (domain.
 
 func (s *Store) insertRouteVersion(ctx context.Context, tx pgx.Tx, route domain.Route, actorID string) (domain.RouteVersion, error) {
 	version := domain.RouteVersion{
-		ID:            mustID("rv"),
-		TenantID:      route.TenantID,
-		RouteID:       route.ID,
-		Version:       route.Version,
-		SourceID:      route.SourceID,
-		Name:          route.Name,
-		Priority:      route.Priority,
-		EventTypes:    append([]string(nil), route.EventTypes...),
-		EndpointID:    route.EndpointID,
-		RetryPolicyID: route.RetryPolicyID,
-		State:         route.State,
-		CreatedBy:     actorID,
+		ID:                      mustID("rv"),
+		TenantID:                route.TenantID,
+		RouteID:                 route.ID,
+		Version:                 route.Version,
+		SourceID:                route.SourceID,
+		Name:                    route.Name,
+		Priority:                route.Priority,
+		EventTypes:              append([]string(nil), route.EventTypes...),
+		EndpointID:              route.EndpointID,
+		RetryPolicyID:           route.RetryPolicyID,
+		TransformationID:        route.TransformationID,
+		TransformationVersionID: route.TransformationVersionID,
+		State:                   route.State,
+		CreatedBy:               actorID,
 	}
 	hash, err := s.insertConfigVersion(ctx, tx, route.TenantID, domain.ConfigResourceRoute, route.ID, route.Version, map[string]any{
-		"route_id":        route.ID,
-		"source_id":       route.SourceID,
-		"name":            route.Name,
-		"priority":        route.Priority,
-		"event_types":     route.EventTypes,
-		"endpoint_id":     route.EndpointID,
-		"retry_policy_id": route.RetryPolicyID,
-		"state":           route.State,
-		"version":         route.Version,
+		"route_id":                  route.ID,
+		"source_id":                 route.SourceID,
+		"name":                      route.Name,
+		"priority":                  route.Priority,
+		"event_types":               route.EventTypes,
+		"endpoint_id":               route.EndpointID,
+		"retry_policy_id":           route.RetryPolicyID,
+		"transformation_id":         route.TransformationID,
+		"transformation_version_id": route.TransformationVersionID,
+		"state":                     route.State,
+		"version":                   route.Version,
 	}, actorID)
 	if err != nil {
 		return domain.RouteVersion{}, err
 	}
 	version.ConfigHash = hash
 	err = tx.QueryRow(ctx, `
-		INSERT INTO route_versions(id, tenant_id, route_id, version, config_hash, source_id, name, priority, event_types, endpoint_id, retry_policy_id, state, created_by)
-		VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+		INSERT INTO route_versions(id, tenant_id, route_id, version, config_hash, source_id, name, priority, event_types, endpoint_id, retry_policy_id, transformation_id, transformation_version_id, state, created_by)
+		VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
 		RETURNING created_at`,
 		version.ID, version.TenantID, version.RouteID, version.Version, version.ConfigHash, version.SourceID,
-		version.Name, version.Priority, version.EventTypes, version.EndpointID, version.RetryPolicyID, version.State, version.CreatedBy,
+		version.Name, version.Priority, version.EventTypes, version.EndpointID, version.RetryPolicyID,
+		version.TransformationID, version.TransformationVersionID, version.State, version.CreatedBy,
 	).Scan(&version.CreatedAt)
 	return version, err
 }
 
 func (s *Store) insertSubscriptionVersion(ctx context.Context, tx pgx.Tx, subscription domain.Subscription, actorID string) (domain.SubscriptionVersion, error) {
 	version := domain.SubscriptionVersion{
-		ID:             mustID("sv"),
-		TenantID:       subscription.TenantID,
-		SubscriptionID: subscription.ID,
-		Version:        subscription.Version,
-		EndpointID:     subscription.EndpointID,
-		EventTypes:     append([]string(nil), subscription.EventTypes...),
-		PayloadFormat:  subscription.PayloadFormat,
-		State:          subscription.State,
-		CreatedBy:      actorID,
+		ID:                      mustID("sv"),
+		TenantID:                subscription.TenantID,
+		SubscriptionID:          subscription.ID,
+		Version:                 subscription.Version,
+		EndpointID:              subscription.EndpointID,
+		EventTypes:              append([]string(nil), subscription.EventTypes...),
+		PayloadFormat:           subscription.PayloadFormat,
+		TransformationID:        subscription.TransformationID,
+		TransformationVersionID: subscription.TransformationVersionID,
+		State:                   subscription.State,
+		CreatedBy:               actorID,
 	}
 	hash, err := s.insertConfigVersion(ctx, tx, subscription.TenantID, domain.ConfigResourceSubscription, subscription.ID, subscription.Version, map[string]any{
-		"subscription_id": subscription.ID,
-		"endpoint_id":     subscription.EndpointID,
-		"event_types":     subscription.EventTypes,
-		"payload_format":  subscription.PayloadFormat,
-		"state":           subscription.State,
-		"version":         subscription.Version,
+		"subscription_id":           subscription.ID,
+		"endpoint_id":               subscription.EndpointID,
+		"event_types":               subscription.EventTypes,
+		"payload_format":            subscription.PayloadFormat,
+		"transformation_id":         subscription.TransformationID,
+		"transformation_version_id": subscription.TransformationVersionID,
+		"state":                     subscription.State,
+		"version":                   subscription.Version,
 	}, actorID)
 	if err != nil {
 		return domain.SubscriptionVersion{}, err
 	}
 	version.ConfigHash = hash
 	err = tx.QueryRow(ctx, `
-		INSERT INTO subscription_versions(id, tenant_id, subscription_id, version, config_hash, endpoint_id, event_types, payload_format, state, created_by)
-		VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+		INSERT INTO subscription_versions(id, tenant_id, subscription_id, version, config_hash, endpoint_id, event_types, payload_format, transformation_id, transformation_version_id, state, created_by)
+		VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
 		RETURNING created_at`,
 		version.ID, version.TenantID, version.SubscriptionID, version.Version, version.ConfigHash,
-		version.EndpointID, version.EventTypes, version.PayloadFormat, version.State, version.CreatedBy,
+		version.EndpointID, version.EventTypes, version.PayloadFormat, version.TransformationID,
+		version.TransformationVersionID, version.State, version.CreatedBy,
 	).Scan(&version.CreatedAt)
 	return version, err
+}
+
+func (s *Store) insertTransformationVersion(ctx context.Context, tx pgx.Tx, tenantID, transformationID, actorID string, operationsRaw []byte, state string) (domain.TransformationVersion, error) {
+	ops, err := transform.ParseOperations(operationsRaw)
+	if err != nil {
+		return domain.TransformationVersion{}, err
+	}
+	operationsJSON, err := json.Marshal(ops)
+	if err != nil {
+		return domain.TransformationVersion{}, err
+	}
+	var version int
+	if err := tx.QueryRow(ctx, `SELECT COALESCE(max(version),0)+1 FROM transformation_versions WHERE tenant_id=$1 AND transformation_id=$2`, tenantID, transformationID).Scan(&version); err != nil {
+		return domain.TransformationVersion{}, err
+	}
+	item := domain.TransformationVersion{
+		ID:               mustID("trv"),
+		TenantID:         tenantID,
+		TransformationID: transformationID,
+		Version:          version,
+		Operations:       operationsJSON,
+		State:            state,
+		CreatedBy:        actorID,
+	}
+	hash, err := s.insertConfigVersion(ctx, tx, tenantID, domain.ConfigResourceTransformation, transformationID, version, map[string]any{
+		"transformation_id": transformationID,
+		"operations":        ops,
+		"state":             state,
+		"version":           version,
+	}, actorID)
+	if err != nil {
+		return domain.TransformationVersion{}, err
+	}
+	item.ConfigHash = hash
+	err = tx.QueryRow(ctx, `
+		INSERT INTO transformation_versions(id, tenant_id, transformation_id, version, config_hash, operations_json, state, created_by)
+		VALUES($1,$2,$3,$4,$5,$6::jsonb,$7,$8)
+		RETURNING created_at`,
+		item.ID, item.TenantID, item.TransformationID, item.Version, item.ConfigHash, string(item.Operations), item.State, item.CreatedBy,
+	).Scan(&item.CreatedAt)
+	return item, err
 }
 
 func (s *Store) insertConfigVersion(ctx context.Context, tx pgx.Tx, tenantID, resourceType, resourceID string, version int, config any, actorID string) (string, error) {
@@ -2798,6 +3590,15 @@ func replayScheduleDelay(index, rateLimitPerMinute int) time.Duration {
 		return 0
 	}
 	return time.Duration(index) * interval
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func (s *Store) retryPolicyForDelivery(ctx context.Context, tx pgx.Tx, tenantID, retryPolicyID string) (retry.Policy, error) {

@@ -83,7 +83,14 @@ func (s *Server) Routes() http.Handler {
 			r.Post("/events", s.ingestProductEvent)
 			r.Get("/events/{event_id}", s.getEvent)
 			r.Get("/events/{event_id}/raw", s.getRawPayload)
+			r.Get("/events/{event_id}/normalized", s.getNormalizedEvent)
 			r.Get("/events/{event_id}/timeline", s.getEventTimeline)
+			r.Get("/transformations", s.listTransformations)
+			r.Post("/transformations", s.createTransformation)
+			r.Get("/transformations/{transformation_id}", s.getTransformation)
+			r.Get("/transformations/{transformation_id}/versions", s.listTransformationVersions)
+			r.Post("/transformations/{transformation_id}/versions", s.createTransformationVersion)
+			r.Post("/transformations/{transformation_id}/versions/{version_id}:activate", s.activateTransformationVersion)
 			r.Get("/deliveries", s.listDeliveries)
 			r.Get("/deliveries/{delivery_id}/attempts", s.listDeliveryAttempts)
 			r.Post("/deliveries/{delivery_id}:retry", s.retryDelivery)
@@ -506,6 +513,16 @@ func (s *Server) getRawPayload(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func (s *Server) getNormalizedEvent(w http.ResponseWriter, r *http.Request) {
+	includeData := strings.EqualFold(r.URL.Query().Get("include_data"), "true")
+	item, err := s.cfg.Control.GetNormalizedEvent(r.Context(), actorFrom(r), chi.URLParam(r, "event_id"), includeData)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, item)
+}
+
 func (s *Server) getEventTimeline(w http.ResponseWriter, r *http.Request) {
 	items, err := s.cfg.Control.ListEventTimeline(r.Context(), actorFrom(r), chi.URLParam(r, "event_id"), queryLimit(r))
 	if err != nil {
@@ -513,6 +530,72 @@ func (s *Server) getEventTimeline(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, page(items))
+}
+
+func (s *Server) createTransformation(w http.ResponseWriter, r *http.Request) {
+	var req app.CreateTransformationRequest
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	item, err := s.cfg.Control.CreateTransformation(r.Context(), actorFrom(r), req)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, item)
+}
+
+func (s *Server) listTransformations(w http.ResponseWriter, r *http.Request) {
+	items, err := s.cfg.Control.ListTransformations(r.Context(), actorFrom(r), queryLimit(r))
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, page(items))
+}
+
+func (s *Server) getTransformation(w http.ResponseWriter, r *http.Request) {
+	item, err := s.cfg.Control.GetTransformation(r.Context(), actorFrom(r), chi.URLParam(r, "transformation_id"))
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, item)
+}
+
+func (s *Server) createTransformationVersion(w http.ResponseWriter, r *http.Request) {
+	var req app.CreateTransformationVersionRequest
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	item, err := s.cfg.Control.CreateTransformationVersion(r.Context(), actorFrom(r), chi.URLParam(r, "transformation_id"), req)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, item)
+}
+
+func (s *Server) listTransformationVersions(w http.ResponseWriter, r *http.Request) {
+	items, err := s.cfg.Control.ListTransformationVersions(r.Context(), actorFrom(r), chi.URLParam(r, "transformation_id"), queryLimit(r))
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, page(items))
+}
+
+func (s *Server) activateTransformationVersion(w http.ResponseWriter, r *http.Request) {
+	var req app.ActivateTransformationVersionRequest
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	item, err := s.cfg.Control.ActivateTransformationVersion(r.Context(), actorFrom(r), chi.URLParam(r, "transformation_id"), chi.URLParam(r, "version_id"), req)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, item)
 }
 
 func (s *Server) ingestProductEvent(w http.ResponseWriter, r *http.Request) {
@@ -918,7 +1001,7 @@ func (s *Server) writeError(w http.ResponseWriter, r *http.Request, err error) {
 	case errors.Is(err, app.ErrNotFound):
 		writeProblem(w, problem.New(http.StatusNotFound, "not_found", "Not found", "The requested resource was not found.", requestID, false))
 	case errors.Is(err, app.ErrGone):
-		writeProblem(w, problem.New(http.StatusGone, "raw_payload_expired", "Raw payload unavailable", "The raw payload body has expired or was removed by retention policy; metadata and hashes remain available.", requestID, false))
+		writeProblem(w, problem.New(http.StatusGone, "payload_expired", "Payload unavailable", "The requested payload body has expired or was removed by retention policy; metadata and hashes remain available.", requestID, false))
 	case errors.Is(err, app.ErrInvalidInput):
 		writeProblem(w, problem.BadRequest(requestID, "validation_error", err.Error()))
 	default:

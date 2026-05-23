@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -11,6 +12,7 @@ import (
 	"webhookery/internal/domain"
 	"webhookery/internal/random"
 	"webhookery/internal/ssrf"
+	"webhookery/internal/transform"
 )
 
 var (
@@ -47,6 +49,7 @@ type ControlStore interface {
 	ListEvents(ctx context.Context, tenantID string, limit int) ([]domain.Event, error)
 	GetEvent(ctx context.Context, tenantID, eventID string) (domain.Event, error)
 	GetRawPayload(ctx context.Context, tenantID, eventID, actorID string) (domain.RawPayload, error)
+	GetNormalizedEvent(ctx context.Context, tenantID, eventID, actorID string, includeData bool) (domain.NormalizedEnvelope, error)
 	ListEventTimeline(ctx context.Context, tenantID, eventID string, limit int) ([]map[string]any, error)
 	ListDeliveries(ctx context.Context, tenantID string, limit int) ([]domain.Delivery, error)
 	ListDeliveryAttempts(ctx context.Context, tenantID, deliveryID string, limit int) ([]domain.DeliveryAttempt, error)
@@ -75,6 +78,12 @@ type ControlStore interface {
 	PauseReplayJob(ctx context.Context, tenantID, replayJobID, actorID, reason string) (ReplayJob, error)
 	ResumeReplayJob(ctx context.Context, tenantID, replayJobID, actorID, reason string) (ReplayJob, error)
 	CancelReplayJob(ctx context.Context, tenantID, replayJobID, actorID, reason string) (ReplayJob, error)
+	CreateTransformation(ctx context.Context, tenantID, actorID string, req CreateTransformationRequest) (domain.Transformation, error)
+	ListTransformations(ctx context.Context, tenantID string, limit int) ([]domain.Transformation, error)
+	GetTransformation(ctx context.Context, tenantID, transformationID string) (domain.Transformation, error)
+	CreateTransformationVersion(ctx context.Context, tenantID, transformationID, actorID string, req CreateTransformationVersionRequest) (domain.TransformationVersion, error)
+	ListTransformationVersions(ctx context.Context, tenantID, transformationID string, limit int) ([]domain.TransformationVersion, error)
+	ActivateTransformationVersion(ctx context.Context, tenantID, transformationID, versionID, actorID, reason string) (domain.TransformationVersion, error)
 }
 
 type ControlService struct {
@@ -128,19 +137,21 @@ type TestEndpointRequest struct {
 }
 
 type CreateSubscriptionRequest struct {
-	EndpointID    string   `json:"endpoint_id"`
-	EventTypes    []string `json:"event_types"`
-	PayloadFormat string   `json:"payload_format"`
+	EndpointID       string   `json:"endpoint_id"`
+	EventTypes       []string `json:"event_types"`
+	PayloadFormat    string   `json:"payload_format"`
+	TransformationID string   `json:"transformation_id,omitempty"`
 }
 
 type CreateRouteRequest struct {
-	SourceID      string   `json:"source_id"`
-	Name          string   `json:"name"`
-	Priority      int      `json:"priority"`
-	EventTypes    []string `json:"event_types"`
-	EndpointID    string   `json:"endpoint_id"`
-	RetryPolicyID string   `json:"retry_policy_id,omitempty"`
-	State         string   `json:"state"`
+	SourceID         string   `json:"source_id"`
+	Name             string   `json:"name"`
+	Priority         int      `json:"priority"`
+	EventTypes       []string `json:"event_types"`
+	EndpointID       string   `json:"endpoint_id"`
+	RetryPolicyID    string   `json:"retry_policy_id,omitempty"`
+	TransformationID string   `json:"transformation_id,omitempty"`
+	State            string   `json:"state"`
 }
 
 type ActivateRouteRequest struct {
@@ -266,11 +277,25 @@ type UpdateRetentionPolicyRequest struct {
 }
 
 type CreateAuditExportRequest struct {
-	From               time.Time `json:"from,omitempty"`
-	To                 time.Time `json:"to,omitempty"`
-	IncludeRawPayloads bool      `json:"include_raw_payloads"`
-	IncludeTimelines   bool      `json:"include_timelines"`
-	Reason             string    `json:"reason,omitempty"`
+	From                 time.Time `json:"from,omitempty"`
+	To                   time.Time `json:"to,omitempty"`
+	IncludeRawPayloads   bool      `json:"include_raw_payloads"`
+	IncludeTimelines     bool      `json:"include_timelines"`
+	IncludePayloadBodies bool      `json:"include_payload_bodies"`
+	Reason               string    `json:"reason,omitempty"`
+}
+
+type CreateTransformationRequest struct {
+	Name       string          `json:"name"`
+	Operations json.RawMessage `json:"operations,omitempty"`
+}
+
+type CreateTransformationVersionRequest struct {
+	Operations json.RawMessage `json:"operations"`
+}
+
+type ActivateTransformationVersionRequest struct {
+	Reason string `json:"reason"`
 }
 
 type EvidenceExportDownload struct {
@@ -436,11 +461,12 @@ func (s *ControlService) CreateSubscription(ctx context.Context, actor authz.Act
 		payloadFormat = "canonical_json"
 	}
 	return s.store.CreateSubscription(ctx, domain.Subscription{
-		TenantID:      actor.TenantID,
-		EndpointID:    req.EndpointID,
-		EventTypes:    req.EventTypes,
-		PayloadFormat: payloadFormat,
-		State:         domain.StateActive,
+		TenantID:         actor.TenantID,
+		EndpointID:       req.EndpointID,
+		EventTypes:       req.EventTypes,
+		PayloadFormat:    payloadFormat,
+		TransformationID: strings.TrimSpace(req.TransformationID),
+		State:            domain.StateActive,
 	})
 }
 
@@ -467,15 +493,16 @@ func (s *ControlService) CreateRoute(ctx context.Context, actor authz.Actor, req
 		priority = 100
 	}
 	return s.store.CreateRoute(ctx, domain.Route{
-		TenantID:      actor.TenantID,
-		SourceID:      req.SourceID,
-		Name:          req.Name,
-		Priority:      priority,
-		EventTypes:    req.EventTypes,
-		EndpointID:    req.EndpointID,
-		RetryPolicyID: strings.TrimSpace(req.RetryPolicyID),
-		State:         state,
-		Version:       1,
+		TenantID:         actor.TenantID,
+		SourceID:         req.SourceID,
+		Name:             req.Name,
+		Priority:         priority,
+		EventTypes:       req.EventTypes,
+		EndpointID:       req.EndpointID,
+		RetryPolicyID:    strings.TrimSpace(req.RetryPolicyID),
+		TransformationID: strings.TrimSpace(req.TransformationID),
+		State:            state,
+		Version:          1,
 	})
 }
 
@@ -658,6 +685,16 @@ func (s *ControlService) GetRawPayload(ctx context.Context, actor authz.Actor, e
 	return s.store.GetRawPayload(ctx, actor.TenantID, eventID, actor.ID)
 }
 
+func (s *ControlService) GetNormalizedEvent(ctx context.Context, actor authz.Actor, eventID string, includeData bool) (domain.NormalizedEnvelope, error) {
+	if !authz.Can(actor, "events:read", actor.TenantID) {
+		return domain.NormalizedEnvelope{}, ErrForbidden
+	}
+	if includeData && !authz.Can(actor, "events:raw", actor.TenantID) {
+		return domain.NormalizedEnvelope{}, ErrForbidden
+	}
+	return s.store.GetNormalizedEvent(ctx, actor.TenantID, eventID, actor.ID, includeData)
+}
+
 func (s *ControlService) ListEventTimeline(ctx context.Context, actor authz.Actor, eventID string, limit int) ([]map[string]any, error) {
 	if !authz.Can(actor, "events:read", actor.TenantID) {
 		return nil, ErrForbidden
@@ -828,7 +865,7 @@ func (s *ControlService) CreateAuditExport(ctx context.Context, actor authz.Acto
 	if !authz.Can(actor, "audit:read", actor.TenantID) {
 		return domain.EvidenceExport{}, ErrForbidden
 	}
-	if req.IncludeRawPayloads && !authz.Can(actor, "events:raw", actor.TenantID) {
+	if (req.IncludeRawPayloads || req.IncludePayloadBodies) && !authz.Can(actor, "events:raw", actor.TenantID) {
 		return domain.EvidenceExport{}, ErrForbidden
 	}
 	if !req.From.IsZero() && !req.To.IsZero() && req.From.After(req.To) {
@@ -836,6 +873,66 @@ func (s *ControlService) CreateAuditExport(ctx context.Context, actor authz.Acto
 	}
 	req.Reason = strings.TrimSpace(req.Reason)
 	return s.store.CreateAuditExport(ctx, actor.TenantID, actor.ID, req)
+}
+
+func (s *ControlService) CreateTransformation(ctx context.Context, actor authz.Actor, req CreateTransformationRequest) (domain.Transformation, error) {
+	if !authz.Can(actor, "routes:write", actor.TenantID) {
+		return domain.Transformation{}, ErrForbidden
+	}
+	req.Name = strings.TrimSpace(req.Name)
+	if req.Name == "" {
+		return domain.Transformation{}, fmt.Errorf("%w: name is required", ErrInvalidInput)
+	}
+	if len(req.Operations) != 0 {
+		if _, err := transform.ParseOperations(req.Operations); err != nil {
+			return domain.Transformation{}, fmt.Errorf("%w: %v", ErrInvalidInput, err)
+		}
+	}
+	return s.store.CreateTransformation(ctx, actor.TenantID, actor.ID, req)
+}
+
+func (s *ControlService) ListTransformations(ctx context.Context, actor authz.Actor, limit int) ([]domain.Transformation, error) {
+	if !authz.Can(actor, "routes:read", actor.TenantID) {
+		return nil, ErrForbidden
+	}
+	return s.store.ListTransformations(ctx, actor.TenantID, normalizeLimit(limit))
+}
+
+func (s *ControlService) GetTransformation(ctx context.Context, actor authz.Actor, transformationID string) (domain.Transformation, error) {
+	if !authz.Can(actor, "routes:read", actor.TenantID) {
+		return domain.Transformation{}, ErrForbidden
+	}
+	return s.store.GetTransformation(ctx, actor.TenantID, transformationID)
+}
+
+func (s *ControlService) CreateTransformationVersion(ctx context.Context, actor authz.Actor, transformationID string, req CreateTransformationVersionRequest) (domain.TransformationVersion, error) {
+	if !authz.Can(actor, "routes:write", actor.TenantID) {
+		return domain.TransformationVersion{}, ErrForbidden
+	}
+	if strings.TrimSpace(transformationID) == "" || len(req.Operations) == 0 {
+		return domain.TransformationVersion{}, fmt.Errorf("%w: transformation_id and operations are required", ErrInvalidInput)
+	}
+	if _, err := transform.ParseOperations(req.Operations); err != nil {
+		return domain.TransformationVersion{}, fmt.Errorf("%w: %v", ErrInvalidInput, err)
+	}
+	return s.store.CreateTransformationVersion(ctx, actor.TenantID, transformationID, actor.ID, req)
+}
+
+func (s *ControlService) ListTransformationVersions(ctx context.Context, actor authz.Actor, transformationID string, limit int) ([]domain.TransformationVersion, error) {
+	if !authz.Can(actor, "routes:read", actor.TenantID) {
+		return nil, ErrForbidden
+	}
+	return s.store.ListTransformationVersions(ctx, actor.TenantID, transformationID, normalizeLimit(limit))
+}
+
+func (s *ControlService) ActivateTransformationVersion(ctx context.Context, actor authz.Actor, transformationID, versionID string, req ActivateTransformationVersionRequest) (domain.TransformationVersion, error) {
+	if !authz.Can(actor, "routes:write", actor.TenantID) {
+		return domain.TransformationVersion{}, ErrForbidden
+	}
+	if strings.TrimSpace(req.Reason) == "" {
+		return domain.TransformationVersion{}, fmt.Errorf("%w: reason is required", ErrInvalidInput)
+	}
+	return s.store.ActivateTransformationVersion(ctx, actor.TenantID, transformationID, versionID, actor.ID, req.Reason)
 }
 
 func (s *ControlService) ListAuditExports(ctx context.Context, actor authz.Actor, limit int) ([]domain.EvidenceExport, error) {
@@ -849,7 +946,7 @@ func (s *ControlService) ListAuditExports(ctx context.Context, actor authz.Actor
 	if !authz.Can(actor, "events:raw", actor.TenantID) {
 		filtered := exports[:0]
 		for _, export := range exports {
-			if !export.IncludeRawPayloads {
+			if !export.IncludeRawPayloads && !export.IncludePayloadBodies {
 				filtered = append(filtered, export)
 			}
 		}
@@ -866,7 +963,7 @@ func (s *ControlService) GetAuditExport(ctx context.Context, actor authz.Actor, 
 	if err != nil {
 		return domain.EvidenceExport{}, err
 	}
-	if export.IncludeRawPayloads && !authz.Can(actor, "events:raw", actor.TenantID) {
+	if (export.IncludeRawPayloads || export.IncludePayloadBodies) && !authz.Can(actor, "events:raw", actor.TenantID) {
 		return domain.EvidenceExport{}, ErrForbidden
 	}
 	return export, nil
@@ -880,7 +977,7 @@ func (s *ControlService) DownloadAuditExport(ctx context.Context, actor authz.Ac
 	if err != nil {
 		return EvidenceExportDownload{}, err
 	}
-	if export.IncludeRawPayloads && !authz.Can(actor, "events:raw", actor.TenantID) {
+	if (export.IncludeRawPayloads || export.IncludePayloadBodies) && !authz.Can(actor, "events:raw", actor.TenantID) {
 		return EvidenceExportDownload{}, ErrForbidden
 	}
 	download, err := s.store.DownloadAuditExport(ctx, actor.TenantID, exportID, actor.ID)
@@ -952,8 +1049,10 @@ func normalizeLimit(limit int) int {
 }
 
 func validateRetentionPolicyInput(resourceType string, retentionDays int, state string) error {
-	if resourceType != domain.RetentionResourceRawPayload && resourceType != domain.RetentionResourceAuditEvent {
-		return fmt.Errorf("%w: resource_type must be raw_payload or audit_event", ErrInvalidInput)
+	switch resourceType {
+	case domain.RetentionResourceRawPayload, domain.RetentionResourceAuditEvent, domain.RetentionResourceNormalized, domain.RetentionResourceDeliveryPayload:
+	default:
+		return fmt.Errorf("%w: resource_type must be raw_payload, audit_event, normalized_envelope_data, or delivery_payload", ErrInvalidInput)
 	}
 	if retentionDays <= 0 || retentionDays > 3650 {
 		return fmt.Errorf("%w: retention_days must be between 1 and 3650", ErrInvalidInput)
