@@ -153,6 +153,28 @@ func TestProductEventsRejectSourceBoundProducerMismatch(t *testing.T) {
 	}
 }
 
+func TestProductEventsAcceptProducerOAuthToken(t *testing.T) {
+	ingest := &acceptingIngestStore{}
+	server := NewServer(ServerConfig{
+		Control:      NewNoopControl(),
+		Ingest:       app.NewIngestService(ingest, app.SystemClock{}),
+		ProducerAuth: app.NewStaticAuthenticator("producer-token", authz.Actor{ID: "producer_client:pcl_1", TenantID: "ten_1", Role: authz.RoleDeveloper, Scopes: []string{"events:write"}, SourceID: "src_allowed"}),
+		OpenAPI:      []byte("openapi: 3.1.0\n"),
+	})
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/v1/events", strings.NewReader(`{"source_id":"src_allowed","id":"evt_1"}`))
+	req.Header.Set("Authorization", "Bearer producer-token")
+
+	server.Routes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("expected 202, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if !ingest.called {
+		t.Fatal("producer OAuth request should reach ingestion")
+	}
+}
+
 func TestProductEventsAcceptVerifiedProducerMTLS(t *testing.T) {
 	cert := &x509.Certificate{Raw: []byte("producer-cert")}
 	ingest := &acceptingIngestStore{}

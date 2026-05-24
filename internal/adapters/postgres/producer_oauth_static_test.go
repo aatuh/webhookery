@@ -28,6 +28,9 @@ func TestProducerOAuthMigrationAndStoreProtectCredentials(t *testing.T) {
 		"func (s *Store) CreateProducerAccessToken",
 		"func (s *Store) AuthenticateProducerAccessToken",
 		"WHERE pc.tenant_id=$1",
+		"pat.state='active'",
+		"pat.expires_at > now()",
+		"UPDATE producer_access_tokens SET state='revoked'",
 		"producer_client.created",
 		"producer_client.secret_rotated",
 	} {
