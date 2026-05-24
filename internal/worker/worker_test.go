@@ -56,6 +56,17 @@ func TestRunOnceAppliesRetentionPolicies(t *testing.T) {
 	}
 }
 
+func TestRunOnceRefreshesMetricRollups(t *testing.T) {
+	store := &fakeWorkerStore{}
+	w := Worker{Store: store, MetricsStore: store, WorkerID: "worker_1", Limit: 5}
+	if err := w.RunOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if store.metricsWorkerID != "worker_1" || store.metricsLimit != 5 {
+		t.Fatalf("expected metrics rollups to run with worker id and limit, got worker=%q limit=%d", store.metricsWorkerID, store.metricsLimit)
+	}
+}
+
 type fakeWorkerStore struct {
 	items             []OutboxItem
 	processed         string
@@ -65,6 +76,8 @@ type fakeWorkerStore struct {
 	processErr        error
 	retentionWorkerID string
 	retentionLimit    int
+	metricsWorkerID   string
+	metricsLimit      int
 }
 
 func (f *fakeWorkerStore) ClaimOutbox(context.Context, string, int) ([]OutboxItem, error) {
@@ -88,6 +101,11 @@ func (f *fakeWorkerStore) RecordDeliveryAttempt(_ context.Context, item Delivery
 func (f *fakeWorkerStore) ApplyRetentionPolicies(_ context.Context, workerID string, limit int) error {
 	f.retentionWorkerID = workerID
 	f.retentionLimit = limit
+	return nil
+}
+func (f *fakeWorkerStore) RefreshMetricsRollups(_ context.Context, workerID string, limit int) error {
+	f.metricsWorkerID = workerID
+	f.metricsLimit = limit
 	return nil
 }
 

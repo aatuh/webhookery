@@ -2538,6 +2538,152 @@ func (s *Store) OpsStorage(ctx context.Context, tenantID string) (domain.OpsStor
 	return status, nil
 }
 
+func (s *Store) ListMetricRollups(ctx context.Context, tenantID, metricName string, limit int) ([]domain.MetricRollup, error) {
+	query := `
+		SELECT id, tenant_id, metric_name, bucket_start, bucket_seconds, dimensions, dimensions_hash, value, source, created_at, updated_at
+		FROM metrics_rollups
+		WHERE tenant_id=$1`
+	args := []any{tenantID}
+	if strings.TrimSpace(metricName) != "" {
+		query += " AND metric_name=$2"
+		args = append(args, strings.TrimSpace(metricName))
+	}
+	query += " ORDER BY bucket_start DESC, metric_name ASC LIMIT $" + strconv.Itoa(len(args)+1)
+	args = append(args, limit)
+	rows, err := s.pool.Query(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []domain.MetricRollup
+	for rows.Next() {
+		item, err := scanMetricRollup(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, item)
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) RefreshMetricsRollups(ctx context.Context, workerID string, limit int) error {
+	if limit <= 0 {
+		limit = 10
+	}
+	rows, err := s.pool.Query(ctx, `SELECT id FROM tenants WHERE state='active' ORDER BY id LIMIT $1`, limit)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	var tenants []string
+	for rows.Next() {
+		var tenantID string
+		if err := rows.Scan(&tenantID); err != nil {
+			return err
+		}
+		tenants = append(tenants, tenantID)
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	bucketStart := time.Now().UTC().Truncate(time.Minute)
+	for _, tenantID := range tenants {
+		if err := s.refreshTenantMetricsRollups(ctx, tenantID, workerID, bucketStart); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *Store) refreshTenantMetricsRollups(ctx context.Context, tenantID, workerID string, bucketStart time.Time) error {
+	metrics, err := s.OpsMetrics(ctx, tenantID)
+	if err != nil {
+		return err
+	}
+	rollups := []domain.MetricRollup{}
+	addRollup := func(name string, value float64, dimensions map[string]string) {
+		if dimensions == nil {
+			dimensions = map[string]string{}
+		}
+		rollups = append(rollups, domain.MetricRollup{
+			ID:             mustID("mru"),
+			TenantID:       tenantID,
+			MetricName:     name,
+			BucketStart:    bucketStart,
+			BucketSeconds:  60,
+			Dimensions:     dimensions,
+			DimensionsHash: domain.MetricDimensionsHash(dimensions),
+			Value:          value,
+			Source:         "scheduler:" + workerID,
+		})
+	}
+	addRollup("events.total", float64(metrics.EventsTotal), nil)
+	addRollup("outbox.pending", float64(metrics.OutboxPending), nil)
+	addRollup("outbox.oldest_age_seconds", float64(metrics.OldestOutboxAgeSec), nil)
+	addRollup("dead_letter.open", float64(metrics.DeadLetterOpen), nil)
+	addRollup("quarantine.open", float64(metrics.QuarantineOpen), nil)
+	addRollup("endpoint.circuit_open", float64(metrics.EndpointCircuitOpen), nil)
+	addRollup("audit_chain.unchained_events", float64(metrics.AuditChainUnchainedEvents), nil)
+	addRollup("audit_chain.verification_failures", float64(metrics.AuditChainVerificationFailures), nil)
+	addRollup("audit_chain.last_anchor_age_seconds", float64(metrics.AuditChainLastAnchorAgeSec), nil)
+	for state, count := range metrics.DeliveriesByState {
+		addRollup("deliveries.by_state", float64(count), map[string]string{"state": state})
+	}
+	for state, count := range metrics.ReplayJobsByState {
+		addRollup("replay_jobs.by_state", float64(count), map[string]string{"state": state})
+	}
+	for state, count := range metrics.ReconciliationJobsByState {
+		addRollup("reconciliation_jobs.by_state", float64(count), map[string]string{"state": state})
+	}
+	for outcome, count := range metrics.ReconciliationItemsByOutcome {
+		addRollup("reconciliation_items.by_outcome", float64(count), map[string]string{"outcome": outcome})
+	}
+	queues, err := s.ListQueues(ctx, tenantID)
+	if err != nil {
+		return err
+	}
+	for _, queue := range queues {
+		dimensions := map[string]string{"queue": queue.Name}
+		addRollup("queue.pending", float64(queue.Pending), dimensions)
+		addRollup("queue.in_progress", float64(queue.InProgress), dimensions)
+		addRollup("queue.due_now", float64(queue.DueNow), dimensions)
+		addRollup("queue.oldest_pending_age_seconds", float64(queue.OldestPendingAgeSec), dimensions)
+	}
+	health, err := s.ListEndpointHealth(ctx, tenantID, 100)
+	if err != nil {
+		return err
+	}
+	for _, endpoint := range health {
+		dimensions := map[string]string{"endpoint_id": endpoint.EndpointID}
+		addRollup("endpoint.successes_24h", float64(endpoint.Successes24h), dimensions)
+		addRollup("endpoint.failures_24h", float64(endpoint.Failures24h), dimensions)
+		total := endpoint.Successes24h + endpoint.Failures24h
+		if total > 0 {
+			addRollup("endpoint.failure_rate_24h", float64(endpoint.Failures24h)/float64(total), dimensions)
+		}
+	}
+	for _, rollup := range rollups {
+		if err := s.upsertMetricRollup(ctx, rollup); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *Store) upsertMetricRollup(ctx context.Context, item domain.MetricRollup) error {
+	dimensions, err := json.Marshal(item.Dimensions)
+	if err != nil {
+		return err
+	}
+	_, err = s.pool.Exec(ctx, `
+		INSERT INTO metrics_rollups(id, tenant_id, metric_name, bucket_start, bucket_seconds, dimensions, dimensions_hash, value, source)
+		VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)
+		ON CONFLICT (tenant_id, metric_name, bucket_start, dimensions_hash)
+		DO UPDATE SET value=EXCLUDED.value, source=EXCLUDED.source, updated_at=now()`,
+		item.ID, item.TenantID, item.MetricName, item.BucketStart, item.BucketSeconds, dimensions, item.DimensionsHash, item.Value, item.Source)
+	return err
+}
+
 func (s *Store) ListAuditEvents(ctx context.Context, tenantID string, limit int) ([]domain.AuditEvent, error) {
 	rows, err := s.pool.Query(ctx, `SELECT id, tenant_id, actor_id, action, resource, resource_id, reason, occurred_at FROM audit_events WHERE tenant_id=$1 ORDER BY occurred_at DESC LIMIT $2`, tenantID, limit)
 	if err != nil {
@@ -6012,6 +6158,24 @@ func scanQueueStats(row rowScanner, tenantID string) (domain.QueueStats, error) 
 	item.TenantID = tenantID
 	item.OldestPendingAgeSec = int64(oldest)
 	return item, err
+}
+
+func scanMetricRollup(row rowScanner) (domain.MetricRollup, error) {
+	var item domain.MetricRollup
+	var dimensions []byte
+	err := row.Scan(&item.ID, &item.TenantID, &item.MetricName, &item.BucketStart, &item.BucketSeconds, &dimensions, &item.DimensionsHash, &item.Value, &item.Source, &item.CreatedAt, &item.UpdatedAt)
+	if err != nil {
+		return domain.MetricRollup{}, err
+	}
+	if len(dimensions) > 0 {
+		if err := json.Unmarshal(dimensions, &item.Dimensions); err != nil {
+			return domain.MetricRollup{}, err
+		}
+	}
+	if item.Dimensions == nil {
+		item.Dimensions = map[string]string{}
+	}
+	return item, nil
 }
 
 func scanRoute(row rowScanner) (domain.Route, error) {

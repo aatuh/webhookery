@@ -60,12 +60,17 @@ type RetentionStore interface {
 	ApplyRetentionPolicies(ctx context.Context, workerID string, limit int) error
 }
 
+type MetricsStore interface {
+	RefreshMetricsRollups(ctx context.Context, workerID string, limit int) error
+}
+
 type Worker struct {
 	Store          OutboxStore
 	Processor      OutboxProcessor
 	DeliveryStore  DeliveryStore
 	DeliveryClient DeliveryClient
 	RetentionStore RetentionStore
+	MetricsStore   MetricsStore
 	WorkerID       string
 	Limit          int
 }
@@ -106,6 +111,11 @@ func (w Worker) RunOnce(ctx context.Context) error {
 	}
 	if w.RetentionStore != nil {
 		if err := w.RetentionStore.ApplyRetentionPolicies(ctx, w.WorkerID, limit); err != nil {
+			return err
+		}
+	}
+	if w.MetricsStore != nil {
+		if err := w.MetricsStore.RefreshMetricsRollups(ctx, w.WorkerID, limit); err != nil {
 			return err
 		}
 	}

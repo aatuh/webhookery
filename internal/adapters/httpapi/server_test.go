@@ -640,6 +640,9 @@ func (noopControlStore) OpsStorage(_ context.Context, tenantID string) (domain.O
 		ObjectStorageConfigured: false,
 	}, nil
 }
+func (noopControlStore) ListMetricRollups(_ context.Context, tenantID, metricName string, limit int) ([]domain.MetricRollup, error) {
+	return []domain.MetricRollup{{ID: "mru_1", TenantID: tenantID, MetricName: metricName, BucketSeconds: 60, Dimensions: map[string]string{}, Value: 1}}, nil
+}
 func (noopControlStore) ListAuditEvents(context.Context, string, int) ([]domain.AuditEvent, error) {
 	return nil, nil
 }

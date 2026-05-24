@@ -74,6 +74,7 @@ var indexTemplate = template.Must(template.New("index").Parse(`<!doctype html>
       ["retention", "/v1/admin/retention-policies"],
       ["endpoint health", "/v1/endpoint-health"],
       ["ops", "/v1/ops/metrics"],
+      ["ops rollups", "/v1/ops/metrics/rollups"],
       ["ops storage", "/v1/ops/storage"],
       ["ops config", "/v1/ops/config"],
       ["workers", "/v1/ops/workers"],

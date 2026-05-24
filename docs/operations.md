@@ -259,6 +259,14 @@ box mode, and request limits. These APIs do not expose payload bodies, endpoint
 URLs, database URLs, object-store credentials, API keys, webhook secrets, master
 keys, Vault tokens, or tenant labels on public metrics.
 
+The scheduler also writes derived one-minute operational rollups to
+`metrics_rollups`. Operators can query them through
+`GET /v1/ops/metrics/rollups` or `whcp ops rollups`, optionally filtering by
+`metric_name`. Rollups cover queue depth and age, delivery/replay/reconciliation
+states, open DLQ/quarantine counts, endpoint failure-rate summaries, and audit
+chain status. They are dashboard and alert inputs only; the underlying event,
+delivery, audit, retention, and reconciliation rows remain authoritative.
+
 ## Provider Reconciliation
 
 Provider reconciliation jobs are implemented for cases where a provider API can
@@ -478,7 +486,8 @@ outbox age, delivery states, replay states, open DLQ count, quarantine count,
 open endpoint circuits, reconciliation job states, reconciliation item outcomes,
 unchained audit-event count, audit-chain verification failure count, and newest
 anchor age. `/v1/ops/storage` and `/v1/ops/config` provide redacted operational
-status for storage and runtime configuration.
+status for storage and runtime configuration. `/v1/ops/metrics/rollups` exposes
+tenant-scoped derived rollup buckets for authenticated operators.
 
 ## SSRF Protection
 

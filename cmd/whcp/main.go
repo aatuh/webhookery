@@ -184,6 +184,7 @@ func runWorker(args []string) error {
 		DeliveryStore:  store,
 		DeliveryClient: deliveryAdapter{client: deliveryhttp.Client{SSRF: ssrf.Validator{}}},
 		RetentionStore: store,
+		MetricsStore:   store,
 		WorkerID:       "worker-" + time.Now().UTC().Format("20060102150405"),
 		Limit:          10,
 	}

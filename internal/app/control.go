@@ -84,6 +84,7 @@ type ControlStore interface {
 	GetWorker(ctx context.Context, tenantID, workerID string) (domain.WorkerStatus, error)
 	ListQueues(ctx context.Context, tenantID string) ([]domain.QueueStats, error)
 	OpsStorage(ctx context.Context, tenantID string) (domain.OpsStorageStatus, error)
+	ListMetricRollups(ctx context.Context, tenantID, metricName string, limit int) ([]domain.MetricRollup, error)
 	ListAuditEvents(ctx context.Context, tenantID string, limit int) ([]domain.AuditEvent, error)
 	GetAuditChainHead(ctx context.Context, tenantID string) (domain.AuditChainHead, error)
 	VerifyAuditChain(ctx context.Context, tenantID string, req AuditChainVerifyRequest) (domain.AuditChainVerification, error)
@@ -1371,6 +1372,17 @@ func (s *ControlService) OpsConfig(ctx context.Context, actor authz.Actor) (doma
 	return s.runtimeConfig, nil
 }
 
+func (s *ControlService) ListMetricRollups(ctx context.Context, actor authz.Actor, metricName string, limit int) ([]domain.MetricRollup, error) {
+	if !authz.Can(actor, "ops:read", actor.TenantID) {
+		return nil, ErrForbidden
+	}
+	metricName = strings.TrimSpace(metricName)
+	if metricName != "" && !validMetricName(metricName) {
+		return nil, fmt.Errorf("%w: metric_name is invalid", ErrInvalidInput)
+	}
+	return s.store.ListMetricRollups(ctx, actor.TenantID, metricName, normalizeLimit(limit))
+}
+
 func (s *ControlService) DryRunReplay(ctx context.Context, actor authz.Actor, req ReplayRequest) (ReplayDryRun, error) {
 	if !authz.Can(actor, "replay:read", actor.TenantID) {
 		return ReplayDryRun{}, ErrForbidden
@@ -1831,6 +1843,19 @@ func normalizeLimit(limit int) int {
 		return 50
 	}
 	return limit
+}
+
+func validMetricName(name string) bool {
+	if len(name) > 128 {
+		return false
+	}
+	for _, r := range name {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '_' || r == '-' || r == '.' {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 func validateRetentionPolicyInput(resourceType string, retentionDays int, state string) error {

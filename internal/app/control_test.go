@@ -956,6 +956,29 @@ func TestControlServiceOpsVisibilityRequiresOpsRead(t *testing.T) {
 	}
 }
 
+func TestControlServiceMetricRollupsRequireOpsReadAndValidateFilter(t *testing.T) {
+	store := &fakeControlStore{}
+	svc := NewControlService(store, ssrf.Validator{Resolver: ssrf.StaticResolver{}})
+	support := authz.Actor{ID: "usr_1", TenantID: "ten_a", Role: authz.RoleSupport, Scopes: []string{"events:read"}}
+	operator := authz.Actor{ID: "usr_2", TenantID: "ten_a", Role: authz.RoleOperator, Scopes: []string{"ops:read"}}
+
+	_, err := svc.ListMetricRollups(context.Background(), support, "", 10)
+	if err != ErrForbidden {
+		t.Fatalf("expected forbidden rollup list, got %v", err)
+	}
+	_, err = svc.ListMetricRollups(context.Background(), operator, "bad metric", 10)
+	if !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("expected invalid metric filter, got %v", err)
+	}
+	items, err := svc.ListMetricRollups(context.Background(), operator, "deliveries.by_state", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 1 || items[0].TenantID != "ten_a" || store.opsTenantID != "ten_a" || store.metricName != "deliveries.by_state" {
+		t.Fatalf("expected tenant-scoped metric rollups, items=%+v tenant=%q metric=%q", items, store.opsTenantID, store.metricName)
+	}
+}
+
 func testClientCertificatePEM(t *testing.T, commonName string) (string, string) {
 	t.Helper()
 	key, err := rsa.GenerateKey(rand.Reader, 2048)
@@ -1018,6 +1041,7 @@ type fakeControlStore struct {
 	providerConnectionReq      CreateProviderConnectionRequest
 	reconciliationTenantID     string
 	opsTenantID                string
+	metricName                 string
 	replayReq                  ReplayRequest
 	approveReplayTenantID      string
 	approveReplayActorID       string
@@ -1359,6 +1383,18 @@ func (f *fakeControlStore) OpsStorage(_ context.Context, tenantID string) (domai
 		RawPayloadsByStatus:     map[string]int64{domain.StorageStatusStored: 2},
 		RawPayloadsByBackend:    map[string]int64{domain.RawStorageS3: 2},
 	}, nil
+}
+func (f *fakeControlStore) ListMetricRollups(_ context.Context, tenantID, metricName string, limit int) ([]domain.MetricRollup, error) {
+	f.opsTenantID = tenantID
+	f.metricName = metricName
+	return []domain.MetricRollup{{
+		ID:            "mru_1",
+		TenantID:      tenantID,
+		MetricName:    metricName,
+		BucketSeconds: 60,
+		Dimensions:    map[string]string{"state": "scheduled"},
+		Value:         3,
+	}}, nil
 }
 func (f *fakeControlStore) ListAuditEvents(context.Context, string, int) ([]domain.AuditEvent, error) {
 	return nil, nil

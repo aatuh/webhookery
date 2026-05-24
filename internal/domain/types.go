@@ -651,6 +651,28 @@ type OpsMetrics struct {
 	ReconciliationItemsByOutcome   map[string]int64 `json:"reconciliation_items_by_outcome,omitempty"`
 }
 
+type MetricRollup struct {
+	ID             string            `json:"id"`
+	TenantID       string            `json:"tenant_id"`
+	MetricName     string            `json:"metric_name"`
+	BucketStart    time.Time         `json:"bucket_start"`
+	BucketSeconds  int               `json:"bucket_seconds"`
+	Dimensions     map[string]string `json:"dimensions,omitempty"`
+	DimensionsHash string            `json:"dimensions_hash"`
+	Value          float64           `json:"value"`
+	Source         string            `json:"source"`
+	CreatedAt      time.Time         `json:"created_at"`
+	UpdatedAt      time.Time         `json:"updated_at,omitempty"`
+}
+
+func MetricDimensionsHash(dimensions map[string]string) string {
+	if dimensions == nil {
+		dimensions = map[string]string{}
+	}
+	raw, _ := json.Marshal(dimensions)
+	return HashSHA256(raw)
+}
+
 type ProviderConnection struct {
 	ID             string            `json:"id"`
 	TenantID       string            `json:"tenant_id"`

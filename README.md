@@ -76,6 +76,7 @@ go run ./cmd/whcp deliveries retry --delivery-id del_... --reason "operator retr
 go run ./cmd/whcp replay-jobs create --event-id evt_... --config-mode original --rate-limit-per-minute 60 --require-approval --reason "customer replay request"
 go run ./cmd/whcp replay-jobs approve --replay-job-id rpl_... --reason "approved replay window"
 go run ./cmd/whcp ops metrics --api-key "$WEBHOOKERY_API_KEY"
+go run ./cmd/whcp ops rollups --api-key "$WEBHOOKERY_API_KEY"
 go run ./cmd/whcp ops storage --api-key "$WEBHOOKERY_API_KEY"
 go run ./cmd/whcp ops config --api-key "$WEBHOOKERY_API_KEY"
 go run ./cmd/whcp ops workers --api-key "$WEBHOOKERY_API_KEY"

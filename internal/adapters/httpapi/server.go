@@ -162,6 +162,7 @@ func (s *Server) Routes() http.Handler {
 			r.Patch("/admin/retention-policies/{policy_id}", s.updateRetentionPolicy)
 			r.Get("/endpoint-health", s.listEndpointHealth)
 			r.Get("/ops/metrics", s.opsMetrics)
+			r.Get("/ops/metrics/rollups", s.listMetricRollups)
 			r.Get("/ops/storage", s.opsStorage)
 			r.Get("/ops/config", s.opsConfig)
 			r.Get("/ops/workers", s.listWorkers)
@@ -1467,6 +1468,15 @@ func (s *Server) opsMetrics(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, item)
+}
+
+func (s *Server) listMetricRollups(w http.ResponseWriter, r *http.Request) {
+	items, err := s.cfg.Control.ListMetricRollups(r.Context(), actorFrom(r), r.URL.Query().Get("metric_name"), queryLimit(r))
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, page(items))
 }
 
 func (s *Server) listWorkers(w http.ResponseWriter, r *http.Request) {
