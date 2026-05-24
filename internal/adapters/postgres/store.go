@@ -2497,6 +2497,47 @@ func (s *Store) ListQueues(ctx context.Context, tenantID string) ([]domain.Queue
 	return out, nil
 }
 
+func (s *Store) OpsStorage(ctx context.Context, tenantID string) (domain.OpsStorageStatus, error) {
+	predicate, args := tenantPredicate(tenantID)
+	status := domain.OpsStorageStatus{
+		TenantID:                    tenantID,
+		RawStorageMode:              s.rawStorageMode,
+		ObjectStorageConfigured:     s.objectStore != nil && strings.TrimSpace(s.objectBucket) != "",
+		RawPayloadsByStatus:         map[string]int64{},
+		RawPayloadsByBackend:        map[string]int64{},
+		NormalizedEnvelopesByStatus: map[string]int64{},
+		DeliveryPayloadsByStatus:    map[string]int64{},
+		ProviderAPIEvidenceByStatus: map[string]int64{},
+		EvidenceExportsByState:      map[string]int64{},
+		EvidenceExportsByBackend:    map[string]int64{},
+	}
+	if err := scanCounts(ctx, s.pool, "SELECT storage_status, count(*) FROM raw_payloads"+predicate+" GROUP BY storage_status", args, status.RawPayloadsByStatus); err != nil {
+		return status, err
+	}
+	if err := scanCounts(ctx, s.pool, "SELECT storage_backend, count(*) FROM raw_payloads"+predicate+" GROUP BY storage_backend", args, status.RawPayloadsByBackend); err != nil {
+		return status, err
+	}
+	if err := s.pool.QueryRow(ctx, "SELECT COALESCE(sum(size_bytes) FILTER (WHERE storage_status='stored'),0) FROM raw_payloads"+predicate, args...).Scan(&status.RawPayloadStoredBytes); err != nil {
+		return status, err
+	}
+	if err := scanCounts(ctx, s.pool, "SELECT storage_status, count(*) FROM normalized_envelopes"+predicate+" GROUP BY storage_status", args, status.NormalizedEnvelopesByStatus); err != nil {
+		return status, err
+	}
+	if err := scanCounts(ctx, s.pool, "SELECT storage_status, count(*) FROM delivery_payloads"+predicate+" GROUP BY storage_status", args, status.DeliveryPayloadsByStatus); err != nil {
+		return status, err
+	}
+	if err := scanCounts(ctx, s.pool, "SELECT storage_status, count(*) FROM provider_api_evidence"+predicate+" GROUP BY storage_status", args, status.ProviderAPIEvidenceByStatus); err != nil {
+		return status, err
+	}
+	if err := scanCounts(ctx, s.pool, "SELECT state, count(*) FROM evidence_exports"+predicate+" GROUP BY state", args, status.EvidenceExportsByState); err != nil {
+		return status, err
+	}
+	if err := scanCounts(ctx, s.pool, "SELECT storage_backend, count(*) FROM evidence_exports"+predicate+" GROUP BY storage_backend", args, status.EvidenceExportsByBackend); err != nil {
+		return status, err
+	}
+	return status, nil
+}
+
 func (s *Store) ListAuditEvents(ctx context.Context, tenantID string, limit int) ([]domain.AuditEvent, error) {
 	rows, err := s.pool.Query(ctx, `SELECT id, tenant_id, actor_id, action, resource, resource_id, reason, occurred_at FROM audit_events WHERE tenant_id=$1 ORDER BY occurred_at DESC LIMIT $2`, tenantID, limit)
 	if err != nil {

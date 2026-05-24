@@ -18,6 +18,9 @@ func TestOpsVisibilityQueriesUseLeasesAndTenantScopedQueues(t *testing.T) {
 		"WHERE tenant_id=$1",
 		"FROM deliveries",
 		"state='in_progress'",
+		"func (s *Store) OpsStorage",
+		"FROM raw_payloads",
+		"FROM evidence_exports",
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("ops visibility store missing worker/tenant queue evidence %q", want)

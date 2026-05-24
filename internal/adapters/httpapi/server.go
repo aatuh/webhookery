@@ -162,6 +162,8 @@ func (s *Server) Routes() http.Handler {
 			r.Patch("/admin/retention-policies/{policy_id}", s.updateRetentionPolicy)
 			r.Get("/endpoint-health", s.listEndpointHealth)
 			r.Get("/ops/metrics", s.opsMetrics)
+			r.Get("/ops/storage", s.opsStorage)
+			r.Get("/ops/config", s.opsConfig)
 			r.Get("/ops/workers", s.listWorkers)
 			r.Get("/ops/workers/{worker_id}", s.getWorker)
 			r.Get("/ops/queues", s.listQueues)
@@ -1492,6 +1494,24 @@ func (s *Server) listQueues(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, page(items))
+}
+
+func (s *Server) opsStorage(w http.ResponseWriter, r *http.Request) {
+	item, err := s.cfg.Control.OpsStorage(r.Context(), actorFrom(r))
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, item)
+}
+
+func (s *Server) opsConfig(w http.ResponseWriter, r *http.Request) {
+	item, err := s.cfg.Control.OpsConfig(r.Context(), actorFrom(r))
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, item)
 }
 
 func (s *Server) writeError(w http.ResponseWriter, r *http.Request, err error) {

@@ -466,6 +466,32 @@ type QueueStats struct {
 	NextAvailableAt     time.Time `json:"next_available_at,omitempty"`
 }
 
+type OpsStorageStatus struct {
+	TenantID                    string           `json:"tenant_id,omitempty"`
+	RawStorageMode              string           `json:"raw_storage_mode"`
+	ObjectStorageConfigured     bool             `json:"object_storage_configured"`
+	RawPayloadsByStatus         map[string]int64 `json:"raw_payloads_by_status"`
+	RawPayloadsByBackend        map[string]int64 `json:"raw_payloads_by_backend"`
+	RawPayloadStoredBytes       int64            `json:"raw_payload_stored_bytes"`
+	NormalizedEnvelopesByStatus map[string]int64 `json:"normalized_envelopes_by_status,omitempty"`
+	DeliveryPayloadsByStatus    map[string]int64 `json:"delivery_payloads_by_status,omitempty"`
+	ProviderAPIEvidenceByStatus map[string]int64 `json:"provider_api_evidence_by_status,omitempty"`
+	EvidenceExportsByState      map[string]int64 `json:"evidence_exports_by_state,omitempty"`
+	EvidenceExportsByBackend    map[string]int64 `json:"evidence_exports_by_backend,omitempty"`
+}
+
+type OpsConfig struct {
+	Environment             string `json:"environment"`
+	UIEnabled               bool   `json:"ui_enabled"`
+	RawStorageMode          string `json:"raw_storage_mode"`
+	ObjectStorageConfigured bool   `json:"object_storage_configured"`
+	SecretBoxMode           string `json:"secret_box_mode"`
+	MaxIngressBodyBytes     int64  `json:"max_ingress_body_bytes"`
+	MaxHeaderBytes          int64  `json:"max_header_bytes"`
+	MaxHeaderPairs          int    `json:"max_header_pairs"`
+	MaxHeaderValueBytes     int64  `json:"max_header_value_bytes"`
+}
+
 type DeliveryAttempt struct {
 	ID                    string    `json:"id"`
 	TenantID              string    `json:"tenant_id"`

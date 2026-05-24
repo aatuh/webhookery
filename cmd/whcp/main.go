@@ -118,7 +118,7 @@ func runAPI() error {
 		return err
 	}
 	server := httpapi.NewServer(httpapi.ServerConfig{
-		Control:  apppkg.NewControlService(store, ssrf.Validator{}),
+		Control:  apppkg.NewControlServiceWithRuntimeConfig(store, ssrf.Validator{}, opsRuntimeConfig(cfg)),
 		Ingest:   apppkg.NewIngestService(store, apppkg.SystemClock{}),
 		Auth:     runtimeAuth(cfg, store),
 		OpenAPI:  openAPI,
@@ -882,7 +882,7 @@ func runReconciliationJobs(args []string) error {
 
 func runOps(args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: whcp ops <metrics|endpoint-health|workers|worker|queues>")
+		return fmt.Errorf("usage: whcp ops <metrics|rollups|storage|config|endpoint-health|workers|worker|queues>")
 	}
 	fs := flag.NewFlagSet("ops "+args[0], flag.ContinueOnError)
 	baseURL := fs.String("base-url", "http://localhost:8080", "API base URL")
@@ -894,6 +894,12 @@ func runOps(args []string) error {
 	switch args[0] {
 	case "metrics":
 		return getJSON(*baseURL, *apiKey, "/v1/ops/metrics")
+	case "rollups":
+		return getJSON(*baseURL, *apiKey, "/v1/ops/metrics/rollups")
+	case "storage":
+		return getJSON(*baseURL, *apiKey, "/v1/ops/storage")
+	case "config":
+		return getJSON(*baseURL, *apiKey, "/v1/ops/config")
 	case "endpoint-health":
 		return getJSON(*baseURL, *apiKey, "/v1/endpoint-health")
 	case "workers":
@@ -906,7 +912,7 @@ func runOps(args []string) error {
 	case "queues":
 		return getJSON(*baseURL, *apiKey, "/v1/ops/queues")
 	default:
-		return fmt.Errorf("usage: whcp ops <metrics|endpoint-health|workers|worker|queues>")
+		return fmt.Errorf("usage: whcp ops <metrics|rollups|storage|config|endpoint-health|workers|worker|queues>")
 	}
 }
 
@@ -1249,6 +1255,20 @@ func secretBoxFromConfig(cfg config.Config) (postgres.SecretBox, error) {
 		})
 	default:
 		return nil, fmt.Errorf("unsupported secret box mode %q", cfg.SecretBoxMode)
+	}
+}
+
+func opsRuntimeConfig(cfg config.Config) domain.OpsConfig {
+	return domain.OpsConfig{
+		Environment:             cfg.Environment,
+		UIEnabled:               cfg.EnableUI,
+		RawStorageMode:          cfg.RawStorageMode,
+		ObjectStorageConfigured: cfg.RawStorageMode == domain.RawStorageS3,
+		SecretBoxMode:           cfg.SecretBoxMode,
+		MaxIngressBodyBytes:     2 << 20,
+		MaxHeaderBytes:          64 << 10,
+		MaxHeaderPairs:          128,
+		MaxHeaderValueBytes:     8 << 10,
 	}
 }
 

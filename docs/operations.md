@@ -246,13 +246,18 @@ Dead-letter entries can be released one at a time or in bounded bulk batches.
 
 Authenticated operators with `ops:read` can inspect runtime worker leases and
 tenant-scoped queue depth through `GET /v1/ops/workers`,
-`GET /v1/ops/workers/{worker_id}`, `GET /v1/ops/queues`, and `whcp ops
-workers|worker|queues`. Worker status exposes only lease metadata (`worker_id`,
+`GET /v1/ops/workers/{worker_id}`, `GET /v1/ops/queues`, `GET
+/v1/ops/storage`, `GET /v1/ops/config`, and `whcp ops
+workers|worker|queues|storage|config`. Worker status exposes only lease metadata (`worker_id`,
 active/expired state, last seen time, and expiry). Queue stats are scoped to the
 actor tenant and report durable outbox kinds plus the delivery queue with
 pending, in-progress, terminal/completed, due-now, oldest pending age, and next
-scheduled timestamps. These APIs do not expose payload bodies, endpoint URLs,
-API keys, webhook secrets, or tenant labels on public metrics.
+scheduled timestamps. Storage status reports tenant-scoped payload/evidence
+counts, storage backends, and stored-byte totals. Runtime config reports only
+safe metadata such as environment, UI enabled state, raw storage mode, secret
+box mode, and request limits. These APIs do not expose payload bodies, endpoint
+URLs, database URLs, object-store credentials, API keys, webhook secrets, master
+keys, Vault tokens, or tenant labels on public metrics.
 
 ## Provider Reconciliation
 
@@ -472,7 +477,8 @@ metrics for authenticated operators, including pending outbox count, oldest
 outbox age, delivery states, replay states, open DLQ count, quarantine count,
 open endpoint circuits, reconciliation job states, reconciliation item outcomes,
 unchained audit-event count, audit-chain verification failure count, and newest
-anchor age.
+anchor age. `/v1/ops/storage` and `/v1/ops/config` provide redacted operational
+status for storage and runtime configuration.
 
 ## SSRF Protection
 

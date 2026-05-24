@@ -901,7 +901,14 @@ func TestControlServiceAuditChainAnchorRequiresSecurityWriteAndReason(t *testing
 
 func TestControlServiceOpsVisibilityRequiresOpsRead(t *testing.T) {
 	store := &fakeControlStore{}
-	svc := NewControlService(store, ssrf.Validator{Resolver: ssrf.StaticResolver{}})
+	svc := NewControlServiceWithRuntimeConfig(store, ssrf.Validator{Resolver: ssrf.StaticResolver{}}, domain.OpsConfig{
+		Environment:             "production",
+		UIEnabled:               true,
+		RawStorageMode:          domain.RawStorageS3,
+		ObjectStorageConfigured: true,
+		SecretBoxMode:           "vault-transit",
+		MaxIngressBodyBytes:     2 << 20,
+	})
 	support := authz.Actor{ID: "usr_1", TenantID: "ten_a", Role: authz.RoleSupport, Scopes: []string{"events:read"}}
 	operator := authz.Actor{ID: "usr_2", TenantID: "ten_a", Role: authz.RoleOperator, Scopes: []string{"ops:read"}}
 
@@ -919,6 +926,33 @@ func TestControlServiceOpsVisibilityRequiresOpsRead(t *testing.T) {
 	}
 	if store.opsTenantID != "ten_a" {
 		t.Fatalf("expected tenant-scoped queue stats, got %q", store.opsTenantID)
+	}
+	_, err = svc.OpsStorage(context.Background(), support)
+	if err != ErrForbidden {
+		t.Fatalf("expected forbidden storage status, got %v", err)
+	}
+	storage, err := svc.OpsStorage(context.Background(), operator)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if storage.TenantID != "ten_a" || store.opsTenantID != "ten_a" {
+		t.Fatalf("expected tenant-scoped storage status, got item=%q store=%q", storage.TenantID, store.opsTenantID)
+	}
+	cfg, err := svc.OpsConfig(context.Background(), operator)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := json.Marshal(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, forbidden := range []string{"DATABASE_URL", "MASTER_KEY", "VAULT_TOKEN", "postgres://user:pass", "raw-secret-value"} {
+		if strings.Contains(string(raw), forbidden) {
+			t.Fatalf("ops config exposed sensitive token %q in %s", forbidden, raw)
+		}
+	}
+	if cfg.Environment != "production" || cfg.RawStorageMode != domain.RawStorageS3 || !cfg.ObjectStorageConfigured {
+		t.Fatalf("unexpected safe ops config: %+v", cfg)
 	}
 }
 
@@ -1315,6 +1349,16 @@ func (f *fakeControlStore) GetWorker(context.Context, string, string) (domain.Wo
 func (f *fakeControlStore) ListQueues(_ context.Context, tenantID string) ([]domain.QueueStats, error) {
 	f.opsTenantID = tenantID
 	return nil, nil
+}
+func (f *fakeControlStore) OpsStorage(_ context.Context, tenantID string) (domain.OpsStorageStatus, error) {
+	f.opsTenantID = tenantID
+	return domain.OpsStorageStatus{
+		TenantID:                tenantID,
+		RawStorageMode:          domain.RawStorageS3,
+		ObjectStorageConfigured: true,
+		RawPayloadsByStatus:     map[string]int64{domain.StorageStatusStored: 2},
+		RawPayloadsByBackend:    map[string]int64{domain.RawStorageS3: 2},
+	}, nil
 }
 func (f *fakeControlStore) ListAuditEvents(context.Context, string, int) ([]domain.AuditEvent, error) {
 	return nil, nil

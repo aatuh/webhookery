@@ -83,6 +83,7 @@ type ControlStore interface {
 	ListWorkers(ctx context.Context, tenantID string, limit int) ([]domain.WorkerStatus, error)
 	GetWorker(ctx context.Context, tenantID, workerID string) (domain.WorkerStatus, error)
 	ListQueues(ctx context.Context, tenantID string) ([]domain.QueueStats, error)
+	OpsStorage(ctx context.Context, tenantID string) (domain.OpsStorageStatus, error)
 	ListAuditEvents(ctx context.Context, tenantID string, limit int) ([]domain.AuditEvent, error)
 	GetAuditChainHead(ctx context.Context, tenantID string) (domain.AuditChainHead, error)
 	VerifyAuditChain(ctx context.Context, tenantID string, req AuditChainVerifyRequest) (domain.AuditChainVerification, error)
@@ -131,10 +132,15 @@ type ControlStore interface {
 type ControlService struct {
 	store         ControlStore
 	ssrfValidator ssrf.Validator
+	runtimeConfig domain.OpsConfig
 }
 
 func NewControlService(store ControlStore, validator ssrf.Validator) *ControlService {
 	return &ControlService{store: store, ssrfValidator: validator}
+}
+
+func NewControlServiceWithRuntimeConfig(store ControlStore, validator ssrf.Validator, runtimeConfig domain.OpsConfig) *ControlService {
+	return &ControlService{store: store, ssrfValidator: validator, runtimeConfig: runtimeConfig}
 }
 
 type CreateSourceRequest struct {
@@ -1349,6 +1355,20 @@ func (s *ControlService) ListQueues(ctx context.Context, actor authz.Actor) ([]d
 		return nil, ErrForbidden
 	}
 	return s.store.ListQueues(ctx, actor.TenantID)
+}
+
+func (s *ControlService) OpsStorage(ctx context.Context, actor authz.Actor) (domain.OpsStorageStatus, error) {
+	if !authz.Can(actor, "ops:read", actor.TenantID) {
+		return domain.OpsStorageStatus{}, ErrForbidden
+	}
+	return s.store.OpsStorage(ctx, actor.TenantID)
+}
+
+func (s *ControlService) OpsConfig(ctx context.Context, actor authz.Actor) (domain.OpsConfig, error) {
+	if !authz.Can(actor, "ops:read", actor.TenantID) {
+		return domain.OpsConfig{}, ErrForbidden
+	}
+	return s.runtimeConfig, nil
 }
 
 func (s *ControlService) DryRunReplay(ctx context.Context, actor authz.Actor, req ReplayRequest) (ReplayDryRun, error) {

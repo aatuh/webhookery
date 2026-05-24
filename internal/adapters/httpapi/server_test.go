@@ -92,6 +92,42 @@ func TestPrometheusAuditChainMetricsAreAggregate(t *testing.T) {
 	}
 }
 
+func TestOpsConfigRouteReturnsRedactedRuntimeMetadata(t *testing.T) {
+	control := app.NewControlServiceWithRuntimeConfig(noopControlStore{}, ssrf.Validator{Resolver: ssrf.StaticResolver{}}, domain.OpsConfig{
+		Environment:             "production",
+		UIEnabled:               true,
+		RawStorageMode:          domain.RawStorageS3,
+		ObjectStorageConfigured: true,
+		SecretBoxMode:           "vault-transit",
+		MaxIngressBodyBytes:     2 << 20,
+		MaxHeaderBytes:          64 << 10,
+		MaxHeaderPairs:          128,
+		MaxHeaderValueBytes:     8 << 10,
+	})
+	server := NewServer(ServerConfig{
+		Control: control,
+		Ingest:  app.NewIngestService(&fakeIngestStore{}, app.SystemClock{}),
+		Auth:    app.NewStaticAuthenticator("token", authz.Actor{ID: "usr_1", TenantID: "ten_1", Role: authz.RoleOperator, Scopes: []string{"ops:read"}}),
+		OpenAPI: []byte("openapi: 3.1.0\n"),
+	})
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/v1/ops/config", nil)
+	req.Header.Set("Authorization", "Bearer token")
+
+	server.Routes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	if strings.Contains(body, "DATABASE_URL") || strings.Contains(body, "MASTER_KEY") || strings.Contains(body, "VAULT_TOKEN") {
+		t.Fatalf("ops config leaked secret-shaped fields: %s", body)
+	}
+	if !strings.Contains(body, `"raw_storage_mode":"s3"`) || !strings.Contains(body, `"object_storage_configured":true`) {
+		t.Fatalf("ops config missing safe metadata: %s", body)
+	}
+}
+
 func TestSlackChallengeExtraction(t *testing.T) {
 	challenge := slackChallenge([]byte(`{"type":"url_verification","challenge":"abc123"}`))
 	if challenge != "abc123" {
@@ -594,6 +630,15 @@ func (noopControlStore) GetWorker(context.Context, string, string) (domain.Worke
 }
 func (noopControlStore) ListQueues(context.Context, string) ([]domain.QueueStats, error) {
 	return nil, nil
+}
+func (noopControlStore) OpsStorage(_ context.Context, tenantID string) (domain.OpsStorageStatus, error) {
+	return domain.OpsStorageStatus{
+		TenantID:                tenantID,
+		RawStorageMode:          domain.RawStoragePostgres,
+		RawPayloadsByStatus:     map[string]int64{},
+		RawPayloadsByBackend:    map[string]int64{},
+		ObjectStorageConfigured: false,
+	}, nil
 }
 func (noopControlStore) ListAuditEvents(context.Context, string, int) ([]domain.AuditEvent, error) {
 	return nil, nil
