@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/netip"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -588,6 +589,99 @@ func TestRCE2EStorageFailureDrillsRejectInboundSuccess(t *testing.T) {
 	}
 }
 
+func TestRCRestoreDrill(t *testing.T) {
+	sourceDatabaseURL := os.Getenv("RANDONNEE_TEST_DATABASE_URL")
+	restoreDatabaseURL := os.Getenv("WEBHOOKERY_RESTORE_DRILL_DATABASE_URL")
+	if sourceDatabaseURL == "" || restoreDatabaseURL == "" {
+		t.Skip("RANDONNEE_TEST_DATABASE_URL and WEBHOOKERY_RESTORE_DRILL_DATABASE_URL are required")
+	}
+	if sourceDatabaseURL == restoreDatabaseURL {
+		t.Fatal("restore drill database URL must point to a separate disposable database")
+	}
+	if _, err := exec.LookPath("pg_dump"); err != nil {
+		t.Fatalf("pg_dump is required for restore drill: %v", err)
+	}
+	if _, err := exec.LookPath("pg_restore"); err != nil {
+		t.Fatalf("pg_restore is required for restore drill: %v", err)
+	}
+
+	ctx, store, actor := openRCStore(t)
+	now := time.Now().UTC().Add(-time.Minute).Truncate(time.Second)
+	control := app.NewControlService(store, ssrf.Validator{Resolver: rcResolver})
+	source, _ := createRCRoute(t, ctx, control, actor, "stripe", "stripe", "checkout.session.completed")
+	body := []byte(`{"id":"evt_rc_restore_` + testSuffix(t) + `","type":"checkout.session.completed","account":"acct_rc"}`)
+	ingest := app.NewIngestService(store, fixedClock{now: now})
+	result, err := ingest.Ingest(ctx, app.IngestRequest{
+		TenantID:    actor.TenantID,
+		SourceID:    source.ID,
+		Provider:    "stripe",
+		RawBody:     body,
+		Headers:     []domain.HeaderPair{{Name: "Stripe-Signature", Value: verifier.TimestampedHeader("v1", now, []byte("whsec_rc"), body)}},
+		ContentType: "application/json",
+		RemoteIP:    "198.51.100.17",
+	})
+	if err != nil {
+		t.Fatalf("ingest restore drill event: %v", err)
+	}
+	runWorkerOnce(t, ctx, store, &recordingDeliveryClient{
+		t:   t,
+		now: now.Add(time.Second),
+		result: worker.DeliveryResult{
+			StatusCode:   http.StatusAccepted,
+			ResponseBody: []byte("ok"),
+			FailureClass: "success",
+		},
+	}, "rc-restore-"+testSuffix(t))
+	export, err := control.CreateAuditExport(ctx, actor, app.CreateAuditExportRequest{IncludeTimelines: true, Reason: "RC restore drill export"})
+	if err != nil {
+		t.Fatalf("create restore drill export: %v", err)
+	}
+	before, err := control.VerifyAuditChain(ctx, actor, app.AuditChainVerifyRequest{})
+	if err != nil {
+		t.Fatalf("verify source audit chain before backup: %v", err)
+	}
+	if !before.Valid || before.CheckedEntries == 0 {
+		t.Fatalf("expected valid source audit chain before backup: %+v", before)
+	}
+	store.Close()
+
+	drillCtx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	dumpFile := runBackupCommand(t, drillCtx, sourceDatabaseURL)
+	runRestoreCommand(t, drillCtx, restoreDatabaseURL, dumpFile)
+	if err := postgres.MigrateUp(drillCtx, restoreDatabaseURL, filepath.Join("..", "..", "migrations")); err != nil {
+		t.Fatalf("migrate restored database: %v", err)
+	}
+	box := rcTestSecretBox(t)
+	restored, err := postgres.New(drillCtx, restoreDatabaseURL, box)
+	if err != nil {
+		t.Fatalf("open restored store: %v", err)
+	}
+	defer restored.Close()
+	restoredControl := app.NewControlService(restored, ssrf.Validator{Resolver: rcResolver})
+	if _, err := restoredControl.GetEvent(drillCtx, actor, result.EventID); err != nil {
+		t.Fatalf("read restored event evidence: %v", err)
+	}
+	download, err := restoredControl.DownloadAuditExport(drillCtx, actor, export.ID)
+	if err != nil {
+		t.Fatalf("download restored audit export: %v", err)
+	}
+	verification, err := evidence.VerifyTarGzipBundle(download.Body)
+	if err != nil {
+		t.Fatalf("verify restored audit export bundle: %v", err)
+	}
+	if !verification.Valid || verification.CheckedFiles == 0 || verification.CheckedChainEntries == 0 {
+		t.Fatalf("expected readable restored audit export with chain proof: %+v", verification)
+	}
+	after, err := restoredControl.VerifyAuditChain(drillCtx, actor, app.AuditChainVerifyRequest{})
+	if err != nil {
+		t.Fatalf("verify restored audit chain: %v", err)
+	}
+	if !after.Valid || after.EndChainHash != before.EndChainHash {
+		t.Fatalf("restored audit chain mismatch before=%+v after=%+v", before, after)
+	}
+}
+
 func openRCStore(t *testing.T) (context.Context, *postgres.Store, authz.Actor) {
 	t.Helper()
 	return openRCStoreWithOptions(t, postgres.StoreOptions{RawStorageMode: domain.RawStoragePostgres})
@@ -605,11 +699,7 @@ func openRCStoreWithOptions(t *testing.T, opts postgres.StoreOptions) (context.C
 	if err := postgres.MigrateUp(ctx, databaseURL, migrationsDir); err != nil {
 		t.Fatalf("migrate test database: %v", err)
 	}
-	key := base64.StdEncoding.EncodeToString(make([]byte, 32))
-	box, err := crypto.NewEnvelope(key)
-	if err != nil {
-		t.Fatalf("create test envelope: %v", err)
-	}
+	box := rcTestSecretBox(t)
 	store, err := postgres.NewWithOptions(ctx, databaseURL, box, opts)
 	if err != nil {
 		t.Fatalf("open postgres store: %v", err)
@@ -622,6 +712,43 @@ func openRCStoreWithOptions(t *testing.T, opts postgres.StoreOptions) (context.C
 		Scopes:   []string{"*"},
 	}
 	return ctx, store, actor
+}
+
+func rcTestSecretBox(t *testing.T) crypto.Envelope {
+	t.Helper()
+	key := base64.StdEncoding.EncodeToString(make([]byte, 32))
+	box, err := crypto.NewEnvelope(key)
+	if err != nil {
+		t.Fatalf("create test envelope: %v", err)
+	}
+	return box
+}
+
+func runBackupCommand(t *testing.T, ctx context.Context, sourceDatabaseURL string) string {
+	t.Helper()
+	cmd := exec.CommandContext(ctx, filepath.Join("..", "..", "scripts", "backup_postgres.sh"), t.TempDir())
+	cmd.Env = append(os.Environ(), "WEBHOOKERY_DATABASE_URL="+sourceDatabaseURL)
+	output, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("backup command failed: %v", err)
+	}
+	dumpFile := strings.TrimSpace(string(output))
+	if dumpFile == "" {
+		t.Fatal("backup command did not return a dump file path")
+	}
+	if _, err := os.Stat(dumpFile); err != nil {
+		t.Fatalf("backup dump file is not readable: %v", err)
+	}
+	return dumpFile
+}
+
+func runRestoreCommand(t *testing.T, ctx context.Context, restoreDatabaseURL, dumpFile string) {
+	t.Helper()
+	cmd := exec.CommandContext(ctx, filepath.Join("..", "..", "scripts", "restore_postgres.sh"), dumpFile)
+	cmd.Env = append(os.Environ(), "WEBHOOKERY_DATABASE_URL="+restoreDatabaseURL, "WEBHOOKERY_RESTORE_CONFIRM=restore")
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("restore command failed: %v", err)
+	}
 }
 
 type failingBlobStore struct {
