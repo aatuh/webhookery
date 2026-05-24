@@ -3,6 +3,8 @@ package httpapi
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -148,6 +150,52 @@ func TestProductEventsRejectSourceBoundProducerMismatch(t *testing.T) {
 	}
 	if ingest.called {
 		t.Fatal("source-bound producer mismatch must not reach ingestion")
+	}
+}
+
+func TestProductEventsAcceptVerifiedProducerMTLS(t *testing.T) {
+	cert := &x509.Certificate{Raw: []byte("producer-cert")}
+	ingest := &acceptingIngestStore{}
+	server := NewServer(ServerConfig{
+		Control:          NewNoopControl(),
+		Ingest:           app.NewIngestService(ingest, app.SystemClock{}),
+		ProducerMTLSAuth: app.ProducerMTLSAuthenticator{Lookup: fakeProducerMTLSLookup{fingerprint: app.CertificateFingerprintSHA256(cert)}},
+		OpenAPI:          []byte("openapi: 3.1.0\n"),
+	})
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/v1/events", strings.NewReader(`{"source_id":"src_allowed","id":"evt_1"}`))
+	req.TLS = &tls.ConnectionState{PeerCertificates: []*x509.Certificate{cert}, VerifiedChains: [][]*x509.Certificate{{cert}}}
+
+	server.Routes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("expected 202, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if !ingest.called {
+		t.Fatal("verified producer mTLS request should reach ingestion")
+	}
+}
+
+func TestProductEventsRejectUnverifiedProducerMTLS(t *testing.T) {
+	cert := &x509.Certificate{Raw: []byte("producer-cert")}
+	ingest := &trackingIngestStore{}
+	server := NewServer(ServerConfig{
+		Control:          NewNoopControl(),
+		Ingest:           app.NewIngestService(ingest, app.SystemClock{}),
+		ProducerMTLSAuth: app.ProducerMTLSAuthenticator{Lookup: fakeProducerMTLSLookup{fingerprint: app.CertificateFingerprintSHA256(cert)}},
+		OpenAPI:          []byte("openapi: 3.1.0\n"),
+	})
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/v1/events", strings.NewReader(`{"source_id":"src_allowed","id":"evt_1"}`))
+	req.TLS = &tls.ConnectionState{PeerCertificates: []*x509.Certificate{cert}}
+
+	server.Routes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if ingest.called {
+		t.Fatal("unverified producer mTLS request must not reach ingestion")
 	}
 }
 
@@ -546,6 +594,32 @@ func (f *trackingIngestStore) FindSourceByProviderPath(context.Context, string, 
 func (f *trackingIngestStore) CaptureInbound(context.Context, app.CaptureInboundInput) (app.CaptureInboundResult, error) {
 	f.called = true
 	return app.CaptureInboundResult{}, nil
+}
+
+type acceptingIngestStore struct {
+	called bool
+}
+
+func (f *acceptingIngestStore) FindSource(context.Context, string, string) (domain.Source, error) {
+	return domain.Source{ID: "src_allowed", TenantID: "ten_1", Provider: "internal", Adapter: "internal", State: domain.StateActive}, nil
+}
+func (f *acceptingIngestStore) FindSourceByProviderPath(context.Context, string, string) (domain.Source, error) {
+	return domain.Source{}, app.ErrNotFound
+}
+func (f *acceptingIngestStore) CaptureInbound(context.Context, app.CaptureInboundInput) (app.CaptureInboundResult, error) {
+	f.called = true
+	return app.CaptureInboundResult{EventID: "evt_1", ReceiptID: "rcp_1", RawPayloadID: "raw_1", DedupeStatus: domain.DedupeUnique}, nil
+}
+
+type fakeProducerMTLSLookup struct {
+	fingerprint string
+}
+
+func (f fakeProducerMTLSLookup) AuthenticateProducerMTLSIdentity(_ context.Context, fingerprintSHA256 string) (authz.Actor, error) {
+	if fingerprintSHA256 != f.fingerprint {
+		return authz.Actor{}, app.ErrUnauthorized
+	}
+	return authz.Actor{ID: "producer_mtls:pmi_1", TenantID: "ten_1", Role: authz.RoleDeveloper, Scopes: []string{"events:write"}, SourceID: "src_allowed"}, nil
 }
 
 type producerTokenControlStore struct {

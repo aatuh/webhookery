@@ -37,6 +37,7 @@ type ServerConfig struct {
 	Auth                app.Authenticator
 	SessionAuth         app.Authenticator
 	ProducerAuth        app.Authenticator
+	ProducerMTLSAuth    app.ProducerMTLSAuthenticator
 	OpenAPI             []byte
 	EnableUI            bool
 	SessionCookieSecure bool
@@ -115,6 +116,12 @@ func (s *Server) Routes() http.Handler {
 			r.Patch("/producer-clients/{client_id}", s.updateProducerClient)
 			r.Delete("/producer-clients/{client_id}", s.deleteProducerClient)
 			r.Post("/producer-clients/{client_id}/secrets:rotate", s.rotateProducerClientSecret)
+			r.Get("/producer-mtls-identities", s.listProducerMTLSIdentities)
+			r.Post("/producer-mtls-identities", s.createProducerMTLSIdentity)
+			r.Get("/producer-mtls-identities/{identity_id}", s.getProducerMTLSIdentity)
+			r.Patch("/producer-mtls-identities/{identity_id}", s.updateProducerMTLSIdentity)
+			r.Delete("/producer-mtls-identities/{identity_id}", s.deleteProducerMTLSIdentity)
+			r.Post("/producer-mtls-identities/{identity_id}:verify", s.verifyProducerMTLSIdentity)
 			r.Get("/sources", s.listSources)
 			r.Post("/sources", s.createSource)
 			r.Get("/sources/{source_id}", s.getSource)
@@ -318,6 +325,23 @@ func (s *Server) requireAuth(next http.Handler) http.Handler {
 func (s *Server) requireProducerAuth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requestID := requestID(r)
+		if r.TLS != nil && len(r.TLS.PeerCertificates) > 0 && s.cfg.ProducerMTLSAuth.Lookup != nil {
+			if len(r.TLS.VerifiedChains) == 0 {
+				writeProblem(w, problem.Unauthorized(requestID))
+				return
+			}
+			actor, err := s.cfg.ProducerMTLSAuth.AuthenticateCertificate(r.Context(), r.TLS.PeerCertificates[0])
+			if err != nil {
+				writeProblem(w, problem.Unauthorized(requestID))
+				return
+			}
+			if !authz.Can(actor, "events:write", actor.TenantID) {
+				writeProblem(w, problem.Forbidden(requestID))
+				return
+			}
+			next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), actorContextKey{}, actor)))
+			return
+		}
 		token := app.BearerToken(r.Header.Get("Authorization"))
 		if s.cfg.ProducerAuth != nil {
 			actor, err := s.cfg.ProducerAuth.Authenticate(r.Context(), token)
@@ -497,6 +521,76 @@ func (s *Server) rotateProducerClientSecret(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	item, err := s.cfg.Control.RotateProducerClientSecret(r.Context(), actorFrom(r), chi.URLParam(r, "client_id"), req)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, item)
+}
+
+func (s *Server) createProducerMTLSIdentity(w http.ResponseWriter, r *http.Request) {
+	var req app.CreateProducerMTLSIdentityRequest
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	item, err := s.cfg.Control.CreateProducerMTLSIdentity(r.Context(), actorFrom(r), req)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, item)
+}
+
+func (s *Server) listProducerMTLSIdentities(w http.ResponseWriter, r *http.Request) {
+	items, err := s.cfg.Control.ListProducerMTLSIdentities(r.Context(), actorFrom(r), queryLimit(r))
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, page(items))
+}
+
+func (s *Server) getProducerMTLSIdentity(w http.ResponseWriter, r *http.Request) {
+	item, err := s.cfg.Control.GetProducerMTLSIdentity(r.Context(), actorFrom(r), chi.URLParam(r, "identity_id"))
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, item)
+}
+
+func (s *Server) updateProducerMTLSIdentity(w http.ResponseWriter, r *http.Request) {
+	var req app.UpdateProducerMTLSIdentityRequest
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	item, err := s.cfg.Control.UpdateProducerMTLSIdentity(r.Context(), actorFrom(r), chi.URLParam(r, "identity_id"), req)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, item)
+}
+
+func (s *Server) deleteProducerMTLSIdentity(w http.ResponseWriter, r *http.Request) {
+	var req app.StateChangeRequest
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	item, err := s.cfg.Control.DeleteProducerMTLSIdentity(r.Context(), actorFrom(r), chi.URLParam(r, "identity_id"), req)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, item)
+}
+
+func (s *Server) verifyProducerMTLSIdentity(w http.ResponseWriter, r *http.Request) {
+	var req app.VerifyProducerMTLSIdentityRequest
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	item, err := s.cfg.Control.VerifyProducerMTLSIdentity(r.Context(), actorFrom(r), chi.URLParam(r, "identity_id"), req)
 	if err != nil {
 		s.writeError(w, r, err)
 		return

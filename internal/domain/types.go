@@ -231,6 +231,25 @@ type ProducerAccessToken struct {
 	RevokedAt  time.Time `json:"revoked_at,omitempty"`
 }
 
+type ProducerMTLSIdentity struct {
+	ID                           string    `json:"id"`
+	TenantID                     string    `json:"tenant_id"`
+	Name                         string    `json:"name"`
+	SourceID                     string    `json:"source_id,omitempty"`
+	CertificateFingerprintSHA256 string    `json:"certificate_fingerprint_sha256"`
+	CertSubject                  string    `json:"cert_subject"`
+	DNSSANs                      []string  `json:"dns_sans,omitempty"`
+	URISANs                      []string  `json:"uri_sans,omitempty"`
+	EmailSANs                    []string  `json:"email_sans,omitempty"`
+	NotBefore                    time.Time `json:"not_before"`
+	NotAfter                     time.Time `json:"not_after"`
+	State                        string    `json:"state"`
+	CreatedBy                    string    `json:"created_by,omitempty"`
+	CreatedAt                    time.Time `json:"created_at"`
+	UpdatedAt                    time.Time `json:"updated_at"`
+	DisabledAt                   time.Time `json:"disabled_at,omitempty"`
+}
+
 type IdentityProvider struct {
 	ID                  string    `json:"id"`
 	TenantID            string    `json:"tenant_id"`

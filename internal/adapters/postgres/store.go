@@ -682,6 +682,192 @@ func (s *Store) AuthenticateProducerAccessToken(ctx context.Context, tokenHash s
 	return actor, nil
 }
 
+func (s *Store) CreateProducerMTLSIdentity(ctx context.Context, tenantID, actorID string, identity domain.ProducerMTLSIdentity) (domain.ProducerMTLSIdentity, error) {
+	if identity.ID == "" {
+		identity.ID = mustID("pmi")
+	}
+	if identity.State == "" {
+		identity.State = domain.StateActive
+	}
+	identity.TenantID = tenantID
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return domain.ProducerMTLSIdentity{}, err
+	}
+	defer rollback(ctx, tx)
+	if _, err := tx.Exec(ctx, "INSERT INTO tenants(id, name) VALUES($1, $1) ON CONFLICT (id) DO NOTHING", tenantID); err != nil {
+		return domain.ProducerMTLSIdentity{}, err
+	}
+	if identity.SourceID != "" {
+		var exists bool
+		if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM sources WHERE tenant_id=$1 AND id=$2)`, tenantID, identity.SourceID).Scan(&exists); err != nil {
+			return domain.ProducerMTLSIdentity{}, err
+		}
+		if !exists {
+			return domain.ProducerMTLSIdentity{}, app.ErrNotFound
+		}
+	}
+	err = tx.QueryRow(ctx, `
+		INSERT INTO producer_mtls_identities(id, tenant_id, name, source_id, certificate_fingerprint_sha256, cert_subject, dns_sans, uri_sans, email_sans, not_before, not_after, state, created_by)
+		VALUES($1,$2,$3,NULLIF($4,''),$5,$6,$7,$8,$9,$10,$11,$12,$13)
+		RETURNING created_at, updated_at`,
+		identity.ID, tenantID, identity.Name, identity.SourceID, identity.CertificateFingerprintSHA256, identity.CertSubject, identity.DNSSANs, identity.URISANs, identity.EmailSANs, identity.NotBefore, identity.NotAfter, identity.State, actorID,
+	).Scan(&identity.CreatedAt, &identity.UpdatedAt)
+	if err != nil {
+		return domain.ProducerMTLSIdentity{}, err
+	}
+	if _, err := recordAuditEventTx(ctx, tx, auditEventInput{TenantID: tenantID, ActorID: actorID, Action: "producer_mtls_identity.created", Resource: "producer_mtls_identity", ResourceID: identity.ID, Reason: identity.Name}); err != nil {
+		return domain.ProducerMTLSIdentity{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return domain.ProducerMTLSIdentity{}, err
+	}
+	return identity, nil
+}
+
+func (s *Store) ListProducerMTLSIdentities(ctx context.Context, tenantID string, limit int) ([]domain.ProducerMTLSIdentity, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT id, tenant_id, name, COALESCE(source_id,''), certificate_fingerprint_sha256, cert_subject, dns_sans, uri_sans, email_sans, not_before, not_after, state, created_by, created_at, updated_at, COALESCE(disabled_at, 'epoch'::timestamptz)
+		FROM producer_mtls_identities
+		WHERE tenant_id=$1
+		ORDER BY created_at DESC
+		LIMIT $2`, tenantID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []domain.ProducerMTLSIdentity
+	for rows.Next() {
+		item, err := scanProducerMTLSIdentity(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, item)
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) GetProducerMTLSIdentity(ctx context.Context, tenantID, identityID string) (domain.ProducerMTLSIdentity, error) {
+	row := s.pool.QueryRow(ctx, `
+		SELECT id, tenant_id, name, COALESCE(source_id,''), certificate_fingerprint_sha256, cert_subject, dns_sans, uri_sans, email_sans, not_before, not_after, state, created_by, created_at, updated_at, COALESCE(disabled_at, 'epoch'::timestamptz)
+		FROM producer_mtls_identities
+		WHERE tenant_id=$1 AND id=$2`, tenantID, identityID)
+	item, err := scanProducerMTLSIdentity(row)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return domain.ProducerMTLSIdentity{}, app.ErrNotFound
+	}
+	return item, err
+}
+
+func (s *Store) UpdateProducerMTLSIdentity(ctx context.Context, tenantID, identityID, actorID string, req app.UpdateProducerMTLSIdentityRequest) (domain.ProducerMTLSIdentity, error) {
+	current, err := s.GetProducerMTLSIdentity(ctx, tenantID, identityID)
+	if err != nil {
+		return domain.ProducerMTLSIdentity{}, err
+	}
+	if req.Name != nil {
+		current.Name = *req.Name
+	}
+	if req.SourceID != nil {
+		current.SourceID = *req.SourceID
+	}
+	if req.State != nil {
+		current.State = *req.State
+	}
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return domain.ProducerMTLSIdentity{}, err
+	}
+	defer rollback(ctx, tx)
+	if current.SourceID != "" {
+		var exists bool
+		if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM sources WHERE tenant_id=$1 AND id=$2)`, tenantID, current.SourceID).Scan(&exists); err != nil {
+			return domain.ProducerMTLSIdentity{}, err
+		}
+		if !exists {
+			return domain.ProducerMTLSIdentity{}, app.ErrNotFound
+		}
+	}
+	err = tx.QueryRow(ctx, `
+		UPDATE producer_mtls_identities
+		SET name=$3, source_id=NULLIF($4,''), state=$5, updated_at=now(), disabled_at=CASE WHEN $5='disabled' THEN COALESCE(disabled_at, now()) ELSE NULL END
+		WHERE tenant_id=$1 AND id=$2
+		RETURNING id, tenant_id, name, COALESCE(source_id,''), certificate_fingerprint_sha256, cert_subject, dns_sans, uri_sans, email_sans, not_before, not_after, state, created_by, created_at, updated_at, COALESCE(disabled_at, 'epoch'::timestamptz)`,
+		tenantID, identityID, current.Name, current.SourceID, current.State,
+	).Scan(&current.ID, &current.TenantID, &current.Name, &current.SourceID, &current.CertificateFingerprintSHA256, &current.CertSubject, &current.DNSSANs, &current.URISANs, &current.EmailSANs, &current.NotBefore, &current.NotAfter, &current.State, &current.CreatedBy, &current.CreatedAt, &current.UpdatedAt, &current.DisabledAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return domain.ProducerMTLSIdentity{}, app.ErrNotFound
+	}
+	if err != nil {
+		return domain.ProducerMTLSIdentity{}, err
+	}
+	if current.DisabledAt.Equal(time.Unix(0, 0).UTC()) {
+		current.DisabledAt = time.Time{}
+	}
+	if _, err := recordAuditEventTx(ctx, tx, auditEventInput{TenantID: tenantID, ActorID: actorID, Action: "producer_mtls_identity.updated", Resource: "producer_mtls_identity", ResourceID: identityID, Reason: req.Reason}); err != nil {
+		return domain.ProducerMTLSIdentity{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return domain.ProducerMTLSIdentity{}, err
+	}
+	return current, nil
+}
+
+func (s *Store) DeleteProducerMTLSIdentity(ctx context.Context, tenantID, identityID, actorID, reason string) (domain.ProducerMTLSIdentity, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return domain.ProducerMTLSIdentity{}, err
+	}
+	defer rollback(ctx, tx)
+	var item domain.ProducerMTLSIdentity
+	err = tx.QueryRow(ctx, `
+		UPDATE producer_mtls_identities
+		SET state='disabled', disabled_at=COALESCE(disabled_at, now()), updated_at=now()
+		WHERE tenant_id=$1 AND id=$2
+		RETURNING id, tenant_id, name, COALESCE(source_id,''), certificate_fingerprint_sha256, cert_subject, dns_sans, uri_sans, email_sans, not_before, not_after, state, created_by, created_at, updated_at, COALESCE(disabled_at, 'epoch'::timestamptz)`,
+		tenantID, identityID,
+	).Scan(&item.ID, &item.TenantID, &item.Name, &item.SourceID, &item.CertificateFingerprintSHA256, &item.CertSubject, &item.DNSSANs, &item.URISANs, &item.EmailSANs, &item.NotBefore, &item.NotAfter, &item.State, &item.CreatedBy, &item.CreatedAt, &item.UpdatedAt, &item.DisabledAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return domain.ProducerMTLSIdentity{}, app.ErrNotFound
+	}
+	if err != nil {
+		return domain.ProducerMTLSIdentity{}, err
+	}
+	if item.DisabledAt.Equal(time.Unix(0, 0).UTC()) {
+		item.DisabledAt = time.Time{}
+	}
+	if _, err := recordAuditEventTx(ctx, tx, auditEventInput{TenantID: tenantID, ActorID: actorID, Action: "producer_mtls_identity.disabled", Resource: "producer_mtls_identity", ResourceID: identityID, Reason: reason}); err != nil {
+		return domain.ProducerMTLSIdentity{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return domain.ProducerMTLSIdentity{}, err
+	}
+	return item, nil
+}
+
+func (s *Store) AuthenticateProducerMTLSIdentity(ctx context.Context, fingerprintSHA256 string) (authz.Actor, error) {
+	var actor authz.Actor
+	var identityID string
+	err := s.pool.QueryRow(ctx, `
+		SELECT id, tenant_id, COALESCE(source_id,'')
+		FROM producer_mtls_identities
+		WHERE certificate_fingerprint_sha256=$1
+		  AND state='active'
+		  AND not_before <= now()
+		  AND not_after > now()`,
+		fingerprintSHA256,
+	).Scan(&identityID, &actor.TenantID, &actor.SourceID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return authz.Actor{}, app.ErrUnauthorized
+	}
+	if err != nil {
+		return authz.Actor{}, err
+	}
+	actor.ID = "producer_mtls:" + identityID
+	actor.Role = authz.RoleDeveloper
+	actor.Scopes = []string{"events:write"}
+	return actor, nil
+}
+
 func (s *Store) CreateSource(ctx context.Context, source domain.Source) (domain.Source, error) {
 	if source.ID == "" {
 		source.ID = mustID("src")
@@ -6947,6 +7133,15 @@ func scanSource(row rowScanner) (domain.Source, error) {
 func scanProducerClient(row rowScanner) (domain.ProducerClient, error) {
 	var item domain.ProducerClient
 	err := row.Scan(&item.ID, &item.TenantID, &item.Name, &item.SourceID, &item.Scopes, &item.TokenTTLSeconds, &item.State, &item.CreatedBy, &item.CreatedAt, &item.UpdatedAt, &item.DisabledAt)
+	if item.DisabledAt.Equal(time.Unix(0, 0).UTC()) {
+		item.DisabledAt = time.Time{}
+	}
+	return item, err
+}
+
+func scanProducerMTLSIdentity(row rowScanner) (domain.ProducerMTLSIdentity, error) {
+	var item domain.ProducerMTLSIdentity
+	err := row.Scan(&item.ID, &item.TenantID, &item.Name, &item.SourceID, &item.CertificateFingerprintSHA256, &item.CertSubject, &item.DNSSANs, &item.URISANs, &item.EmailSANs, &item.NotBefore, &item.NotAfter, &item.State, &item.CreatedBy, &item.CreatedAt, &item.UpdatedAt, &item.DisabledAt)
 	if item.DisabledAt.Equal(time.Unix(0, 0).UTC()) {
 		item.DisabledAt = time.Time{}
 	}

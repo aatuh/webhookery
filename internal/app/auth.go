@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"crypto/subtle"
+	"crypto/x509"
 	"encoding/hex"
 	"errors"
 	"strings"
@@ -25,6 +26,10 @@ type SessionLookup interface {
 
 type ProducerAccessTokenLookup interface {
 	AuthenticateProducerAccessToken(ctx context.Context, tokenHash string) (authz.Actor, error)
+}
+
+type ProducerMTLSLookup interface {
+	AuthenticateProducerMTLSIdentity(ctx context.Context, fingerprintSHA256 string) (authz.Actor, error)
 }
 
 type APIKeyAuthenticator struct {
@@ -58,6 +63,17 @@ func (a ProducerTokenAuthenticator) Authenticate(ctx context.Context, bearerToke
 		return authz.Actor{}, ErrUnauthorized
 	}
 	return a.Lookup.AuthenticateProducerAccessToken(ctx, HashToken(bearerToken))
+}
+
+type ProducerMTLSAuthenticator struct {
+	Lookup ProducerMTLSLookup
+}
+
+func (a ProducerMTLSAuthenticator) AuthenticateCertificate(ctx context.Context, cert *x509.Certificate) (authz.Actor, error) {
+	if cert == nil || a.Lookup == nil {
+		return authz.Actor{}, ErrUnauthorized
+	}
+	return a.Lookup.AuthenticateProducerMTLSIdentity(ctx, CertificateFingerprintSHA256(cert))
 }
 
 type MultiAuthenticator struct {
@@ -102,6 +118,14 @@ func (a StaticAuthenticator) Authenticate(ctx context.Context, bearerToken strin
 
 func HashToken(rawToken string) string {
 	sum := sha256.Sum256([]byte(rawToken))
+	return "sha256:" + hex.EncodeToString(sum[:])
+}
+
+func CertificateFingerprintSHA256(cert *x509.Certificate) string {
+	if cert == nil {
+		return ""
+	}
+	sum := sha256.Sum256(cert.Raw)
 	return "sha256:" + hex.EncodeToString(sum[:])
 }
 

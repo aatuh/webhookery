@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
+	"encoding/pem"
 	"errors"
 	"fmt"
 	"strings"
@@ -240,6 +241,28 @@ type ProducerClientSecretRotated struct {
 	ClientSecret string                      `json:"client_secret"`
 }
 
+type CreateProducerMTLSIdentityRequest struct {
+	Name           string `json:"name"`
+	SourceID       string `json:"source_id,omitempty"`
+	CertificatePEM string `json:"certificate_pem"`
+}
+
+type UpdateProducerMTLSIdentityRequest struct {
+	Name     *string `json:"name,omitempty"`
+	SourceID *string `json:"source_id,omitempty"`
+	State    *string `json:"state,omitempty"`
+	Reason   string  `json:"reason"`
+}
+
+type VerifyProducerMTLSIdentityRequest struct {
+	CertificatePEM string `json:"certificate_pem"`
+}
+
+type ProducerMTLSIdentityVerification struct {
+	Matched  bool                        `json:"matched"`
+	Identity domain.ProducerMTLSIdentity `json:"identity,omitempty"`
+}
+
 type CreateProducerClientRequest struct {
 	Name            string   `json:"name"`
 	SourceID        string   `json:"source_id,omitempty"`
@@ -267,6 +290,14 @@ type producerClientStore interface {
 	UpdateProducerClient(ctx context.Context, tenantID, clientID, actorID string, req UpdateProducerClientRequest) (domain.ProducerClient, error)
 	DeleteProducerClient(ctx context.Context, tenantID, clientID, actorID, reason string) (domain.ProducerClient, error)
 	RotateProducerClientSecret(ctx context.Context, tenantID, clientID string, input ProducerClientSecretRotateInput) (domain.ProducerClientSecret, error)
+}
+
+type producerMTLSIdentityStore interface {
+	CreateProducerMTLSIdentity(ctx context.Context, tenantID, actorID string, identity domain.ProducerMTLSIdentity) (domain.ProducerMTLSIdentity, error)
+	ListProducerMTLSIdentities(ctx context.Context, tenantID string, limit int) ([]domain.ProducerMTLSIdentity, error)
+	GetProducerMTLSIdentity(ctx context.Context, tenantID, identityID string) (domain.ProducerMTLSIdentity, error)
+	UpdateProducerMTLSIdentity(ctx context.Context, tenantID, identityID, actorID string, req UpdateProducerMTLSIdentityRequest) (domain.ProducerMTLSIdentity, error)
+	DeleteProducerMTLSIdentity(ctx context.Context, tenantID, identityID, actorID, reason string) (domain.ProducerMTLSIdentity, error)
 }
 
 type producerTokenStore interface {
@@ -851,6 +882,100 @@ func (s *ControlService) RotateProducerClientSecret(ctx context.Context, actor a
 	}
 	secret.Hash = ""
 	return ProducerClientSecretRotated{Secret: secret, ClientSecret: clientSecret}, nil
+}
+
+func (s *ControlService) CreateProducerMTLSIdentity(ctx context.Context, actor authz.Actor, req CreateProducerMTLSIdentityRequest) (domain.ProducerMTLSIdentity, error) {
+	if !authz.Can(actor, "security:write", actor.TenantID) {
+		return domain.ProducerMTLSIdentity{}, ErrForbidden
+	}
+	store, ok := s.store.(producerMTLSIdentityStore)
+	if !ok {
+		return domain.ProducerMTLSIdentity{}, ErrNotFound
+	}
+	identity, err := producerMTLSIdentityFromPEM(req.Name, req.SourceID, req.CertificatePEM)
+	if err != nil {
+		return domain.ProducerMTLSIdentity{}, err
+	}
+	identity.TenantID = actor.TenantID
+	identity.State = domain.StateActive
+	identity.CreatedBy = actor.ID
+	return store.CreateProducerMTLSIdentity(ctx, actor.TenantID, actor.ID, identity)
+}
+
+func (s *ControlService) ListProducerMTLSIdentities(ctx context.Context, actor authz.Actor, limit int) ([]domain.ProducerMTLSIdentity, error) {
+	if !authz.Can(actor, "security:read", actor.TenantID) {
+		return nil, ErrForbidden
+	}
+	store, ok := s.store.(producerMTLSIdentityStore)
+	if !ok {
+		return nil, ErrNotFound
+	}
+	return store.ListProducerMTLSIdentities(ctx, actor.TenantID, normalizeLimit(limit))
+}
+
+func (s *ControlService) GetProducerMTLSIdentity(ctx context.Context, actor authz.Actor, identityID string) (domain.ProducerMTLSIdentity, error) {
+	if !authz.Can(actor, "security:read", actor.TenantID) {
+		return domain.ProducerMTLSIdentity{}, ErrForbidden
+	}
+	if strings.TrimSpace(identityID) == "" {
+		return domain.ProducerMTLSIdentity{}, fmt.Errorf("%w: identity_id is required", ErrInvalidInput)
+	}
+	store, ok := s.store.(producerMTLSIdentityStore)
+	if !ok {
+		return domain.ProducerMTLSIdentity{}, ErrNotFound
+	}
+	return store.GetProducerMTLSIdentity(ctx, actor.TenantID, identityID)
+}
+
+func (s *ControlService) UpdateProducerMTLSIdentity(ctx context.Context, actor authz.Actor, identityID string, req UpdateProducerMTLSIdentityRequest) (domain.ProducerMTLSIdentity, error) {
+	if !authz.Can(actor, "security:write", actor.TenantID) {
+		return domain.ProducerMTLSIdentity{}, ErrForbidden
+	}
+	if strings.TrimSpace(identityID) == "" || strings.TrimSpace(req.Reason) == "" {
+		return domain.ProducerMTLSIdentity{}, fmt.Errorf("%w: identity_id and reason are required", ErrInvalidInput)
+	}
+	if err := normalizeUpdateProducerMTLSIdentity(&req); err != nil {
+		return domain.ProducerMTLSIdentity{}, err
+	}
+	store, ok := s.store.(producerMTLSIdentityStore)
+	if !ok {
+		return domain.ProducerMTLSIdentity{}, ErrNotFound
+	}
+	return store.UpdateProducerMTLSIdentity(ctx, actor.TenantID, identityID, actor.ID, req)
+}
+
+func (s *ControlService) DeleteProducerMTLSIdentity(ctx context.Context, actor authz.Actor, identityID string, req StateChangeRequest) (domain.ProducerMTLSIdentity, error) {
+	if !authz.Can(actor, "security:write", actor.TenantID) {
+		return domain.ProducerMTLSIdentity{}, ErrForbidden
+	}
+	if strings.TrimSpace(identityID) == "" || strings.TrimSpace(req.Reason) == "" {
+		return domain.ProducerMTLSIdentity{}, fmt.Errorf("%w: identity_id and reason are required", ErrInvalidInput)
+	}
+	store, ok := s.store.(producerMTLSIdentityStore)
+	if !ok {
+		return domain.ProducerMTLSIdentity{}, ErrNotFound
+	}
+	return store.DeleteProducerMTLSIdentity(ctx, actor.TenantID, identityID, actor.ID, req.Reason)
+}
+
+func (s *ControlService) VerifyProducerMTLSIdentity(ctx context.Context, actor authz.Actor, identityID string, req VerifyProducerMTLSIdentityRequest) (ProducerMTLSIdentityVerification, error) {
+	if !authz.Can(actor, "security:write", actor.TenantID) {
+		return ProducerMTLSIdentityVerification{}, ErrForbidden
+	}
+	store, ok := s.store.(producerMTLSIdentityStore)
+	if !ok {
+		return ProducerMTLSIdentityVerification{}, ErrNotFound
+	}
+	identity, err := store.GetProducerMTLSIdentity(ctx, actor.TenantID, identityID)
+	if err != nil {
+		return ProducerMTLSIdentityVerification{}, err
+	}
+	cert, err := parseSingleCertificatePEM(req.CertificatePEM)
+	if err != nil {
+		return ProducerMTLSIdentityVerification{}, err
+	}
+	matched := identity.CertificateFingerprintSHA256 == CertificateFingerprintSHA256(cert) && identity.State == domain.StateActive
+	return ProducerMTLSIdentityVerification{Matched: matched, Identity: identity}, nil
 }
 
 func (s *ControlService) CreateSource(ctx context.Context, actor authz.Actor, req CreateSourceRequest) (domain.Source, error) {
@@ -3050,6 +3175,79 @@ func normalizeProducerScopes(scopes []string) ([]string, error) {
 		}
 	}
 	return out, nil
+}
+
+func producerMTLSIdentityFromPEM(name, sourceID, certificatePEM string) (domain.ProducerMTLSIdentity, error) {
+	name = strings.TrimSpace(name)
+	sourceID = strings.TrimSpace(sourceID)
+	if name == "" {
+		return domain.ProducerMTLSIdentity{}, fmt.Errorf("%w: name is required", ErrInvalidInput)
+	}
+	cert, err := parseSingleCertificatePEM(certificatePEM)
+	if err != nil {
+		return domain.ProducerMTLSIdentity{}, err
+	}
+	now := time.Now().UTC()
+	if now.Before(cert.NotBefore) || !now.Before(cert.NotAfter) {
+		return domain.ProducerMTLSIdentity{}, fmt.Errorf("%w: certificate is not currently valid", ErrInvalidInput)
+	}
+	uriSANs := make([]string, 0, len(cert.URIs))
+	for _, uri := range cert.URIs {
+		if uri != nil {
+			uriSANs = append(uriSANs, uri.String())
+		}
+	}
+	return domain.ProducerMTLSIdentity{
+		Name:                         name,
+		SourceID:                     sourceID,
+		CertificateFingerprintSHA256: CertificateFingerprintSHA256(cert),
+		CertSubject:                  cert.Subject.String(),
+		DNSSANs:                      append([]string(nil), cert.DNSNames...),
+		URISANs:                      uriSANs,
+		EmailSANs:                    append([]string(nil), cert.EmailAddresses...),
+		NotBefore:                    cert.NotBefore.UTC(),
+		NotAfter:                     cert.NotAfter.UTC(),
+	}, nil
+}
+
+func parseSingleCertificatePEM(certificatePEM string) (*x509.Certificate, error) {
+	block, rest := pem.Decode([]byte(strings.TrimSpace(certificatePEM)))
+	if block == nil || block.Type != "CERTIFICATE" {
+		return nil, fmt.Errorf("%w: certificate_pem must contain one CERTIFICATE block", ErrInvalidInput)
+	}
+	if strings.TrimSpace(string(rest)) != "" {
+		return nil, fmt.Errorf("%w: certificate_pem must contain exactly one certificate", ErrInvalidInput)
+	}
+	cert, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		return nil, fmt.Errorf("%w: invalid certificate_pem", ErrInvalidInput)
+	}
+	return cert, nil
+}
+
+func normalizeUpdateProducerMTLSIdentity(req *UpdateProducerMTLSIdentityRequest) error {
+	if req.Name == nil && req.SourceID == nil && req.State == nil {
+		return fmt.Errorf("%w: at least one producer mTLS identity field is required", ErrInvalidInput)
+	}
+	if req.Name != nil {
+		name := strings.TrimSpace(*req.Name)
+		if name == "" {
+			return fmt.Errorf("%w: name cannot be empty", ErrInvalidInput)
+		}
+		req.Name = &name
+	}
+	if req.SourceID != nil {
+		sourceID := strings.TrimSpace(*req.SourceID)
+		req.SourceID = &sourceID
+	}
+	if req.State != nil {
+		state := strings.TrimSpace(*req.State)
+		if state != domain.StateActive && state != domain.StateDisabled {
+			return fmt.Errorf("%w: state must be active or disabled", ErrInvalidInput)
+		}
+		req.State = &state
+	}
+	return nil
 }
 
 func containsScope(scopes []string, want string) bool {

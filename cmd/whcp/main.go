@@ -3,6 +3,8 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
 	"flag"
@@ -58,6 +60,8 @@ func run(args []string) error {
 		return runAPIKeys(args[1:])
 	case "producer-clients":
 		return runProducerClients(args[1:])
+	case "producer-mtls-identities":
+		return runProducerMTLSIdentities(args[1:])
 	case "identity-providers":
 		return runIdentityProviders(args[1:])
 	case "scim-tokens":
@@ -122,7 +126,7 @@ func run(args []string) error {
 }
 
 func usage() error {
-	return fmt.Errorf("usage: whcp <api|worker|scheduler|migrate|admin|api-keys|producer-clients|identity-providers|scim-tokens|role-bindings|access-policies|authz|events|sources|provider-connections|adapters|endpoints|subscriptions|retry-policies|routes|transformations|deliveries|replay-jobs|reconciliation-jobs|ops|alerts|notification-channels|notification-deliveries|siem-sinks|siem-deliveries|audit|retention|schemas|dead-letter|quarantine|signatures>")
+	return fmt.Errorf("usage: whcp <api|worker|scheduler|migrate|admin|api-keys|producer-clients|producer-mtls-identities|identity-providers|scim-tokens|role-bindings|access-policies|authz|events|sources|provider-connections|adapters|endpoints|subscriptions|retry-policies|routes|transformations|deliveries|replay-jobs|reconciliation-jobs|ops|alerts|notification-channels|notification-deliveries|siem-sinks|siem-deliveries|audit|retention|schemas|dead-letter|quarantine|signatures>")
 }
 
 func runAPI() error {
@@ -148,15 +152,24 @@ func runAPI() error {
 		Auth:                runtimeAuth(cfg, store),
 		SessionAuth:         apppkg.SessionAuthenticator{Lookup: store},
 		ProducerAuth:        apppkg.ProducerTokenAuthenticator{Lookup: store},
+		ProducerMTLSAuth:    apppkg.ProducerMTLSAuthenticator{Lookup: store},
 		OpenAPI:             openAPI,
 		EnableUI:            cfg.EnableUI,
 		SessionCookieSecure: cfg.Environment == "production",
 		Health:              store.Health,
 	})
-	httpServer := &http.Server{Addr: cfg.HTTPAddr, Handler: server.Routes(), ReadHeaderTimeout: 5 * time.Second, MaxHeaderBytes: 64 << 10}
+	tlsConfig, err := serverTLSConfig(cfg)
+	if err != nil {
+		return err
+	}
+	httpServer := &http.Server{Addr: cfg.HTTPAddr, Handler: server.Routes(), ReadHeaderTimeout: 5 * time.Second, MaxHeaderBytes: 64 << 10, TLSConfig: tlsConfig}
 	errCh := make(chan error, 1)
 	go func() {
 		slog.Info("starting api", "addr", cfg.HTTPAddr)
+		if cfg.TLSCertFile != "" {
+			errCh <- httpServer.ListenAndServeTLS(cfg.TLSCertFile, cfg.TLSKeyFile)
+			return
+		}
 		errCh <- httpServer.ListenAndServe()
 	}()
 	select {
@@ -340,6 +353,80 @@ func runProducerClients(args []string) error {
 		return postJSON(*baseURL, *apiKey, "/v1/producer-clients/"+url.PathEscape(*clientID)+"/secrets:rotate", map[string]string{"reason": *reason})
 	default:
 		return fmt.Errorf("usage: whcp producer-clients <list|get|create|update|disable|rotate-secret>")
+	}
+}
+
+func runProducerMTLSIdentities(args []string) error {
+	if len(args) == 0 {
+		return fmt.Errorf("usage: whcp producer-mtls-identities <list|get|create|update|disable|verify>")
+	}
+	fs := flag.NewFlagSet("producer-mtls-identities "+args[0], flag.ContinueOnError)
+	baseURL := fs.String("base-url", "http://localhost:8080", "API base URL")
+	apiKey := fs.String("api-key", os.Getenv("WEBHOOKERY_API_KEY"), "API key")
+	identityID := fs.String("identity-id", "", "producer mTLS identity id")
+	name := fs.String("name", "", "identity name")
+	sourceID := fs.String("source-id", "", "optional bound source id")
+	certFile := fs.String("cert-file", "", "PEM certificate file")
+	state := fs.String("state", "", "active or disabled")
+	reason := fs.String("reason", "", "operator reason")
+	if err := fs.Parse(args[1:]); err != nil {
+		return err
+	}
+	certBody := func() (string, error) {
+		if strings.TrimSpace(*certFile) == "" {
+			return "", fmt.Errorf("cert-file is required")
+		}
+		body, err := readSmallFile(*certFile, 1<<20)
+		if err != nil {
+			return "", err
+		}
+		return string(body), nil
+	}
+	switch args[0] {
+	case "list":
+		return getJSON(*baseURL, *apiKey, "/v1/producer-mtls-identities")
+	case "get":
+		if strings.TrimSpace(*identityID) == "" {
+			return fmt.Errorf("identity-id is required")
+		}
+		return getJSON(*baseURL, *apiKey, "/v1/producer-mtls-identities/"+url.PathEscape(*identityID))
+	case "create":
+		certPEM, err := certBody()
+		if err != nil {
+			return err
+		}
+		return postJSON(*baseURL, *apiKey, "/v1/producer-mtls-identities", map[string]any{"name": *name, "source_id": *sourceID, "certificate_pem": certPEM})
+	case "update":
+		if strings.TrimSpace(*identityID) == "" {
+			return fmt.Errorf("identity-id is required")
+		}
+		body := map[string]any{"reason": *reason}
+		if strings.TrimSpace(*name) != "" {
+			body["name"] = *name
+		}
+		if strings.TrimSpace(*sourceID) != "" {
+			body["source_id"] = *sourceID
+		}
+		if strings.TrimSpace(*state) != "" {
+			body["state"] = *state
+		}
+		return patchJSON(*baseURL, *apiKey, "/v1/producer-mtls-identities/"+url.PathEscape(*identityID), body)
+	case "disable":
+		if strings.TrimSpace(*identityID) == "" {
+			return fmt.Errorf("identity-id is required")
+		}
+		return deleteJSON(*baseURL, *apiKey, "/v1/producer-mtls-identities/"+url.PathEscape(*identityID), map[string]string{"reason": *reason})
+	case "verify":
+		if strings.TrimSpace(*identityID) == "" {
+			return fmt.Errorf("identity-id is required")
+		}
+		certPEM, err := certBody()
+		if err != nil {
+			return err
+		}
+		return postJSON(*baseURL, *apiKey, "/v1/producer-mtls-identities/"+url.PathEscape(*identityID)+":verify", map[string]string{"certificate_pem": certPEM})
+	default:
+		return fmt.Errorf("usage: whcp producer-mtls-identities <list|get|create|update|disable|verify>")
 	}
 }
 
@@ -1944,6 +2031,26 @@ func secretBoxFromConfig(cfg config.Config) (postgres.SecretBox, error) {
 	default:
 		return nil, fmt.Errorf("unsupported secret box mode %q", cfg.SecretBoxMode)
 	}
+}
+
+func serverTLSConfig(cfg config.Config) (*tls.Config, error) {
+	if cfg.TLSCertFile == "" && cfg.ProducerMTLSClientCAFile == "" {
+		return nil, nil
+	}
+	tlsConfig := &tls.Config{MinVersion: tls.VersionTLS12}
+	if cfg.ProducerMTLSClientCAFile != "" {
+		body, err := readSmallFile(cfg.ProducerMTLSClientCAFile, 1<<20)
+		if err != nil {
+			return nil, fmt.Errorf("read producer mTLS client CA file: %w", err)
+		}
+		pool := x509.NewCertPool()
+		if !pool.AppendCertsFromPEM(body) {
+			return nil, fmt.Errorf("producer mTLS client CA file did not contain certificates")
+		}
+		tlsConfig.ClientCAs = pool
+		tlsConfig.ClientAuth = tls.VerifyClientCertIfGiven
+	}
+	return tlsConfig, nil
 }
 
 func opsRuntimeConfig(cfg config.Config) domain.OpsConfig {

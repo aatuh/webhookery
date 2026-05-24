@@ -57,3 +57,12 @@ func TestLoadAcceptsVaultTransitWithoutLocalMasterKey(t *testing.T) {
 		t.Fatalf("unexpected vault transit config mode=%q addr_set=%v key=%q master_key_set=%v", cfg.SecretBoxMode, cfg.VaultAddr != "", cfg.VaultTransitKey, cfg.MasterKeyBase64 != "")
 	}
 }
+
+func TestLoadRequiresTLSFilesForProducerMTLSCA(t *testing.T) {
+	t.Setenv("WEBHOOKERY_DATABASE_URL", "postgres://example")
+	t.Setenv("WEBHOOKERY_PRODUCER_MTLS_CLIENT_CA_FILE", "ca.pem")
+
+	if _, err := Load(); err == nil {
+		t.Fatal("expected producer mTLS CA to require API TLS certificate and key files")
+	}
+}

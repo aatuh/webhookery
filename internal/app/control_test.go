@@ -721,6 +721,37 @@ func TestControlServiceProducerClientsRequireSecurityWriteAndRedactSecrets(t *te
 	}
 }
 
+func TestControlServiceProducerMTLSIdentitiesValidateCertAndScopeTenant(t *testing.T) {
+	store := &fakeControlStore{}
+	svc := NewControlService(store, ssrf.Validator{Resolver: ssrf.StaticResolver{}})
+	reader := authz.Actor{ID: "usr_1", TenantID: "ten_a", Role: authz.RoleAuditor, Scopes: []string{"security:read"}}
+	security := authz.Actor{ID: "usr_2", TenantID: "ten_a", Role: authz.RoleSecurity, Scopes: []string{"security:write", "security:read"}}
+	certPEM, _ := testClientCertificatePEM(t, "Webhookery Producer Client")
+
+	_, err := svc.CreateProducerMTLSIdentity(context.Background(), reader, CreateProducerMTLSIdentityRequest{Name: "billing", CertificatePEM: certPEM})
+	if err != ErrForbidden {
+		t.Fatalf("expected forbidden producer mTLS create, got %v", err)
+	}
+	_, err = svc.CreateProducerMTLSIdentity(context.Background(), security, CreateProducerMTLSIdentityRequest{Name: "billing", CertificatePEM: "not a cert"})
+	if !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("expected invalid certificate error, got %v", err)
+	}
+	identity, err := svc.CreateProducerMTLSIdentity(context.Background(), security, CreateProducerMTLSIdentityRequest{Name: "billing", SourceID: "src_1", CertificatePEM: certPEM})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if identity.TenantID != "ten_a" || identity.CertificateFingerprintSHA256 == "" || store.producerMTLSTenantID != "ten_a" || store.producerMTLSActorID != "usr_2" {
+		t.Fatalf("expected tenant-scoped producer mTLS identity, identity=%+v tenant=%q actor=%q", identity, store.producerMTLSTenantID, store.producerMTLSActorID)
+	}
+	verified, err := svc.VerifyProducerMTLSIdentity(context.Background(), security, identity.ID, VerifyProducerMTLSIdentityRequest{CertificatePEM: certPEM})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !verified.Matched {
+		t.Fatalf("expected certificate verification to match stored fingerprint: %+v", verified)
+	}
+}
+
 func TestControlServiceRetryPolicyValidation(t *testing.T) {
 	store := &fakeControlStore{}
 	svc := NewControlService(store, ssrf.Validator{Resolver: ssrf.StaticResolver{}})
@@ -1267,6 +1298,9 @@ type fakeControlStore struct {
 	producerClientActorID      string
 	producerClientReason       string
 	producerClientInput        ProducerClientCreateInput
+	producerMTLSTenantID       string
+	producerMTLSActorID        string
+	producerMTLSIdentity       domain.ProducerMTLSIdentity
 	eventSchema                domain.EventSchema
 	schemaTenantID             string
 	schemaReason               string
@@ -1356,6 +1390,34 @@ func (f *fakeControlStore) RotateProducerClientSecret(_ context.Context, tenantI
 	input.Secret.TenantID = tenantID
 	input.Secret.ClientID = clientID
 	return input.Secret, nil
+}
+func (f *fakeControlStore) CreateProducerMTLSIdentity(_ context.Context, tenantID, actorID string, identity domain.ProducerMTLSIdentity) (domain.ProducerMTLSIdentity, error) {
+	f.producerMTLSTenantID = tenantID
+	f.producerMTLSActorID = actorID
+	identity.ID = "pmi_1"
+	identity.TenantID = tenantID
+	f.producerMTLSIdentity = identity
+	return identity, nil
+}
+func (f *fakeControlStore) ListProducerMTLSIdentities(context.Context, string, int) ([]domain.ProducerMTLSIdentity, error) {
+	return nil, nil
+}
+func (f *fakeControlStore) GetProducerMTLSIdentity(_ context.Context, tenantID, identityID string) (domain.ProducerMTLSIdentity, error) {
+	item := f.producerMTLSIdentity
+	if item.ID == "" {
+		item = domain.ProducerMTLSIdentity{ID: identityID, TenantID: tenantID, Name: "producer", CertificateFingerprintSHA256: "sha256:test", State: domain.StateActive}
+	}
+	return item, nil
+}
+func (f *fakeControlStore) UpdateProducerMTLSIdentity(_ context.Context, tenantID, identityID, actorID string, req UpdateProducerMTLSIdentityRequest) (domain.ProducerMTLSIdentity, error) {
+	f.producerMTLSTenantID = tenantID
+	f.producerMTLSActorID = actorID
+	return domain.ProducerMTLSIdentity{ID: identityID, TenantID: tenantID, Name: "producer", State: domain.StateActive}, nil
+}
+func (f *fakeControlStore) DeleteProducerMTLSIdentity(_ context.Context, tenantID, identityID, actorID, reason string) (domain.ProducerMTLSIdentity, error) {
+	f.producerMTLSTenantID = tenantID
+	f.producerMTLSActorID = actorID
+	return domain.ProducerMTLSIdentity{ID: identityID, TenantID: tenantID, Name: "producer", State: domain.StateDisabled}, nil
 }
 func (f *fakeControlStore) CreateSource(context.Context, domain.Source) (domain.Source, error) {
 	return domain.Source{}, nil
