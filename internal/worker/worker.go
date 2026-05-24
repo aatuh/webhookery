@@ -56,6 +56,31 @@ type DeliveryStore interface {
 	RecordDeliveryAttempt(ctx context.Context, item DeliveryItem, result DeliveryResult, deliverErr error) error
 }
 
+type SignalDeliveryItem struct {
+	ID           string
+	TenantID     string
+	URL          string
+	AttemptCount int
+	Secret       []byte
+	Body         []byte
+}
+
+type SignalDeliveryResult struct {
+	StatusCode        int
+	ResponseBody      []byte
+	ResponseTruncated bool
+	FailureClass      string
+}
+
+type SignalClient interface {
+	Deliver(ctx context.Context, rawURL string, body []byte, secret []byte) (SignalDeliveryResult, error)
+}
+
+type NotificationDeliveryStore interface {
+	ClaimNotificationDeliveries(ctx context.Context, workerID string, limit int) ([]SignalDeliveryItem, error)
+	RecordNotificationDeliveryAttempt(ctx context.Context, item SignalDeliveryItem, result SignalDeliveryResult, deliverErr error) error
+}
+
 type RetentionStore interface {
 	ApplyRetentionPolicies(ctx context.Context, workerID string, limit int) error
 }
@@ -69,15 +94,17 @@ type AlertStore interface {
 }
 
 type Worker struct {
-	Store          OutboxStore
-	Processor      OutboxProcessor
-	DeliveryStore  DeliveryStore
-	DeliveryClient DeliveryClient
-	RetentionStore RetentionStore
-	MetricsStore   MetricsStore
-	AlertStore     AlertStore
-	WorkerID       string
-	Limit          int
+	Store                     OutboxStore
+	Processor                 OutboxProcessor
+	DeliveryStore             DeliveryStore
+	DeliveryClient            DeliveryClient
+	NotificationDeliveryStore NotificationDeliveryStore
+	NotificationClient        SignalClient
+	RetentionStore            RetentionStore
+	MetricsStore              MetricsStore
+	AlertStore                AlertStore
+	WorkerID                  string
+	Limit                     int
 }
 
 func (w Worker) RunOnce(ctx context.Context) error {
@@ -127,6 +154,18 @@ func (w Worker) RunOnce(ctx context.Context) error {
 	if w.AlertStore != nil {
 		if err := w.AlertStore.EvaluateAlertRules(ctx, w.WorkerID, limit); err != nil {
 			return err
+		}
+	}
+	if w.NotificationDeliveryStore != nil && w.NotificationClient != nil {
+		deliveries, err := w.NotificationDeliveryStore.ClaimNotificationDeliveries(ctx, w.WorkerID, limit)
+		if err != nil {
+			return err
+		}
+		for _, item := range deliveries {
+			result, deliverErr := w.NotificationClient.Deliver(ctx, item.URL, item.Body, item.Secret)
+			if err := w.NotificationDeliveryStore.RecordNotificationDeliveryAttempt(ctx, item, result, deliverErr); err != nil {
+				return err
+			}
 		}
 	}
 	return nil

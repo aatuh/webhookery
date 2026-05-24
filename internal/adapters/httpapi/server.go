@@ -176,6 +176,15 @@ func (s *Server) Routes() http.Handler {
 			r.Get("/alert-firings", s.listAlertFirings)
 			r.Get("/alert-firings/{firing_id}", s.getAlertFiring)
 			r.Post("/alert-firings/{firing_id}:acknowledge", s.acknowledgeAlertFiring)
+			r.Get("/notification-channels", s.listNotificationChannels)
+			r.Post("/notification-channels", s.createNotificationChannel)
+			r.Get("/notification-channels/{channel_id}", s.getNotificationChannel)
+			r.Patch("/notification-channels/{channel_id}", s.updateNotificationChannel)
+			r.Delete("/notification-channels/{channel_id}", s.deleteNotificationChannel)
+			r.Post("/notification-channels/{channel_id}:test", s.testNotificationChannel)
+			r.Get("/notification-deliveries", s.listNotificationDeliveries)
+			r.Get("/notification-deliveries/{delivery_id}/attempts", s.listNotificationDeliveryAttempts)
+			r.Post("/notification-deliveries/{delivery_id}:retry", s.retryNotificationDelivery)
 		})
 	})
 
@@ -1613,6 +1622,115 @@ func (s *Server) acknowledgeAlertFiring(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	item, err := s.cfg.Control.AcknowledgeAlertFiring(r.Context(), actorFrom(r), chi.URLParam(r, "firing_id"), req)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, item)
+}
+
+func (s *Server) createNotificationChannel(w http.ResponseWriter, r *http.Request) {
+	var req app.CreateNotificationChannelRequest
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	item, result, err := s.cfg.Control.CreateNotificationChannel(r.Context(), actorFrom(r), req)
+	if err != nil {
+		if errors.Is(err, app.ErrInvalidInput) && len(result.BlockedReasons) > 0 {
+			writeProblem(w, problem.BadRequest(requestID(r), "notification_channel_url_blocked", strings.Join(result.BlockedReasons, ",")))
+			return
+		}
+		s.writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, item)
+}
+
+func (s *Server) listNotificationChannels(w http.ResponseWriter, r *http.Request) {
+	items, err := s.cfg.Control.ListNotificationChannels(r.Context(), actorFrom(r), queryLimit(r))
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, page(items))
+}
+
+func (s *Server) getNotificationChannel(w http.ResponseWriter, r *http.Request) {
+	item, err := s.cfg.Control.GetNotificationChannel(r.Context(), actorFrom(r), chi.URLParam(r, "channel_id"))
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, item)
+}
+
+func (s *Server) updateNotificationChannel(w http.ResponseWriter, r *http.Request) {
+	var req app.UpdateNotificationChannelRequest
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	item, result, err := s.cfg.Control.UpdateNotificationChannel(r.Context(), actorFrom(r), chi.URLParam(r, "channel_id"), req)
+	if err != nil {
+		if errors.Is(err, app.ErrInvalidInput) && len(result.BlockedReasons) > 0 {
+			writeProblem(w, problem.BadRequest(requestID(r), "notification_channel_url_blocked", strings.Join(result.BlockedReasons, ",")))
+			return
+		}
+		s.writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, item)
+}
+
+func (s *Server) deleteNotificationChannel(w http.ResponseWriter, r *http.Request) {
+	var req app.StateChangeRequest
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	item, err := s.cfg.Control.DeleteNotificationChannel(r.Context(), actorFrom(r), chi.URLParam(r, "channel_id"), req)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, item)
+}
+
+func (s *Server) testNotificationChannel(w http.ResponseWriter, r *http.Request) {
+	var req app.StateChangeRequest
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	item, err := s.cfg.Control.TestNotificationChannel(r.Context(), actorFrom(r), chi.URLParam(r, "channel_id"), req)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusAccepted, item)
+}
+
+func (s *Server) listNotificationDeliveries(w http.ResponseWriter, r *http.Request) {
+	items, err := s.cfg.Control.ListNotificationDeliveries(r.Context(), actorFrom(r), r.URL.Query().Get("state"), queryLimit(r))
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, page(items))
+}
+
+func (s *Server) listNotificationDeliveryAttempts(w http.ResponseWriter, r *http.Request) {
+	items, err := s.cfg.Control.ListNotificationDeliveryAttempts(r.Context(), actorFrom(r), chi.URLParam(r, "delivery_id"), queryLimit(r))
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, page(items))
+}
+
+func (s *Server) retryNotificationDelivery(w http.ResponseWriter, r *http.Request) {
+	var req app.StateChangeRequest
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	item, err := s.cfg.Control.RetryNotificationDelivery(r.Context(), actorFrom(r), chi.URLParam(r, "delivery_id"), req)
 	if err != nil {
 		s.writeError(w, r, err)
 		return

@@ -78,19 +78,36 @@ func TestRunOnceEvaluatesAlertRules(t *testing.T) {
 	}
 }
 
+func TestRunOnceDeliversClaimedNotificationSignal(t *testing.T) {
+	store := &fakeWorkerStore{notificationDeliveries: []SignalDeliveryItem{{ID: "ndel_1", URL: "https://signals.example/hook", Body: []byte(`{"type":"alert.opened"}`), Secret: []byte("secret")}}}
+	client := &fakeSignalClient{}
+	w := Worker{Store: store, NotificationDeliveryStore: store, NotificationClient: client, WorkerID: "worker_1", Limit: 4}
+	if err := w.RunOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if store.notificationRecorded != "ndel_1" {
+		t.Fatalf("expected notification attempt to be recorded, got %q", store.notificationRecorded)
+	}
+	if string(client.body) != `{"type":"alert.opened"}` || string(client.secret) != "secret" {
+		t.Fatalf("expected exact signal body and secret to reach client, body=%q secret=%q", client.body, client.secret)
+	}
+}
+
 type fakeWorkerStore struct {
-	items             []OutboxItem
-	processed         string
-	completed         string
-	deliveries        []DeliveryItem
-	recorded          string
-	processErr        error
-	retentionWorkerID string
-	retentionLimit    int
-	metricsWorkerID   string
-	metricsLimit      int
-	alertWorkerID     string
-	alertLimit        int
+	items                  []OutboxItem
+	processed              string
+	completed              string
+	deliveries             []DeliveryItem
+	recorded               string
+	processErr             error
+	retentionWorkerID      string
+	retentionLimit         int
+	metricsWorkerID        string
+	metricsLimit           int
+	alertWorkerID          string
+	alertLimit             int
+	notificationDeliveries []SignalDeliveryItem
+	notificationRecorded   string
 }
 
 func (f *fakeWorkerStore) ClaimOutbox(context.Context, string, int) ([]OutboxItem, error) {
@@ -126,6 +143,13 @@ func (f *fakeWorkerStore) EvaluateAlertRules(_ context.Context, workerID string,
 	f.alertLimit = limit
 	return nil
 }
+func (f *fakeWorkerStore) ClaimNotificationDeliveries(context.Context, string, int) ([]SignalDeliveryItem, error) {
+	return f.notificationDeliveries, nil
+}
+func (f *fakeWorkerStore) RecordNotificationDeliveryAttempt(_ context.Context, item SignalDeliveryItem, _ SignalDeliveryResult, _ error) error {
+	f.notificationRecorded = item.ID
+	return nil
+}
 
 type fakeDeliveryClient struct {
 	certPEM []byte
@@ -136,4 +160,15 @@ func (f *fakeDeliveryClient) Deliver(_ context.Context, _ string, _ []byte, _ []
 	f.certPEM = certPEM
 	f.keyPEM = keyPEM
 	return DeliveryResult{StatusCode: 200, FailureClass: "success"}, nil
+}
+
+type fakeSignalClient struct {
+	body   []byte
+	secret []byte
+}
+
+func (f *fakeSignalClient) Deliver(_ context.Context, _ string, body []byte, secret []byte) (SignalDeliveryResult, error) {
+	f.body = body
+	f.secret = secret
+	return SignalDeliveryResult{StatusCode: 200, FailureClass: "success"}, nil
 }

@@ -84,6 +84,13 @@ const (
 	AlertFiringAcknowledged = "acknowledged"
 	AlertFiringResolved     = "resolved"
 
+	NotificationChannelWebhook = "webhook"
+
+	SignalDeliveryScheduled = "scheduled"
+	SignalDeliveryRunning   = "in_progress"
+	SignalDeliverySucceeded = "succeeded"
+	SignalDeliveryFailed    = "failed"
+
 	AuditChainEntryStateActive    = "active"
 	AuditChainEntryStateRetained  = "retained"
 	AuditChainEntrySourceLive     = "live"
@@ -689,6 +696,7 @@ type AlertRule struct {
 	WindowSeconds int               `json:"window_seconds"`
 	Dimensions    map[string]string `json:"dimensions,omitempty"`
 	State         string            `json:"state"`
+	ChannelIDs    []string          `json:"channel_ids,omitempty"`
 	CreatedBy     string            `json:"created_by"`
 	CreatedAt     time.Time         `json:"created_at"`
 	UpdatedAt     time.Time         `json:"updated_at"`
@@ -708,6 +716,46 @@ type AlertFiring struct {
 	AcknowledgedAt  time.Time `json:"acknowledged_at,omitempty"`
 	ResolvedAt      time.Time `json:"resolved_at,omitempty"`
 	UpdatedAt       time.Time `json:"updated_at"`
+}
+
+type NotificationChannel struct {
+	ID          string    `json:"id"`
+	TenantID    string    `json:"tenant_id"`
+	Name        string    `json:"name"`
+	ChannelType string    `json:"channel_type"`
+	URL         string    `json:"url"`
+	State       string    `json:"state"`
+	SecretHint  string    `json:"secret_hint"`
+	CreatedBy   string    `json:"created_by"`
+	CreatedAt   time.Time `json:"created_at"`
+	UpdatedAt   time.Time `json:"updated_at"`
+}
+
+type NotificationDelivery struct {
+	ID            string    `json:"id"`
+	TenantID      string    `json:"tenant_id"`
+	ChannelID     string    `json:"channel_id"`
+	FiringID      string    `json:"firing_id,omitempty"`
+	Transition    string    `json:"transition"`
+	State         string    `json:"state"`
+	BodySHA256    string    `json:"body_sha256"`
+	AttemptCount  int       `json:"attempt_count"`
+	NextAttemptAt time.Time `json:"next_attempt_at,omitempty"`
+	LastAttemptAt time.Time `json:"last_attempt_at,omitempty"`
+	CreatedAt     time.Time `json:"created_at"`
+	UpdatedAt     time.Time `json:"updated_at"`
+}
+
+type NotificationDeliveryAttempt struct {
+	ID                string    `json:"id"`
+	TenantID          string    `json:"tenant_id"`
+	DeliveryID        string    `json:"delivery_id"`
+	StatusCode        int       `json:"status_code"`
+	FailureClass      string    `json:"failure_class"`
+	ResponseBody      string    `json:"response_body,omitempty"`
+	ResponseTruncated bool      `json:"response_truncated"`
+	Error             string    `json:"error,omitempty"`
+	CreatedAt         time.Time `json:"created_at"`
 }
 
 func MetricDimensionsHash(dimensions map[string]string) string {

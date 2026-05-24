@@ -22,6 +22,7 @@ import (
 	"webhookery/internal/adapters/httpapi"
 	"webhookery/internal/adapters/objectstore"
 	"webhookery/internal/adapters/postgres"
+	"webhookery/internal/adapters/signalhttp"
 	apppkg "webhookery/internal/app"
 	"webhookery/internal/authz"
 	"webhookery/internal/config"
@@ -81,6 +82,10 @@ func run(args []string) error {
 		return runOps(args[1:])
 	case "alerts":
 		return runAlerts(args[1:])
+	case "notification-channels":
+		return runNotificationChannels(args[1:])
+	case "notification-deliveries":
+		return runNotificationDeliveries(args[1:])
 	case "audit":
 		return runAudit(args[1:])
 	case "retention":
@@ -99,7 +104,7 @@ func run(args []string) error {
 }
 
 func usage() error {
-	return fmt.Errorf("usage: whcp <api|worker|scheduler|migrate|admin|api-keys|events|sources|provider-connections|endpoints|subscriptions|retry-policies|routes|transformations|deliveries|replay-jobs|reconciliation-jobs|ops|alerts|audit|retention|schemas|dead-letter|quarantine|signatures>")
+	return fmt.Errorf("usage: whcp <api|worker|scheduler|migrate|admin|api-keys|events|sources|provider-connections|endpoints|subscriptions|retry-policies|routes|transformations|deliveries|replay-jobs|reconciliation-jobs|ops|alerts|notification-channels|notification-deliveries|audit|retention|schemas|dead-letter|quarantine|signatures>")
 }
 
 func runAPI() error {
@@ -181,15 +186,17 @@ func runWorker(args []string) error {
 	}
 	defer store.Close()
 	w := worker.Worker{
-		Store:          store,
-		Processor:      store,
-		DeliveryStore:  store,
-		DeliveryClient: deliveryAdapter{client: deliveryhttp.Client{SSRF: ssrf.Validator{}}},
-		RetentionStore: store,
-		MetricsStore:   store,
-		AlertStore:     store,
-		WorkerID:       "worker-" + time.Now().UTC().Format("20060102150405"),
-		Limit:          10,
+		Store:                     store,
+		Processor:                 store,
+		DeliveryStore:             store,
+		DeliveryClient:            deliveryAdapter{client: deliveryhttp.Client{SSRF: ssrf.Validator{}}},
+		NotificationDeliveryStore: store,
+		NotificationClient:        signalAdapter{client: signalhttp.Client{SSRF: ssrf.Validator{}}},
+		RetentionStore:            store,
+		MetricsStore:              store,
+		AlertStore:                store,
+		WorkerID:                  "worker-" + time.Now().UTC().Format("20060102150405"),
+		Limit:                     10,
 	}
 	if *once {
 		return w.RunOnce(ctx)
@@ -936,6 +943,7 @@ func runAlerts(args []string) error {
 	comparator := fs.String("comparator", ">=", "threshold comparator")
 	windowSeconds := fs.Int("window-seconds", 300, "evaluation window seconds")
 	state := fs.String("state", "", "state filter or rule state")
+	channelIDs := fs.String("channel-ids", "", "comma-separated notification channel ids")
 	reason := fs.String("reason", "", "operator reason")
 	if err := fs.Parse(args[1:]); err != nil {
 		return err
@@ -952,6 +960,7 @@ func runAlerts(args []string) error {
 			"comparator":     *comparator,
 			"window_seconds": *windowSeconds,
 			"state":          *state,
+			"channel_ids":    splitCSV(*channelIDs),
 		})
 	case "update":
 		if strings.TrimSpace(*alertID) == "" {
@@ -973,6 +982,9 @@ func runAlerts(args []string) error {
 		if strings.TrimSpace(*state) != "" {
 			body["state"] = *state
 		}
+		if strings.TrimSpace(*channelIDs) != "" {
+			body["channel_ids"] = splitCSV(*channelIDs)
+		}
 		return patchJSON(*baseURL, *apiKey, "/v1/alerts/"+url.PathEscape(*alertID), body)
 	case "disable":
 		if strings.TrimSpace(*alertID) == "" {
@@ -992,6 +1004,100 @@ func runAlerts(args []string) error {
 		return postJSON(*baseURL, *apiKey, "/v1/alert-firings/"+url.PathEscape(*firingID)+":acknowledge", map[string]any{"reason": *reason})
 	default:
 		return fmt.Errorf("usage: whcp alerts <list|create|update|disable|firings|ack>")
+	}
+}
+
+func runNotificationChannels(args []string) error {
+	if len(args) == 0 {
+		return fmt.Errorf("usage: whcp notification-channels <list|create|update|disable|test>")
+	}
+	fs := flag.NewFlagSet("notification-channels "+args[0], flag.ContinueOnError)
+	baseURL := fs.String("base-url", "http://localhost:8080", "API base URL")
+	apiKey := fs.String("api-key", os.Getenv("WEBHOOKERY_API_KEY"), "API key")
+	channelID := fs.String("channel-id", "", "notification channel id")
+	name := fs.String("name", "", "channel name")
+	targetURL := fs.String("url", "", "HTTPS webhook receiver URL")
+	secret := fs.String("signing-secret", "", "HMAC signing secret")
+	state := fs.String("state", "", "active or disabled")
+	reason := fs.String("reason", "", "operator reason")
+	if err := fs.Parse(args[1:]); err != nil {
+		return err
+	}
+	switch args[0] {
+	case "list":
+		return getJSON(*baseURL, *apiKey, "/v1/notification-channels")
+	case "create":
+		return postJSON(*baseURL, *apiKey, "/v1/notification-channels", map[string]any{
+			"name":           *name,
+			"channel_type":   domain.NotificationChannelWebhook,
+			"url":            *targetURL,
+			"signing_secret": *secret,
+		})
+	case "update":
+		if strings.TrimSpace(*channelID) == "" {
+			return fmt.Errorf("channel-id is required")
+		}
+		body := map[string]any{"reason": *reason}
+		if strings.TrimSpace(*name) != "" {
+			body["name"] = *name
+		}
+		if strings.TrimSpace(*targetURL) != "" {
+			body["url"] = *targetURL
+		}
+		if strings.TrimSpace(*secret) != "" {
+			body["signing_secret"] = *secret
+		}
+		if strings.TrimSpace(*state) != "" {
+			body["state"] = *state
+		}
+		return patchJSON(*baseURL, *apiKey, "/v1/notification-channels/"+url.PathEscape(*channelID), body)
+	case "disable":
+		if strings.TrimSpace(*channelID) == "" {
+			return fmt.Errorf("channel-id is required")
+		}
+		return deleteJSON(*baseURL, *apiKey, "/v1/notification-channels/"+url.PathEscape(*channelID), map[string]any{"reason": *reason})
+	case "test":
+		if strings.TrimSpace(*channelID) == "" {
+			return fmt.Errorf("channel-id is required")
+		}
+		return postJSON(*baseURL, *apiKey, "/v1/notification-channels/"+url.PathEscape(*channelID)+":test", map[string]any{"reason": *reason})
+	default:
+		return fmt.Errorf("usage: whcp notification-channels <list|create|update|disable|test>")
+	}
+}
+
+func runNotificationDeliveries(args []string) error {
+	if len(args) == 0 {
+		return fmt.Errorf("usage: whcp notification-deliveries <list|attempts|retry>")
+	}
+	fs := flag.NewFlagSet("notification-deliveries "+args[0], flag.ContinueOnError)
+	baseURL := fs.String("base-url", "http://localhost:8080", "API base URL")
+	apiKey := fs.String("api-key", os.Getenv("WEBHOOKERY_API_KEY"), "API key")
+	deliveryID := fs.String("delivery-id", "", "notification delivery id")
+	state := fs.String("state", "", "delivery state filter")
+	reason := fs.String("reason", "", "operator reason")
+	if err := fs.Parse(args[1:]); err != nil {
+		return err
+	}
+	switch args[0] {
+	case "list":
+		path := "/v1/notification-deliveries"
+		if strings.TrimSpace(*state) != "" {
+			path += "?state=" + url.QueryEscape(*state)
+		}
+		return getJSON(*baseURL, *apiKey, path)
+	case "attempts":
+		if strings.TrimSpace(*deliveryID) == "" {
+			return fmt.Errorf("delivery-id is required")
+		}
+		return getJSON(*baseURL, *apiKey, "/v1/notification-deliveries/"+url.PathEscape(*deliveryID)+"/attempts")
+	case "retry":
+		if strings.TrimSpace(*deliveryID) == "" {
+			return fmt.Errorf("delivery-id is required")
+		}
+		return postJSON(*baseURL, *apiKey, "/v1/notification-deliveries/"+url.PathEscape(*deliveryID)+":retry", map[string]any{"reason": *reason})
+	default:
+		return fmt.Errorf("usage: whcp notification-deliveries <list|attempts|retry>")
 	}
 }
 
@@ -1423,6 +1529,20 @@ func (d deliveryAdapter) Deliver(ctx context.Context, rawURL string, body []byte
 	client.MTLSClientKeyPEM = mtlsKeyPEM
 	result, err := client.Deliver(ctx, rawURL, body)
 	return worker.DeliveryResult{
+		StatusCode:        result.StatusCode,
+		ResponseBody:      result.ResponseBody,
+		ResponseTruncated: result.ResponseTruncated,
+		FailureClass:      result.FailureClass,
+	}, err
+}
+
+type signalAdapter struct {
+	client signalhttp.Client
+}
+
+func (s signalAdapter) Deliver(ctx context.Context, rawURL string, body []byte, secret []byte) (worker.SignalDeliveryResult, error) {
+	result, err := s.client.Deliver(ctx, rawURL, body, secret)
+	return worker.SignalDeliveryResult{
 		StatusCode:        result.StatusCode,
 		ResponseBody:      result.ResponseBody,
 		ResponseTruncated: result.ResponseTruncated,

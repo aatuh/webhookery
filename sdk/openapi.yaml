@@ -2272,6 +2272,189 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/AlertFiring"
+  /v1/notification-channels:
+    get:
+      summary: List notification channels
+      description: Lists tenant-scoped generic HTTPS webhook alert notification channels. Signing secrets are never returned.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: Paginated notification channels.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/NotificationChannelPage"
+    post:
+      summary: Create notification channel
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateNotificationChannelRequest"
+      responses:
+        "201":
+          description: Notification channel created.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/NotificationChannel"
+  /v1/notification-channels/{channel_id}:
+    get:
+      summary: Get notification channel
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: channel_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Notification channel metadata.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/NotificationChannel"
+    patch:
+      summary: Update notification channel
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: channel_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateNotificationChannelRequest"
+      responses:
+        "200":
+          description: Notification channel updated.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/NotificationChannel"
+    delete:
+      summary: Disable notification channel
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: channel_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/StateChangeRequest"
+      responses:
+        "200":
+          description: Notification channel disabled.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/NotificationChannel"
+  /v1/notification-channels/{channel_id}:test:
+    post:
+      summary: Queue a test notification delivery
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: channel_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/StateChangeRequest"
+      responses:
+        "202":
+          description: Test notification delivery queued.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/NotificationDelivery"
+  /v1/notification-deliveries:
+    get:
+      summary: List notification deliveries
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/Limit"
+        - name: state
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [scheduled, in_progress, succeeded, failed]
+      responses:
+        "200":
+          description: Paginated notification deliveries.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/NotificationDeliveryPage"
+  /v1/notification-deliveries/{delivery_id}/attempts:
+    get:
+      summary: List notification delivery attempts
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: delivery_id
+          in: path
+          required: true
+          schema:
+            type: string
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: Paginated notification delivery attempts.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/NotificationDeliveryAttemptPage"
+  /v1/notification-deliveries/{delivery_id}:retry:
+    post:
+      summary: Retry notification delivery
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: delivery_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/StateChangeRequest"
+      responses:
+        "200":
+          description: Notification delivery rescheduled.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/NotificationDelivery"
 components:
   securitySchemes:
     bearerAuth:
@@ -4045,6 +4228,10 @@ components:
         state:
           type: string
           enum: [active, disabled]
+        channel_ids:
+          type: array
+          items:
+            type: string
         created_by:
           type: string
         created_at:
@@ -4078,6 +4265,10 @@ components:
         state:
           type: string
           enum: [active, disabled]
+        channel_ids:
+          type: array
+          items:
+            type: string
     UpdateAlertRuleRequest:
       type: object
       required: [reason]
@@ -4098,6 +4289,10 @@ components:
         state:
           type: string
           enum: [active, disabled]
+        channel_ids:
+          type: array
+          items:
+            type: string
         reason:
           type: string
     AlertRulePage:
@@ -4155,6 +4350,163 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/AlertFiring"
+        next_cursor:
+          type: string
+          nullable: true
+        has_more:
+          type: boolean
+    NotificationChannel:
+      type: object
+      required: [id, tenant_id, name, channel_type, url, state, secret_hint, created_by, created_at, updated_at]
+      properties:
+        id:
+          type: string
+        tenant_id:
+          type: string
+        name:
+          type: string
+        channel_type:
+          type: string
+          enum: [webhook]
+        url:
+          type: string
+          format: uri
+        state:
+          type: string
+          enum: [active, disabled]
+        secret_hint:
+          type: string
+          description: Non-sensitive metadata only; the signing secret is never returned.
+        created_by:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+    CreateNotificationChannelRequest:
+      type: object
+      required: [name, url, signing_secret]
+      properties:
+        name:
+          type: string
+        channel_type:
+          type: string
+          enum: [webhook]
+        url:
+          type: string
+          format: uri
+        signing_secret:
+          type: string
+          writeOnly: true
+          minLength: 16
+    UpdateNotificationChannelRequest:
+      type: object
+      required: [reason]
+      properties:
+        name:
+          type: string
+        url:
+          type: string
+          format: uri
+        signing_secret:
+          type: string
+          writeOnly: true
+          minLength: 16
+        state:
+          type: string
+          enum: [active, disabled]
+        reason:
+          type: string
+    NotificationChannelPage:
+      type: object
+      properties:
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/NotificationChannel"
+        next_cursor:
+          type: string
+          nullable: true
+        has_more:
+          type: boolean
+    NotificationDelivery:
+      type: object
+      required: [id, tenant_id, channel_id, transition, state, body_sha256, attempt_count, created_at, updated_at]
+      properties:
+        id:
+          type: string
+        tenant_id:
+          type: string
+        channel_id:
+          type: string
+        firing_id:
+          type: string
+        transition:
+          type: string
+          enum: [open, acknowledged, resolved, test]
+        state:
+          type: string
+          enum: [scheduled, in_progress, succeeded, failed]
+        body_sha256:
+          type: string
+        attempt_count:
+          type: integer
+        next_attempt_at:
+          type: string
+          format: date-time
+        last_attempt_at:
+          type: string
+          format: date-time
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+    NotificationDeliveryPage:
+      type: object
+      properties:
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/NotificationDelivery"
+        next_cursor:
+          type: string
+          nullable: true
+        has_more:
+          type: boolean
+    NotificationDeliveryAttempt:
+      type: object
+      required: [id, tenant_id, delivery_id, status_code, failure_class, response_truncated, created_at]
+      properties:
+        id:
+          type: string
+        tenant_id:
+          type: string
+        delivery_id:
+          type: string
+        status_code:
+          type: integer
+        failure_class:
+          type: string
+        response_body:
+          type: string
+        response_truncated:
+          type: boolean
+        error:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+    NotificationDeliveryAttemptPage:
+      type: object
+      properties:
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/NotificationDeliveryAttempt"
         next_cursor:
           type: string
           nullable: true

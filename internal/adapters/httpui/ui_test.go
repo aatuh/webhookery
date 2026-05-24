@@ -18,7 +18,7 @@ func TestIndexAvoidsPersistentTokenStorage(t *testing.T) {
 	if strings.Contains(body, "localStorage") || strings.Contains(body, "sessionStorage") {
 		t.Fatal("operator UI must not persist API keys in browser storage")
 	}
-	if !strings.Contains(body, "/v1/replay-jobs") || !strings.Contains(body, "/v1/ops/metrics") || !strings.Contains(body, "/v1/audit-chain/head") {
-		t.Fatal("operator UI should expose replay, ops, and audit chain surfaces")
+	if !strings.Contains(body, "/v1/replay-jobs") || !strings.Contains(body, "/v1/ops/metrics") || !strings.Contains(body, "/v1/audit-chain/head") || !strings.Contains(body, "/v1/notification-channels") {
+		t.Fatal("operator UI should expose replay, ops, audit chain, and signal egress surfaces")
 	}
 }

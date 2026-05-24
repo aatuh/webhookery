@@ -82,8 +82,11 @@ go run ./cmd/whcp ops config --api-key "$WEBHOOKERY_API_KEY"
 go run ./cmd/whcp ops workers --api-key "$WEBHOOKERY_API_KEY"
 go run ./cmd/whcp ops queues --api-key "$WEBHOOKERY_API_KEY"
 go run ./cmd/whcp alerts create --name dlq-open --rule-type dead_letter_open --threshold 1 --reason "page on DLQ growth" --api-key "$WEBHOOKERY_API_KEY"
+go run ./cmd/whcp notification-channels create --name ops-webhook --url https://ops.example/hooks/webhookery --signing-secret "$SIGNAL_SECRET" --api-key "$WEBHOOKERY_API_KEY"
+go run ./cmd/whcp alerts update --alert-id alr_... --channel-ids nch_... --reason "send DLQ pages" --api-key "$WEBHOOKERY_API_KEY"
 go run ./cmd/whcp alerts firings --state open --api-key "$WEBHOOKERY_API_KEY"
 go run ./cmd/whcp alerts ack --firing-id alf_... --reason "operator investigating" --api-key "$WEBHOOKERY_API_KEY"
+go run ./cmd/whcp notification-deliveries list --state failed --api-key "$WEBHOOKERY_API_KEY"
 scripts/backup_postgres.sh backups
 WEBHOOKERY_RESTORE_CONFIRM=restore scripts/restore_postgres.sh backups/webhookery-20260525T000000Z.dump
 helm lint deploy/helm/webhookery
@@ -130,6 +133,12 @@ audit rows are backfilled into deterministic chain entries during startup, and
 new audit writes append the audit row and chain entry in one transaction.
 Evidence exports include `audit_chain_proof.jsonl`; `whcp audit verify-bundle`
 checks bundle file hashes and chain continuity locally.
+
+Alert notification channels send signed generic HTTPS callbacks for alert
+open, acknowledged, and resolved transitions. Channel signing secrets are
+encrypted at rest and never returned by API, CLI, or UI responses. Signal
+payloads contain alert metadata only and are signed with
+`Webhookery-Signal-Timestamp` plus `Webhookery-Signal-Signature`.
 
 Retry scheduling records reproducibility evidence: deliveries carry a stored
 `retry_seed`, and retryable attempts record the deterministic jitter delay and

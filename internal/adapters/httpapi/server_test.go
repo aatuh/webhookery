@@ -667,6 +667,33 @@ func (noopControlStore) GetAlertFiring(_ context.Context, tenantID, firingID str
 func (noopControlStore) AcknowledgeAlertFiring(_ context.Context, tenantID, firingID, actorID, reason string) (domain.AlertFiring, error) {
 	return domain.AlertFiring{ID: firingID, TenantID: tenantID, State: domain.AlertFiringAcknowledged, AcknowledgedBy: actorID, Reason: reason}, nil
 }
+func (noopControlStore) CreateNotificationChannel(_ context.Context, tenantID, actorID string, req app.CreateNotificationChannelRequest) (domain.NotificationChannel, error) {
+	return domain.NotificationChannel{ID: "nch_1", TenantID: tenantID, Name: req.Name, ChannelType: req.ChannelType, URL: req.URL, State: domain.StateActive, SecretHint: "configured", CreatedBy: actorID}, nil
+}
+func (noopControlStore) ListNotificationChannels(context.Context, string, int) ([]domain.NotificationChannel, error) {
+	return nil, nil
+}
+func (noopControlStore) GetNotificationChannel(_ context.Context, tenantID, channelID string) (domain.NotificationChannel, error) {
+	return domain.NotificationChannel{ID: channelID, TenantID: tenantID, ChannelType: domain.NotificationChannelWebhook, URL: "https://signals.example/hook", State: domain.StateActive, SecretHint: "configured"}, nil
+}
+func (noopControlStore) UpdateNotificationChannel(_ context.Context, tenantID, channelID, actorID string, req app.UpdateNotificationChannelRequest) (domain.NotificationChannel, error) {
+	return domain.NotificationChannel{ID: channelID, TenantID: tenantID, State: domain.StateActive, SecretHint: "configured"}, nil
+}
+func (noopControlStore) DeleteNotificationChannel(_ context.Context, tenantID, channelID, actorID, reason string) (domain.NotificationChannel, error) {
+	return domain.NotificationChannel{ID: channelID, TenantID: tenantID, State: domain.StateDisabled, SecretHint: "configured"}, nil
+}
+func (noopControlStore) TestNotificationChannel(_ context.Context, tenantID, channelID, actorID, reason string) (domain.NotificationDelivery, error) {
+	return domain.NotificationDelivery{ID: "ndel_1", TenantID: tenantID, ChannelID: channelID, Transition: "test", State: domain.SignalDeliveryScheduled}, nil
+}
+func (noopControlStore) ListNotificationDeliveries(_ context.Context, tenantID, state string, limit int) ([]domain.NotificationDelivery, error) {
+	return []domain.NotificationDelivery{{ID: "ndel_1", TenantID: tenantID, State: domain.SignalDeliveryScheduled}}, nil
+}
+func (noopControlStore) ListNotificationDeliveryAttempts(_ context.Context, tenantID, deliveryID string, limit int) ([]domain.NotificationDeliveryAttempt, error) {
+	return []domain.NotificationDeliveryAttempt{{ID: "natt_1", TenantID: tenantID, DeliveryID: deliveryID}}, nil
+}
+func (noopControlStore) RetryNotificationDelivery(_ context.Context, tenantID, deliveryID, actorID, reason string) (domain.NotificationDelivery, error) {
+	return domain.NotificationDelivery{ID: deliveryID, TenantID: tenantID, State: domain.SignalDeliveryScheduled}, nil
+}
 func (noopControlStore) ListAuditEvents(context.Context, string, int) ([]domain.AuditEvent, error) {
 	return nil, nil
 }

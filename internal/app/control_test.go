@@ -1029,6 +1029,63 @@ func TestControlServiceAlertFiringAckRequiresOpsWriteAndReason(t *testing.T) {
 	}
 }
 
+func TestControlServiceNotificationChannelsRequireOpsWriteSSRFAndRedactSecrets(t *testing.T) {
+	store := &fakeControlStore{}
+	svc := NewControlService(store, ssrf.Validator{Resolver: ssrf.StaticResolver{
+		"signals.example": {netip.MustParseAddr("93.184.216.34")},
+	}})
+	reader := authz.Actor{ID: "usr_1", TenantID: "ten_a", Role: authz.RoleOperator, Scopes: []string{"ops:read"}}
+	operator := authz.Actor{ID: "usr_2", TenantID: "ten_a", Role: authz.RoleOperator, Scopes: []string{"ops:write", "ops:read"}}
+
+	_, _, err := svc.CreateNotificationChannel(context.Background(), reader, CreateNotificationChannelRequest{Name: "pager", URL: "https://signals.example/hook", SigningSecret: "0123456789abcdef"})
+	if err != ErrForbidden {
+		t.Fatalf("expected forbidden notification channel create, got %v", err)
+	}
+	_, result, err := svc.CreateNotificationChannel(context.Background(), operator, CreateNotificationChannelRequest{Name: "bad", URL: "http://169.254.169.254/latest", SigningSecret: "0123456789abcdef"})
+	if !errors.Is(err, ErrInvalidInput) || result.Allowed {
+		t.Fatalf("expected SSRF rejection, result=%+v err=%v", result, err)
+	}
+	channel, result, err := svc.CreateNotificationChannel(context.Background(), operator, CreateNotificationChannelRequest{Name: "pager", URL: "https://signals.example/hook", SigningSecret: "0123456789abcdef"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := json.Marshal(channel)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.Allowed || channel.TenantID != "ten_a" || store.notificationTenantID != "ten_a" || store.notificationActorID != "usr_2" {
+		t.Fatalf("expected tenant-scoped channel create, channel=%+v tenant=%q actor=%q result=%+v", channel, store.notificationTenantID, store.notificationActorID, result)
+	}
+	if strings.Contains(string(raw), "0123456789abcdef") {
+		t.Fatalf("notification channel response exposed signing secret: %s", raw)
+	}
+}
+
+func TestControlServiceNotificationDeliveryAccessRequiresOpsScopes(t *testing.T) {
+	store := &fakeControlStore{}
+	svc := NewControlService(store, ssrf.Validator{Resolver: ssrf.StaticResolver{
+		"signals.example": {netip.MustParseAddr("93.184.216.34")},
+	}})
+	reader := authz.Actor{ID: "usr_1", TenantID: "ten_a", Role: authz.RoleOperator, Scopes: []string{"ops:read"}}
+	operator := authz.Actor{ID: "usr_2", TenantID: "ten_a", Role: authz.RoleOperator, Scopes: []string{"ops:write", "ops:read"}}
+
+	_, err := svc.RetryNotificationDelivery(context.Background(), reader, "ndel_1", StateChangeRequest{Reason: "retry"})
+	if err != ErrForbidden {
+		t.Fatalf("expected forbidden notification retry, got %v", err)
+	}
+	_, err = svc.RetryNotificationDelivery(context.Background(), operator, "ndel_1", StateChangeRequest{})
+	if !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("expected notification retry reason validation, got %v", err)
+	}
+	deliveries, err := svc.ListNotificationDeliveries(context.Background(), reader, domain.SignalDeliveryScheduled, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(deliveries) != 1 || deliveries[0].TenantID != "ten_a" || store.notificationTenantID != "ten_a" {
+		t.Fatalf("expected tenant-scoped notification delivery list, deliveries=%+v tenant=%q", deliveries, store.notificationTenantID)
+	}
+}
+
 func testClientCertificatePEM(t *testing.T, commonName string) (string, string) {
 	t.Helper()
 	key, err := rsa.GenerateKey(rand.Reader, 2048)
@@ -1094,6 +1151,8 @@ type fakeControlStore struct {
 	metricName                 string
 	alertTenantID              string
 	alertActorID               string
+	notificationTenantID       string
+	notificationActorID        string
 	replayReq                  ReplayRequest
 	approveReplayTenantID      string
 	approveReplayActorID       string
@@ -1477,6 +1536,47 @@ func (f *fakeControlStore) AcknowledgeAlertFiring(_ context.Context, tenantID, f
 	f.alertTenantID = tenantID
 	f.alertActorID = actorID
 	return domain.AlertFiring{ID: firingID, TenantID: tenantID, State: domain.AlertFiringAcknowledged, AcknowledgedBy: actorID, Reason: reason}, nil
+}
+func (f *fakeControlStore) CreateNotificationChannel(_ context.Context, tenantID, actorID string, req CreateNotificationChannelRequest) (domain.NotificationChannel, error) {
+	f.notificationTenantID = tenantID
+	f.notificationActorID = actorID
+	return domain.NotificationChannel{ID: "nch_1", TenantID: tenantID, Name: req.Name, ChannelType: req.ChannelType, URL: req.URL, State: domain.StateActive, SecretHint: "configured", CreatedBy: actorID}, nil
+}
+func (f *fakeControlStore) ListNotificationChannels(_ context.Context, tenantID string, limit int) ([]domain.NotificationChannel, error) {
+	f.notificationTenantID = tenantID
+	return []domain.NotificationChannel{{ID: "nch_1", TenantID: tenantID, ChannelType: domain.NotificationChannelWebhook, State: domain.StateActive, SecretHint: "configured"}}, nil
+}
+func (f *fakeControlStore) GetNotificationChannel(_ context.Context, tenantID, channelID string) (domain.NotificationChannel, error) {
+	f.notificationTenantID = tenantID
+	return domain.NotificationChannel{ID: channelID, TenantID: tenantID, ChannelType: domain.NotificationChannelWebhook, URL: "https://signals.example/hook", State: domain.StateActive, SecretHint: "configured"}, nil
+}
+func (f *fakeControlStore) UpdateNotificationChannel(_ context.Context, tenantID, channelID, actorID string, req UpdateNotificationChannelRequest) (domain.NotificationChannel, error) {
+	f.notificationTenantID = tenantID
+	f.notificationActorID = actorID
+	return domain.NotificationChannel{ID: channelID, TenantID: tenantID, State: domain.StateActive, SecretHint: "configured"}, nil
+}
+func (f *fakeControlStore) DeleteNotificationChannel(_ context.Context, tenantID, channelID, actorID, reason string) (domain.NotificationChannel, error) {
+	f.notificationTenantID = tenantID
+	f.notificationActorID = actorID
+	return domain.NotificationChannel{ID: channelID, TenantID: tenantID, State: domain.StateDisabled, SecretHint: "configured"}, nil
+}
+func (f *fakeControlStore) TestNotificationChannel(_ context.Context, tenantID, channelID, actorID, reason string) (domain.NotificationDelivery, error) {
+	f.notificationTenantID = tenantID
+	f.notificationActorID = actorID
+	return domain.NotificationDelivery{ID: "ndel_1", TenantID: tenantID, ChannelID: channelID, Transition: "test", State: domain.SignalDeliveryScheduled}, nil
+}
+func (f *fakeControlStore) ListNotificationDeliveries(_ context.Context, tenantID, state string, limit int) ([]domain.NotificationDelivery, error) {
+	f.notificationTenantID = tenantID
+	return []domain.NotificationDelivery{{ID: "ndel_1", TenantID: tenantID, ChannelID: "nch_1", Transition: "opened", State: state}}, nil
+}
+func (f *fakeControlStore) ListNotificationDeliveryAttempts(_ context.Context, tenantID, deliveryID string, limit int) ([]domain.NotificationDeliveryAttempt, error) {
+	f.notificationTenantID = tenantID
+	return []domain.NotificationDeliveryAttempt{{ID: "natt_1", TenantID: tenantID, DeliveryID: deliveryID, FailureClass: "success"}}, nil
+}
+func (f *fakeControlStore) RetryNotificationDelivery(_ context.Context, tenantID, deliveryID, actorID, reason string) (domain.NotificationDelivery, error) {
+	f.notificationTenantID = tenantID
+	f.notificationActorID = actorID
+	return domain.NotificationDelivery{ID: deliveryID, TenantID: tenantID, State: domain.SignalDeliveryScheduled}, nil
 }
 func (f *fakeControlStore) ListAuditEvents(context.Context, string, int) ([]domain.AuditEvent, error) {
 	return nil, nil

@@ -93,6 +93,15 @@ type ControlStore interface {
 	ListAlertFirings(ctx context.Context, tenantID, state string, limit int) ([]domain.AlertFiring, error)
 	GetAlertFiring(ctx context.Context, tenantID, firingID string) (domain.AlertFiring, error)
 	AcknowledgeAlertFiring(ctx context.Context, tenantID, firingID, actorID, reason string) (domain.AlertFiring, error)
+	CreateNotificationChannel(ctx context.Context, tenantID, actorID string, req CreateNotificationChannelRequest) (domain.NotificationChannel, error)
+	ListNotificationChannels(ctx context.Context, tenantID string, limit int) ([]domain.NotificationChannel, error)
+	GetNotificationChannel(ctx context.Context, tenantID, channelID string) (domain.NotificationChannel, error)
+	UpdateNotificationChannel(ctx context.Context, tenantID, channelID, actorID string, req UpdateNotificationChannelRequest) (domain.NotificationChannel, error)
+	DeleteNotificationChannel(ctx context.Context, tenantID, channelID, actorID, reason string) (domain.NotificationChannel, error)
+	TestNotificationChannel(ctx context.Context, tenantID, channelID, actorID, reason string) (domain.NotificationDelivery, error)
+	ListNotificationDeliveries(ctx context.Context, tenantID, state string, limit int) ([]domain.NotificationDelivery, error)
+	ListNotificationDeliveryAttempts(ctx context.Context, tenantID, deliveryID string, limit int) ([]domain.NotificationDeliveryAttempt, error)
+	RetryNotificationDelivery(ctx context.Context, tenantID, deliveryID, actorID, reason string) (domain.NotificationDelivery, error)
 	ListAuditEvents(ctx context.Context, tenantID string, limit int) ([]domain.AuditEvent, error)
 	GetAuditChainHead(ctx context.Context, tenantID string) (domain.AuditChainHead, error)
 	VerifyAuditChain(ctx context.Context, tenantID string, req AuditChainVerifyRequest) (domain.AuditChainVerification, error)
@@ -466,6 +475,7 @@ type CreateAlertRuleRequest struct {
 	WindowSeconds int               `json:"window_seconds,omitempty"`
 	Dimensions    map[string]string `json:"dimensions,omitempty"`
 	State         string            `json:"state,omitempty"`
+	ChannelIDs    []string          `json:"channel_ids,omitempty"`
 }
 
 type UpdateAlertRuleRequest struct {
@@ -475,7 +485,23 @@ type UpdateAlertRuleRequest struct {
 	WindowSeconds *int              `json:"window_seconds,omitempty"`
 	Dimensions    map[string]string `json:"dimensions,omitempty"`
 	State         *string           `json:"state,omitempty"`
+	ChannelIDs    *[]string         `json:"channel_ids,omitempty"`
 	Reason        string            `json:"reason"`
+}
+
+type CreateNotificationChannelRequest struct {
+	Name          string `json:"name"`
+	ChannelType   string `json:"channel_type,omitempty"`
+	URL           string `json:"url"`
+	SigningSecret string `json:"signing_secret"`
+}
+
+type UpdateNotificationChannelRequest struct {
+	Name          *string `json:"name,omitempty"`
+	URL           *string `json:"url,omitempty"`
+	SigningSecret *string `json:"signing_secret,omitempty"`
+	State         *string `json:"state,omitempty"`
+	Reason        string  `json:"reason"`
 }
 
 type EvidenceExportDownload struct {
@@ -1493,6 +1519,120 @@ func (s *ControlService) AcknowledgeAlertFiring(ctx context.Context, actor authz
 	return s.store.AcknowledgeAlertFiring(ctx, actor.TenantID, firingID, actor.ID, req.Reason)
 }
 
+func (s *ControlService) CreateNotificationChannel(ctx context.Context, actor authz.Actor, req CreateNotificationChannelRequest) (domain.NotificationChannel, ssrf.Result, error) {
+	if !authz.Can(actor, "ops:write", actor.TenantID) {
+		return domain.NotificationChannel{}, ssrf.Result{}, ErrForbidden
+	}
+	if err := normalizeCreateNotificationChannel(&req); err != nil {
+		return domain.NotificationChannel{}, ssrf.Result{}, err
+	}
+	result := s.ssrfValidator.Validate(ctx, req.URL, ssrf.DefaultPolicy())
+	if !result.Allowed {
+		return domain.NotificationChannel{}, result, fmt.Errorf("%w: notification_channel_url_blocked", ErrInvalidInput)
+	}
+	req.URL = result.NormalizedURL
+	item, err := s.store.CreateNotificationChannel(ctx, actor.TenantID, actor.ID, req)
+	return item, result, err
+}
+
+func (s *ControlService) ListNotificationChannels(ctx context.Context, actor authz.Actor, limit int) ([]domain.NotificationChannel, error) {
+	if !authz.Can(actor, "ops:read", actor.TenantID) {
+		return nil, ErrForbidden
+	}
+	return s.store.ListNotificationChannels(ctx, actor.TenantID, normalizeLimit(limit))
+}
+
+func (s *ControlService) GetNotificationChannel(ctx context.Context, actor authz.Actor, channelID string) (domain.NotificationChannel, error) {
+	if !authz.Can(actor, "ops:read", actor.TenantID) {
+		return domain.NotificationChannel{}, ErrForbidden
+	}
+	if strings.TrimSpace(channelID) == "" {
+		return domain.NotificationChannel{}, fmt.Errorf("%w: channel_id is required", ErrInvalidInput)
+	}
+	return s.store.GetNotificationChannel(ctx, actor.TenantID, channelID)
+}
+
+func (s *ControlService) UpdateNotificationChannel(ctx context.Context, actor authz.Actor, channelID string, req UpdateNotificationChannelRequest) (domain.NotificationChannel, ssrf.Result, error) {
+	if !authz.Can(actor, "ops:write", actor.TenantID) {
+		return domain.NotificationChannel{}, ssrf.Result{}, ErrForbidden
+	}
+	if strings.TrimSpace(channelID) == "" || strings.TrimSpace(req.Reason) == "" {
+		return domain.NotificationChannel{}, ssrf.Result{}, fmt.Errorf("%w: channel_id and reason are required", ErrInvalidInput)
+	}
+	if err := normalizeUpdateNotificationChannel(&req); err != nil {
+		return domain.NotificationChannel{}, ssrf.Result{}, err
+	}
+	var result ssrf.Result
+	if req.URL != nil {
+		result = s.ssrfValidator.Validate(ctx, *req.URL, ssrf.DefaultPolicy())
+		if !result.Allowed {
+			return domain.NotificationChannel{}, result, fmt.Errorf("%w: notification_channel_url_blocked", ErrInvalidInput)
+		}
+		req.URL = &result.NormalizedURL
+	}
+	item, err := s.store.UpdateNotificationChannel(ctx, actor.TenantID, channelID, actor.ID, req)
+	return item, result, err
+}
+
+func (s *ControlService) DeleteNotificationChannel(ctx context.Context, actor authz.Actor, channelID string, req StateChangeRequest) (domain.NotificationChannel, error) {
+	if !authz.Can(actor, "ops:write", actor.TenantID) {
+		return domain.NotificationChannel{}, ErrForbidden
+	}
+	if strings.TrimSpace(channelID) == "" || strings.TrimSpace(req.Reason) == "" {
+		return domain.NotificationChannel{}, fmt.Errorf("%w: channel_id and reason are required", ErrInvalidInput)
+	}
+	return s.store.DeleteNotificationChannel(ctx, actor.TenantID, channelID, actor.ID, req.Reason)
+}
+
+func (s *ControlService) TestNotificationChannel(ctx context.Context, actor authz.Actor, channelID string, req StateChangeRequest) (domain.NotificationDelivery, error) {
+	if !authz.Can(actor, "ops:write", actor.TenantID) {
+		return domain.NotificationDelivery{}, ErrForbidden
+	}
+	if strings.TrimSpace(channelID) == "" || strings.TrimSpace(req.Reason) == "" {
+		return domain.NotificationDelivery{}, fmt.Errorf("%w: channel_id and reason are required", ErrInvalidInput)
+	}
+	channel, err := s.store.GetNotificationChannel(ctx, actor.TenantID, channelID)
+	if err != nil {
+		return domain.NotificationDelivery{}, err
+	}
+	result := s.ssrfValidator.Validate(ctx, channel.URL, ssrf.DefaultPolicy())
+	if !result.Allowed {
+		return domain.NotificationDelivery{}, fmt.Errorf("%w: notification_channel_url_blocked", ErrInvalidInput)
+	}
+	return s.store.TestNotificationChannel(ctx, actor.TenantID, channelID, actor.ID, req.Reason)
+}
+
+func (s *ControlService) ListNotificationDeliveries(ctx context.Context, actor authz.Actor, state string, limit int) ([]domain.NotificationDelivery, error) {
+	if !authz.Can(actor, "ops:read", actor.TenantID) {
+		return nil, ErrForbidden
+	}
+	state = strings.TrimSpace(state)
+	if state != "" && !validSignalDeliveryState(state) {
+		return nil, fmt.Errorf("%w: notification delivery state is invalid", ErrInvalidInput)
+	}
+	return s.store.ListNotificationDeliveries(ctx, actor.TenantID, state, normalizeLimit(limit))
+}
+
+func (s *ControlService) ListNotificationDeliveryAttempts(ctx context.Context, actor authz.Actor, deliveryID string, limit int) ([]domain.NotificationDeliveryAttempt, error) {
+	if !authz.Can(actor, "ops:read", actor.TenantID) {
+		return nil, ErrForbidden
+	}
+	if strings.TrimSpace(deliveryID) == "" {
+		return nil, fmt.Errorf("%w: delivery_id is required", ErrInvalidInput)
+	}
+	return s.store.ListNotificationDeliveryAttempts(ctx, actor.TenantID, deliveryID, normalizeLimit(limit))
+}
+
+func (s *ControlService) RetryNotificationDelivery(ctx context.Context, actor authz.Actor, deliveryID string, req StateChangeRequest) (domain.NotificationDelivery, error) {
+	if !authz.Can(actor, "ops:write", actor.TenantID) {
+		return domain.NotificationDelivery{}, ErrForbidden
+	}
+	if strings.TrimSpace(deliveryID) == "" || strings.TrimSpace(req.Reason) == "" {
+		return domain.NotificationDelivery{}, fmt.Errorf("%w: delivery_id and reason are required", ErrInvalidInput)
+	}
+	return s.store.RetryNotificationDelivery(ctx, actor.TenantID, deliveryID, actor.ID, req.Reason)
+}
+
 func (s *ControlService) DryRunReplay(ctx context.Context, actor authz.Actor, req ReplayRequest) (ReplayDryRun, error) {
 	if !authz.Can(actor, "replay:read", actor.TenantID) {
 		return ReplayDryRun{}, ErrForbidden
@@ -2008,6 +2148,11 @@ func normalizeCreateAlertRule(req *CreateAlertRuleRequest) error {
 	if err := validateAlertDimensions(req.Dimensions); err != nil {
 		return err
 	}
+	channelIDs, err := normalizeIDList(req.ChannelIDs, 16, "channel_ids")
+	if err != nil {
+		return err
+	}
+	req.ChannelIDs = channelIDs
 	return nil
 }
 
@@ -2041,7 +2186,92 @@ func normalizeUpdateAlertRule(req *UpdateAlertRuleRequest) error {
 			return err
 		}
 	}
+	if req.ChannelIDs != nil {
+		channelIDs, err := normalizeIDList(*req.ChannelIDs, 16, "channel_ids")
+		if err != nil {
+			return err
+		}
+		req.ChannelIDs = &channelIDs
+	}
 	return nil
+}
+
+func normalizeCreateNotificationChannel(req *CreateNotificationChannelRequest) error {
+	req.Name = strings.TrimSpace(req.Name)
+	req.ChannelType = strings.TrimSpace(req.ChannelType)
+	req.URL = strings.TrimSpace(req.URL)
+	req.SigningSecret = strings.TrimSpace(req.SigningSecret)
+	if req.Name == "" {
+		return fmt.Errorf("%w: name is required", ErrInvalidInput)
+	}
+	if req.ChannelType == "" {
+		req.ChannelType = domain.NotificationChannelWebhook
+	}
+	if req.ChannelType != domain.NotificationChannelWebhook {
+		return fmt.Errorf("%w: channel_type must be webhook", ErrInvalidInput)
+	}
+	if req.URL == "" {
+		return fmt.Errorf("%w: url is required", ErrInvalidInput)
+	}
+	if len(req.SigningSecret) < 16 {
+		return fmt.Errorf("%w: signing_secret must be at least 16 bytes", ErrInvalidInput)
+	}
+	return nil
+}
+
+func normalizeUpdateNotificationChannel(req *UpdateNotificationChannelRequest) error {
+	if req.Name == nil && req.URL == nil && req.SigningSecret == nil && req.State == nil {
+		return fmt.Errorf("%w: at least one channel field is required", ErrInvalidInput)
+	}
+	if req.Name != nil {
+		name := strings.TrimSpace(*req.Name)
+		if name == "" {
+			return fmt.Errorf("%w: name cannot be empty", ErrInvalidInput)
+		}
+		req.Name = &name
+	}
+	if req.URL != nil {
+		rawURL := strings.TrimSpace(*req.URL)
+		if rawURL == "" {
+			return fmt.Errorf("%w: url cannot be empty", ErrInvalidInput)
+		}
+		req.URL = &rawURL
+	}
+	if req.SigningSecret != nil {
+		secret := strings.TrimSpace(*req.SigningSecret)
+		if len(secret) < 16 {
+			return fmt.Errorf("%w: signing_secret must be at least 16 bytes", ErrInvalidInput)
+		}
+		req.SigningSecret = &secret
+	}
+	if req.State != nil {
+		state := strings.TrimSpace(*req.State)
+		if state != domain.StateActive && state != domain.StateDisabled {
+			return fmt.Errorf("%w: channel state must be active or disabled", ErrInvalidInput)
+		}
+		req.State = &state
+	}
+	return nil
+}
+
+func normalizeIDList(values []string, max int, field string) ([]string, error) {
+	if len(values) > max {
+		return nil, fmt.Errorf("%w: %s cannot exceed %d entries", ErrInvalidInput, field, max)
+	}
+	seen := map[string]bool{}
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			return nil, fmt.Errorf("%w: %s cannot contain empty ids", ErrInvalidInput, field)
+		}
+		if seen[value] {
+			continue
+		}
+		seen[value] = true
+		out = append(out, value)
+	}
+	return out, nil
 }
 
 func validateAlertDimensions(dimensions map[string]string) error {
@@ -2105,6 +2335,15 @@ func validComparator(comparator string) bool {
 func validAlertFiringState(state string) bool {
 	switch state {
 	case domain.AlertFiringOpen, domain.AlertFiringAcknowledged, domain.AlertFiringResolved:
+		return true
+	default:
+		return false
+	}
+}
+
+func validSignalDeliveryState(state string) bool {
+	switch state {
+	case domain.SignalDeliveryScheduled, domain.SignalDeliveryRunning, domain.SignalDeliverySucceeded, domain.SignalDeliveryFailed:
 		return true
 	default:
 		return false

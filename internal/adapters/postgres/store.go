@@ -2572,7 +2572,15 @@ func (s *Store) CreateAlertRule(ctx context.Context, tenantID, actorID string, r
 	if err != nil {
 		return domain.AlertRule{}, err
 	}
-	item, err := scanAlertRule(s.pool.QueryRow(ctx, `
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return domain.AlertRule{}, err
+	}
+	defer rollback(ctx, tx)
+	if err := s.requireActiveNotificationChannels(ctx, tx, tenantID, req.ChannelIDs); err != nil {
+		return domain.AlertRule{}, err
+	}
+	item, err := scanAlertRule(tx.QueryRow(ctx, `
 		INSERT INTO alert_rules(id, tenant_id, name, rule_type, metric_name, threshold, comparator, window_seconds, dimensions, state, created_by)
 		VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
 		RETURNING id, tenant_id, name, rule_type, metric_name, threshold, comparator, window_seconds, dimensions, state, created_by, created_at, updated_at`,
@@ -2580,7 +2588,16 @@ func (s *Store) CreateAlertRule(ctx context.Context, tenantID, actorID string, r
 	if err != nil {
 		return domain.AlertRule{}, err
 	}
-	_ = s.recordAuditEvent(ctx, auditEventInput{TenantID: tenantID, ActorID: actorID, Action: "alert_rule.created", Resource: "alert_rule", ResourceID: item.ID, Reason: item.Name})
+	if err := s.setAlertRuleChannelsTx(ctx, tx, tenantID, item.ID, req.ChannelIDs); err != nil {
+		return domain.AlertRule{}, err
+	}
+	if _, err := recordAuditEventTx(ctx, tx, auditEventInput{TenantID: tenantID, ActorID: actorID, Action: "alert_rule.created", Resource: "alert_rule", ResourceID: item.ID, Reason: item.Name}); err != nil {
+		return domain.AlertRule{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return domain.AlertRule{}, err
+	}
+	item.ChannelIDs = req.ChannelIDs
 	return item, nil
 }
 
@@ -2603,7 +2620,10 @@ func (s *Store) ListAlertRules(ctx context.Context, tenantID string, limit int) 
 		}
 		out = append(out, item)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return s.attachAlertRuleChannels(ctx, tenantID, out)
 }
 
 func (s *Store) GetAlertRule(ctx context.Context, tenantID, alertID string) (domain.AlertRule, error) {
@@ -2614,6 +2634,10 @@ func (s *Store) GetAlertRule(ctx context.Context, tenantID, alertID string) (dom
 	if errors.Is(err, pgx.ErrNoRows) {
 		return domain.AlertRule{}, app.ErrNotFound
 	}
+	if err != nil {
+		return domain.AlertRule{}, err
+	}
+	item.ChannelIDs, err = s.listAlertRuleChannelIDs(ctx, tenantID, alertID)
 	return item, err
 }
 
@@ -2644,7 +2668,17 @@ func (s *Store) UpdateAlertRule(ctx context.Context, tenantID, alertID, actorID 
 	if err != nil {
 		return domain.AlertRule{}, err
 	}
-	item, err := scanAlertRule(s.pool.QueryRow(ctx, `
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return domain.AlertRule{}, err
+	}
+	defer rollback(ctx, tx)
+	if req.ChannelIDs != nil {
+		if err := s.requireActiveNotificationChannels(ctx, tx, tenantID, *req.ChannelIDs); err != nil {
+			return domain.AlertRule{}, err
+		}
+	}
+	item, err := scanAlertRule(tx.QueryRow(ctx, `
 		UPDATE alert_rules
 		SET name=$3, threshold=$4, comparator=$5, window_seconds=$6, dimensions=$7, state=$8, updated_at=now()
 		WHERE tenant_id=$1 AND id=$2
@@ -2656,12 +2690,30 @@ func (s *Store) UpdateAlertRule(ctx context.Context, tenantID, alertID, actorID 
 	if err != nil {
 		return domain.AlertRule{}, err
 	}
-	_ = s.recordAuditEvent(ctx, auditEventInput{TenantID: tenantID, ActorID: actorID, Action: "alert_rule.updated", Resource: "alert_rule", ResourceID: alertID, Reason: req.Reason})
+	if req.ChannelIDs != nil {
+		if err := s.setAlertRuleChannelsTx(ctx, tx, tenantID, alertID, *req.ChannelIDs); err != nil {
+			return domain.AlertRule{}, err
+		}
+		item.ChannelIDs = *req.ChannelIDs
+	} else {
+		item.ChannelIDs = current.ChannelIDs
+	}
+	if _, err := recordAuditEventTx(ctx, tx, auditEventInput{TenantID: tenantID, ActorID: actorID, Action: "alert_rule.updated", Resource: "alert_rule", ResourceID: alertID, Reason: req.Reason}); err != nil {
+		return domain.AlertRule{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return domain.AlertRule{}, err
+	}
 	return item, nil
 }
 
 func (s *Store) DeleteAlertRule(ctx context.Context, tenantID, alertID, actorID, reason string) (domain.AlertRule, error) {
-	item, err := scanAlertRule(s.pool.QueryRow(ctx, `
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return domain.AlertRule{}, err
+	}
+	defer rollback(ctx, tx)
+	item, err := scanAlertRule(tx.QueryRow(ctx, `
 		UPDATE alert_rules
 		SET state='disabled', updated_at=now()
 		WHERE tenant_id=$1 AND id=$2
@@ -2673,7 +2725,15 @@ func (s *Store) DeleteAlertRule(ctx context.Context, tenantID, alertID, actorID,
 	if err != nil {
 		return domain.AlertRule{}, err
 	}
-	_ = s.recordAuditEvent(ctx, auditEventInput{TenantID: tenantID, ActorID: actorID, Action: "alert_rule.disabled", Resource: "alert_rule", ResourceID: alertID, Reason: reason})
+	if item.ChannelIDs, err = s.listAlertRuleChannelIDsTx(ctx, tx, tenantID, alertID); err != nil {
+		return domain.AlertRule{}, err
+	}
+	if _, err := recordAuditEventTx(ctx, tx, auditEventInput{TenantID: tenantID, ActorID: actorID, Action: "alert_rule.disabled", Resource: "alert_rule", ResourceID: alertID, Reason: reason}); err != nil {
+		return domain.AlertRule{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return domain.AlertRule{}, err
+	}
 	return item, nil
 }
 
@@ -2719,7 +2779,12 @@ func (s *Store) GetAlertFiring(ctx context.Context, tenantID, firingID string) (
 }
 
 func (s *Store) AcknowledgeAlertFiring(ctx context.Context, tenantID, firingID, actorID, reason string) (domain.AlertFiring, error) {
-	item, err := scanAlertFiring(s.pool.QueryRow(ctx, `
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return domain.AlertFiring{}, err
+	}
+	defer rollback(ctx, tx)
+	item, err := scanAlertFiring(tx.QueryRow(ctx, `
 		UPDATE alert_firings
 		SET state='acknowledged', acknowledged_by=$3, acknowledged_at=now(), reason=$4, updated_at=now()
 		WHERE tenant_id=$1 AND id=$2 AND state='open'
@@ -2732,8 +2797,226 @@ func (s *Store) AcknowledgeAlertFiring(ctx context.Context, tenantID, firingID, 
 	if err != nil {
 		return domain.AlertFiring{}, err
 	}
-	_ = s.recordAuditEvent(ctx, auditEventInput{TenantID: tenantID, ActorID: actorID, Action: "alert_firing.acknowledged", Resource: "alert_firing", ResourceID: firingID, Reason: reason})
-	return normalizeAlertFiring(item), nil
+	item = normalizeAlertFiring(item)
+	if _, err := recordAuditEventTx(ctx, tx, auditEventInput{TenantID: tenantID, ActorID: actorID, Action: "alert_firing.acknowledged", Resource: "alert_firing", ResourceID: firingID, Reason: reason}); err != nil {
+		return domain.AlertFiring{}, err
+	}
+	if err := s.enqueueNotificationDeliveriesTx(ctx, tx, item, domain.AlertFiringAcknowledged, reason); err != nil {
+		return domain.AlertFiring{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return domain.AlertFiring{}, err
+	}
+	return item, nil
+}
+
+func (s *Store) CreateNotificationChannel(ctx context.Context, tenantID, actorID string, req app.CreateNotificationChannelRequest) (domain.NotificationChannel, error) {
+	encrypted, err := s.box.Encrypt([]byte(req.SigningSecret))
+	if err != nil {
+		return domain.NotificationChannel{}, err
+	}
+	item, err := scanNotificationChannel(s.pool.QueryRow(ctx, `
+		INSERT INTO notification_channels(id, tenant_id, name, channel_type, url, state, encrypted_secret, secret_hint, created_by)
+		VALUES($1,$2,$3,$4,$5,'active',$6,'configured',$7)
+		RETURNING id, tenant_id, name, channel_type, url, state, secret_hint, created_by, created_at, updated_at`,
+		mustID("nch"), tenantID, req.Name, req.ChannelType, req.URL, encrypted, actorID))
+	if err != nil {
+		return domain.NotificationChannel{}, err
+	}
+	_ = s.recordAuditEvent(ctx, auditEventInput{TenantID: tenantID, ActorID: actorID, Action: "notification_channel.created", Resource: "notification_channel", ResourceID: item.ID, Reason: item.Name})
+	return item, nil
+}
+
+func (s *Store) ListNotificationChannels(ctx context.Context, tenantID string, limit int) ([]domain.NotificationChannel, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT id, tenant_id, name, channel_type, url, state, secret_hint, created_by, created_at, updated_at
+		FROM notification_channels
+		WHERE tenant_id=$1
+		ORDER BY created_at DESC
+		LIMIT $2`, tenantID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []domain.NotificationChannel
+	for rows.Next() {
+		item, err := scanNotificationChannel(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, item)
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) GetNotificationChannel(ctx context.Context, tenantID, channelID string) (domain.NotificationChannel, error) {
+	item, err := scanNotificationChannel(s.pool.QueryRow(ctx, `
+		SELECT id, tenant_id, name, channel_type, url, state, secret_hint, created_by, created_at, updated_at
+		FROM notification_channels
+		WHERE tenant_id=$1 AND id=$2`, tenantID, channelID))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return domain.NotificationChannel{}, app.ErrNotFound
+	}
+	return item, err
+}
+
+func (s *Store) UpdateNotificationChannel(ctx context.Context, tenantID, channelID, actorID string, req app.UpdateNotificationChannelRequest) (domain.NotificationChannel, error) {
+	current, err := s.GetNotificationChannel(ctx, tenantID, channelID)
+	if err != nil {
+		return domain.NotificationChannel{}, err
+	}
+	if req.Name != nil {
+		current.Name = *req.Name
+	}
+	if req.URL != nil {
+		current.URL = *req.URL
+	}
+	if req.State != nil {
+		current.State = *req.State
+	}
+	var encrypted []byte
+	updateSecret := req.SigningSecret != nil
+	if updateSecret {
+		encrypted, err = s.box.Encrypt([]byte(*req.SigningSecret))
+		if err != nil {
+			return domain.NotificationChannel{}, err
+		}
+	}
+	query := `
+		UPDATE notification_channels
+		SET name=$3, url=$4, state=$5, updated_at=now()
+		WHERE tenant_id=$1 AND id=$2
+		RETURNING id, tenant_id, name, channel_type, url, state, secret_hint, created_by, created_at, updated_at`
+	args := []any{tenantID, channelID, current.Name, current.URL, current.State}
+	if updateSecret {
+		query = `
+			UPDATE notification_channels
+			SET name=$3, url=$4, state=$5, encrypted_secret=$6, secret_hint='configured', updated_at=now()
+			WHERE tenant_id=$1 AND id=$2
+			RETURNING id, tenant_id, name, channel_type, url, state, secret_hint, created_by, created_at, updated_at`
+		args = append(args, encrypted)
+	}
+	item, err := scanNotificationChannel(s.pool.QueryRow(ctx, query, args...))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return domain.NotificationChannel{}, app.ErrNotFound
+	}
+	if err != nil {
+		return domain.NotificationChannel{}, err
+	}
+	_ = s.recordAuditEvent(ctx, auditEventInput{TenantID: tenantID, ActorID: actorID, Action: "notification_channel.updated", Resource: "notification_channel", ResourceID: channelID, Reason: req.Reason})
+	return item, nil
+}
+
+func (s *Store) DeleteNotificationChannel(ctx context.Context, tenantID, channelID, actorID, reason string) (domain.NotificationChannel, error) {
+	item, err := scanNotificationChannel(s.pool.QueryRow(ctx, `
+		UPDATE notification_channels
+		SET state='disabled', updated_at=now()
+		WHERE tenant_id=$1 AND id=$2
+		RETURNING id, tenant_id, name, channel_type, url, state, secret_hint, created_by, created_at, updated_at`, tenantID, channelID))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return domain.NotificationChannel{}, app.ErrNotFound
+	}
+	if err != nil {
+		return domain.NotificationChannel{}, err
+	}
+	_ = s.recordAuditEvent(ctx, auditEventInput{TenantID: tenantID, ActorID: actorID, Action: "notification_channel.disabled", Resource: "notification_channel", ResourceID: channelID, Reason: reason})
+	return item, nil
+}
+
+func (s *Store) TestNotificationChannel(ctx context.Context, tenantID, channelID, actorID, reason string) (domain.NotificationDelivery, error) {
+	channel, err := s.GetNotificationChannel(ctx, tenantID, channelID)
+	if err != nil {
+		return domain.NotificationDelivery{}, err
+	}
+	if channel.State != domain.StateActive {
+		return domain.NotificationDelivery{}, fmt.Errorf("%w: notification channel disabled", app.ErrInvalidInput)
+	}
+	payload := map[string]any{
+		"type":       "notification_channel.test",
+		"tenant_id":  tenantID,
+		"channel_id": channelID,
+		"reason":     reason,
+		"created_at": time.Now().UTC(),
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return domain.NotificationDelivery{}, err
+	}
+	item, err := s.insertNotificationDelivery(ctx, tenantID, channelID, "", "test", body)
+	if err != nil {
+		return domain.NotificationDelivery{}, err
+	}
+	_ = s.recordAuditEvent(ctx, auditEventInput{TenantID: tenantID, ActorID: actorID, Action: "notification_channel.test_requested", Resource: "notification_channel", ResourceID: channelID, Reason: reason})
+	return item, nil
+}
+
+func (s *Store) ListNotificationDeliveries(ctx context.Context, tenantID, state string, limit int) ([]domain.NotificationDelivery, error) {
+	query := `
+		SELECT id, tenant_id, channel_id, firing_id, transition, state, body_sha256, attempt_count,
+		       next_attempt_at, COALESCE(last_attempt_at, 'epoch'::timestamptz), created_at, updated_at
+		FROM notification_deliveries
+		WHERE tenant_id=$1`
+	args := []any{tenantID}
+	if strings.TrimSpace(state) != "" {
+		query += " AND state=$2"
+		args = append(args, strings.TrimSpace(state))
+	}
+	query += " ORDER BY created_at DESC LIMIT $" + strconv.Itoa(len(args)+1)
+	args = append(args, limit)
+	rows, err := s.pool.Query(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []domain.NotificationDelivery
+	for rows.Next() {
+		item, err := scanNotificationDelivery(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, normalizeNotificationDelivery(item))
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) ListNotificationDeliveryAttempts(ctx context.Context, tenantID, deliveryID string, limit int) ([]domain.NotificationDeliveryAttempt, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT id, tenant_id, delivery_id, status_code, failure_class, response_body, response_truncated, error, created_at
+		FROM notification_delivery_attempts
+		WHERE tenant_id=$1 AND delivery_id=$2
+		ORDER BY created_at DESC
+		LIMIT $3`, tenantID, deliveryID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []domain.NotificationDeliveryAttempt
+	for rows.Next() {
+		item, err := scanNotificationDeliveryAttempt(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, item)
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) RetryNotificationDelivery(ctx context.Context, tenantID, deliveryID, actorID, reason string) (domain.NotificationDelivery, error) {
+	item, err := scanNotificationDelivery(s.pool.QueryRow(ctx, `
+		UPDATE notification_deliveries
+		SET state='scheduled', next_attempt_at=now(), worker_id='', updated_at=now()
+		WHERE tenant_id=$1 AND id=$2 AND state <> 'succeeded'
+		RETURNING id, tenant_id, channel_id, firing_id, transition, state, body_sha256, attempt_count,
+		          next_attempt_at, COALESCE(last_attempt_at, 'epoch'::timestamptz), created_at, updated_at`,
+		tenantID, deliveryID))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return domain.NotificationDelivery{}, app.ErrNotFound
+	}
+	if err != nil {
+		return domain.NotificationDelivery{}, err
+	}
+	_ = s.recordAuditEvent(ctx, auditEventInput{TenantID: tenantID, ActorID: actorID, Action: "notification_delivery.retry_requested", Resource: "notification_delivery", ResourceID: deliveryID, Reason: reason})
+	return normalizeNotificationDelivery(item), nil
 }
 
 func (s *Store) EvaluateAlertRules(ctx context.Context, workerID string, limit int) error {
@@ -2814,8 +3097,13 @@ func compareAlertValue(observed float64, comparator string, threshold float64) b
 }
 
 func (s *Store) openOrUpdateAlertFiring(ctx context.Context, rule domain.AlertRule, observed float64, workerID string) error {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer rollback(ctx, tx)
 	var id string
-	err := s.pool.QueryRow(ctx, `
+	err = tx.QueryRow(ctx, `
 		INSERT INTO alert_firings(id, tenant_id, rule_id, state, observed_value, threshold, reason)
 		SELECT $1,$2,$3,'open',$4,$5,$6
 		WHERE NOT EXISTS (
@@ -2827,34 +3115,218 @@ func (s *Store) openOrUpdateAlertFiring(ctx context.Context, rule domain.AlertRu
 		return err
 	}
 	if id != "" {
-		_ = s.recordAuditEvent(ctx, auditEventInput{TenantID: rule.TenantID, ActorID: workerID, Action: "alert_firing.opened", Resource: "alert_firing", ResourceID: id, Reason: rule.Name})
+		firing := domain.AlertFiring{ID: id, TenantID: rule.TenantID, RuleID: rule.ID, State: domain.AlertFiringOpen, ObservedValue: observed, Threshold: rule.Threshold, Reason: "threshold breached", StartedAt: time.Now().UTC(), LastEvaluatedAt: time.Now().UTC()}
+		if _, err := recordAuditEventTx(ctx, tx, auditEventInput{TenantID: rule.TenantID, ActorID: workerID, Action: "alert_firing.opened", Resource: "alert_firing", ResourceID: id, Reason: rule.Name}); err != nil {
+			return err
+		}
+		if err := s.enqueueNotificationDeliveriesTx(ctx, tx, firing, domain.AlertFiringOpen, rule.Name); err != nil {
+			return err
+		}
 	}
-	_, err = s.pool.Exec(ctx, `
+	_, err = tx.Exec(ctx, `
 		UPDATE alert_firings
 		SET observed_value=$3, threshold=$4, last_evaluated_at=now(), updated_at=now()
 		WHERE tenant_id=$1 AND rule_id=$2 AND state IN ('open', 'acknowledged')`,
 		rule.TenantID, rule.ID, observed, rule.Threshold)
-	return err
+	if err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
 }
 
 func (s *Store) resolveAlertFirings(ctx context.Context, rule domain.AlertRule, observed float64, workerID string) error {
-	rows, err := s.pool.Query(ctx, `
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer rollback(ctx, tx)
+	rows, err := tx.Query(ctx, `
 		UPDATE alert_firings
 		SET state='resolved', observed_value=$3, last_evaluated_at=now(), resolved_at=now(), updated_at=now()
 		WHERE tenant_id=$1 AND rule_id=$2 AND state IN ('open', 'acknowledged')
-		RETURNING id`, rule.TenantID, rule.ID, observed)
+		RETURNING id, tenant_id, rule_id, state, observed_value, threshold, reason, started_at, last_evaluated_at,
+		          acknowledged_by, COALESCE(acknowledged_at, 'epoch'::timestamptz), COALESCE(resolved_at, 'epoch'::timestamptz), updated_at`,
+		rule.TenantID, rule.ID, observed)
 	if err != nil {
 		return err
 	}
 	defer rows.Close()
 	for rows.Next() {
+		firing, err := scanAlertFiring(rows)
+		if err != nil {
+			return err
+		}
+		firing = normalizeAlertFiring(firing)
+		if _, err := recordAuditEventTx(ctx, tx, auditEventInput{TenantID: rule.TenantID, ActorID: workerID, Action: "alert_firing.resolved", Resource: "alert_firing", ResourceID: firing.ID, Reason: rule.Name}); err != nil {
+			return err
+		}
+		if err := s.enqueueNotificationDeliveriesTx(ctx, tx, firing, domain.AlertFiringResolved, rule.Name); err != nil {
+			return err
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+func (s *Store) requireActiveNotificationChannels(ctx context.Context, tx pgx.Tx, tenantID string, channelIDs []string) error {
+	if len(channelIDs) == 0 {
+		return nil
+	}
+	rows, err := tx.Query(ctx, `
+		SELECT id
+		FROM notification_channels
+		WHERE tenant_id=$1 AND state='active' AND id = ANY($2)`, tenantID, channelIDs)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	seen := map[string]bool{}
+	for rows.Next() {
 		var id string
 		if err := rows.Scan(&id); err != nil {
 			return err
 		}
-		_ = s.recordAuditEvent(ctx, auditEventInput{TenantID: rule.TenantID, ActorID: workerID, Action: "alert_firing.resolved", Resource: "alert_firing", ResourceID: id, Reason: rule.Name})
+		seen[id] = true
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	for _, id := range channelIDs {
+		if !seen[id] {
+			return fmt.Errorf("%w: notification channel is missing, disabled, or belongs to another tenant", app.ErrInvalidInput)
+		}
+	}
+	return nil
+}
+
+func (s *Store) setAlertRuleChannelsTx(ctx context.Context, tx pgx.Tx, tenantID, alertRuleID string, channelIDs []string) error {
+	if _, err := tx.Exec(ctx, `DELETE FROM alert_rule_channels WHERE tenant_id=$1 AND alert_rule_id=$2`, tenantID, alertRuleID); err != nil {
+		return err
+	}
+	for _, channelID := range channelIDs {
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO alert_rule_channels(tenant_id, alert_rule_id, channel_id)
+			VALUES($1,$2,$3)
+			ON CONFLICT DO NOTHING`, tenantID, alertRuleID, channelID); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *Store) attachAlertRuleChannels(ctx context.Context, tenantID string, rules []domain.AlertRule) ([]domain.AlertRule, error) {
+	for i := range rules {
+		channelIDs, err := s.listAlertRuleChannelIDs(ctx, tenantID, rules[i].ID)
+		if err != nil {
+			return nil, err
+		}
+		rules[i].ChannelIDs = channelIDs
+	}
+	return rules, nil
+}
+
+func (s *Store) listAlertRuleChannelIDs(ctx context.Context, tenantID, alertRuleID string) ([]string, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT channel_id
+		FROM alert_rule_channels
+		WHERE tenant_id=$1 AND alert_rule_id=$2
+		ORDER BY channel_id`, tenantID, alertRuleID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		out = append(out, id)
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) listAlertRuleChannelIDsTx(ctx context.Context, tx pgx.Tx, tenantID, alertRuleID string) ([]string, error) {
+	rows, err := tx.Query(ctx, `
+		SELECT channel_id
+		FROM alert_rule_channels
+		WHERE tenant_id=$1 AND alert_rule_id=$2
+		ORDER BY channel_id`, tenantID, alertRuleID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		out = append(out, id)
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) enqueueNotificationDeliveriesTx(ctx context.Context, tx pgx.Tx, firing domain.AlertFiring, transition, reason string) error {
+	rows, err := tx.Query(ctx, `
+		SELECT c.id
+		FROM alert_rule_channels arc
+		JOIN notification_channels c ON c.tenant_id=arc.tenant_id AND c.id=arc.channel_id
+		WHERE arc.tenant_id=$1 AND arc.alert_rule_id=$2 AND c.state='active'
+		ORDER BY c.id`, firing.TenantID, firing.RuleID)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var channelID string
+		if err := rows.Scan(&channelID); err != nil {
+			return err
+		}
+		body, err := notificationPayload(firing, transition, reason)
+		if err != nil {
+			return err
+		}
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO notification_deliveries(id, tenant_id, channel_id, firing_id, transition, state, body, body_sha256)
+			VALUES($1,$2,$3,$4,$5,'scheduled',$6,$7)
+			ON CONFLICT (tenant_id, channel_id, firing_id, transition) WHERE firing_id <> '' DO NOTHING`,
+			mustID("ndel"), firing.TenantID, channelID, firing.ID, transition, body, domain.HashSHA256(body)); err != nil {
+			return err
+		}
 	}
 	return rows.Err()
+}
+
+func notificationPayload(firing domain.AlertFiring, transition, reason string) ([]byte, error) {
+	payload := map[string]any{
+		"type":           "alert." + transition,
+		"tenant_id":      firing.TenantID,
+		"firing_id":      firing.ID,
+		"alert_rule_id":  firing.RuleID,
+		"transition":     transition,
+		"state":          firing.State,
+		"observed_value": firing.ObservedValue,
+		"threshold":      firing.Threshold,
+		"reason":         reason,
+		"occurred_at":    time.Now().UTC(),
+	}
+	return json.Marshal(payload)
+}
+
+func (s *Store) insertNotificationDelivery(ctx context.Context, tenantID, channelID, firingID, transition string, body []byte) (domain.NotificationDelivery, error) {
+	item, err := scanNotificationDelivery(s.pool.QueryRow(ctx, `
+		INSERT INTO notification_deliveries(id, tenant_id, channel_id, firing_id, transition, state, body, body_sha256)
+		VALUES($1,$2,$3,$4,$5,'scheduled',$6,$7)
+		RETURNING id, tenant_id, channel_id, firing_id, transition, state, body_sha256, attempt_count,
+		          next_attempt_at, COALESCE(last_attempt_at, 'epoch'::timestamptz), created_at, updated_at`,
+		mustID("ndel"), tenantID, channelID, firingID, transition, body, domain.HashSHA256(body)))
+	if err != nil {
+		return domain.NotificationDelivery{}, err
+	}
+	return normalizeNotificationDelivery(item), nil
 }
 
 func (s *Store) RefreshMetricsRollups(ctx context.Context, workerID string, limit int) error {
@@ -5323,6 +5795,135 @@ func (s *Store) RecordDeliveryAttempt(ctx context.Context, item worker.DeliveryI
 	return tx.Commit(ctx)
 }
 
+func (s *Store) ClaimNotificationDeliveries(ctx context.Context, workerID string, limit int) ([]worker.SignalDeliveryItem, error) {
+	if limit <= 0 {
+		limit = 10
+	}
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer rollback(ctx, tx)
+	if err := upsertWorkerLease(ctx, tx, workerID); err != nil {
+		return nil, err
+	}
+	rows, err := tx.Query(ctx, `
+		WITH claimed AS (
+			SELECT d.id
+			FROM notification_deliveries d
+			JOIN notification_channels c ON c.tenant_id=d.tenant_id AND c.id=d.channel_id
+			WHERE d.state='scheduled'
+			  AND d.next_attempt_at <= now()
+			  AND c.state='active'
+			ORDER BY d.next_attempt_at ASC, d.created_at ASC, d.id ASC
+			LIMIT $2
+			FOR UPDATE OF d SKIP LOCKED
+		)
+		UPDATE notification_deliveries d
+		SET state='in_progress', worker_id=$1, updated_at=now()
+		FROM claimed
+		WHERE d.id=claimed.id
+		RETURNING d.id, d.tenant_id, d.attempt_count, d.body, d.channel_id`, workerID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []worker.SignalDeliveryItem
+	var channelIDs []string
+	for rows.Next() {
+		var item worker.SignalDeliveryItem
+		var channelID string
+		if err := rows.Scan(&item.ID, &item.TenantID, &item.AttemptCount, &item.Body, &channelID); err != nil {
+			return nil, err
+		}
+		out = append(out, item)
+		channelIDs = append(channelIDs, channelID)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	for i := range out {
+		var encrypted []byte
+		if err := tx.QueryRow(ctx, `
+			SELECT url, encrypted_secret
+			FROM notification_channels
+			WHERE tenant_id=$1 AND id=$2 AND state='active'`, out[i].TenantID, channelIDs[i]).Scan(&out[i].URL, &encrypted); err != nil {
+			return nil, err
+		}
+		secret, err := s.box.Decrypt(encrypted)
+		if err != nil {
+			return nil, err
+		}
+		out[i].Secret = secret
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (s *Store) RecordNotificationDeliveryAttempt(ctx context.Context, item worker.SignalDeliveryItem, result worker.SignalDeliveryResult, deliverErr error) error {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer rollback(ctx, tx)
+	attemptCount := item.AttemptCount + 1
+	state := domain.SignalDeliverySucceeded
+	if deliverErr != nil || result.StatusCode < 200 || result.StatusCode > 299 {
+		state = domain.SignalDeliveryFailed
+	}
+	failureClass := result.FailureClass
+	if failureClass == "" && deliverErr != nil {
+		failureClass = "network_error"
+	}
+	response := result.ResponseBody
+	if len(response) > 16<<10 {
+		response = response[:16<<10]
+	}
+	errText := ""
+	if deliverErr != nil {
+		errText = truncateText(deliverErr.Error(), 512)
+	}
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO notification_delivery_attempts(id, tenant_id, delivery_id, status_code, failure_class, response_body, response_truncated, error)
+		VALUES($1,$2,$3,$4,$5,$6,$7,$8)`,
+		mustID("natt"), item.TenantID, item.ID, result.StatusCode, failureClass, response, result.ResponseTruncated, errText); err != nil {
+		return err
+	}
+	if state == domain.SignalDeliverySucceeded {
+		if _, err := tx.Exec(ctx, `
+			UPDATE notification_deliveries
+			SET state='succeeded', attempt_count=$3, last_attempt_at=now(), worker_id='', updated_at=now()
+			WHERE tenant_id=$1 AND id=$2`, item.TenantID, item.ID, attemptCount); err != nil {
+			return err
+		}
+	} else if attemptCount < 5 {
+		nextAttempt := time.Now().UTC().Add(time.Duration(attemptCount*attemptCount) * time.Minute)
+		if _, err := tx.Exec(ctx, `
+			UPDATE notification_deliveries
+			SET state='scheduled', attempt_count=$3, next_attempt_at=$4, last_attempt_at=now(), worker_id='', updated_at=now()
+			WHERE tenant_id=$1 AND id=$2`, item.TenantID, item.ID, attemptCount, nextAttempt); err != nil {
+			return err
+		}
+	} else {
+		if _, err := tx.Exec(ctx, `
+			UPDATE notification_deliveries
+			SET state='failed', attempt_count=$3, last_attempt_at=now(), worker_id='', updated_at=now()
+			WHERE tenant_id=$1 AND id=$2`, item.TenantID, item.ID, attemptCount); err != nil {
+			return err
+		}
+	}
+	return tx.Commit(ctx)
+}
+
+func truncateText(value string, max int) string {
+	if len(value) <= max {
+		return value
+	}
+	return value[:max]
+}
+
 func scanRetentionPolicy(row rowScanner) (domain.RetentionPolicy, error) {
 	var item domain.RetentionPolicy
 	err := row.Scan(&item.ID, &item.TenantID, &item.ResourceType, &item.SourceID, &item.RetentionDays, &item.State, &item.LegalHold, &item.HoldReason, &item.CreatedBy, &item.CreatedAt, &item.UpdatedAt)
@@ -6509,6 +7110,34 @@ func normalizeAlertFiring(item domain.AlertFiring) domain.AlertFiring {
 		item.ResolvedAt = time.Time{}
 	}
 	return item
+}
+
+func scanNotificationChannel(row rowScanner) (domain.NotificationChannel, error) {
+	var item domain.NotificationChannel
+	err := row.Scan(&item.ID, &item.TenantID, &item.Name, &item.ChannelType, &item.URL, &item.State, &item.SecretHint, &item.CreatedBy, &item.CreatedAt, &item.UpdatedAt)
+	return item, err
+}
+
+func scanNotificationDelivery(row rowScanner) (domain.NotificationDelivery, error) {
+	var item domain.NotificationDelivery
+	err := row.Scan(&item.ID, &item.TenantID, &item.ChannelID, &item.FiringID, &item.Transition, &item.State, &item.BodySHA256, &item.AttemptCount, &item.NextAttemptAt, &item.LastAttemptAt, &item.CreatedAt, &item.UpdatedAt)
+	return item, err
+}
+
+func normalizeNotificationDelivery(item domain.NotificationDelivery) domain.NotificationDelivery {
+	epoch := time.Unix(0, 0).UTC()
+	if item.LastAttemptAt.Equal(epoch) {
+		item.LastAttemptAt = time.Time{}
+	}
+	return item
+}
+
+func scanNotificationDeliveryAttempt(row rowScanner) (domain.NotificationDeliveryAttempt, error) {
+	var item domain.NotificationDeliveryAttempt
+	var response []byte
+	err := row.Scan(&item.ID, &item.TenantID, &item.DeliveryID, &item.StatusCode, &item.FailureClass, &response, &item.ResponseTruncated, &item.Error, &item.CreatedAt)
+	item.ResponseBody = string(response)
+	return item, err
 }
 
 func scanRoute(row rowScanner) (domain.Route, error) {

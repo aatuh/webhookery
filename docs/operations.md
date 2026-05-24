@@ -486,7 +486,8 @@ deleting audit rows. Verification treats retained entries as hash-only evidence,
 while missing non-retained audit rows or mismatched hashes are reported as
 failures. This implementation does not integrate external timestamping
 services, SIEM streaming, KMS/HSM signing, or compliance-certified evidence
-packs.
+packs. Generic signed HTTPS alert notification delivery is handled by the
+operational signal egress worker described below.
 
 ## Metrics And Readiness
 
@@ -500,7 +501,39 @@ anchor age. `/v1/ops/storage` and `/v1/ops/config` provide redacted operational
 status for storage and runtime configuration. `/v1/ops/metrics/rollups` exposes
 tenant-scoped derived rollup buckets for authenticated operators. `/v1/alerts`
 and `/v1/alert-firings` expose alert rule and firing state for authenticated
-operators; external notification delivery remains a later integration.
+operators.
+
+## Operational Signal Egress
+
+Alert notification channels are generic HTTPS webhook receivers managed through
+`/v1/notification-channels` and `whcp notification-channels`. Creation and
+updates require `ops:write`; reads require `ops:read`. Channel signing secrets
+are accepted only on create/update, encrypted at rest, and returned only as
+non-sensitive metadata. Channel URLs use the same SSRF protections as customer
+webhook endpoints: HTTPS, no embedded credentials, no redirects during sender
+delivery, and delivery-time DNS/IP revalidation.
+
+Alert rules may include `channel_ids`. When a firing is opened, acknowledged,
+or resolved, Webhookery stores one durable notification delivery per configured
+active channel and transition. Notification payloads contain alert metadata
+only: tenant id, firing id, alert rule id, transition, state, observed value,
+threshold, reason, and timestamp. They do not include raw webhook payload
+bodies, provider headers, endpoint credentials, or channel secrets.
+
+Notification deliveries are inspected through `/v1/notification-deliveries`;
+attempts and manual retry controls are available through
+`/v1/notification-deliveries/{delivery_id}/attempts`,
+`/v1/notification-deliveries/{delivery_id}:retry`, and the matching
+`whcp notification-deliveries` commands. The sender signs exact bytes as:
+
+```text
+Webhookery-Signal-Timestamp: <unix seconds>
+Webhookery-Signal-Signature: t=<timestamp>,v1=<hmac_sha256_hex(timestamp + "." + body)>
+```
+
+Failed notification sends retry from PostgreSQL state and eventually become
+terminal `failed` deliveries. Public `/metrics` remains aggregate-only and does
+not expose tenant labels.
 
 ## SSRF Protection
 
