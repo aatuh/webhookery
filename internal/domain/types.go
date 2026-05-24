@@ -97,6 +97,22 @@ const (
 	AuditChainEntryStateRetained  = "retained"
 	AuditChainEntrySourceLive     = "live"
 	AuditChainEntrySourceBackfill = "backfill"
+
+	AdapterKindBuiltin     = "builtin"
+	AdapterKindDeclarative = "declarative"
+	AdapterKindPlugin      = "plugin"
+
+	AdapterStateDraft           = "draft"
+	AdapterStateAutomatedTests  = "automated_tests"
+	AdapterStateSecurityReview  = "security_review"
+	AdapterStateStagingApproved = "staging_approved"
+	AdapterStateActive          = "active"
+	AdapterStateDeprecated      = "deprecated"
+	AdapterStateRetired         = "retired"
+	AdapterRiskCore             = "core"
+	AdapterRiskLow              = "low"
+	AdapterRiskMedium           = "medium"
+	AdapterRiskHigh             = "high"
 )
 
 type HeaderPair struct {
@@ -464,20 +480,74 @@ type Event struct {
 }
 
 type ProviderAdapter struct {
-	ID        string    `json:"id"`
-	Name      string    `json:"name"`
-	State     string    `json:"state"`
-	CreatedAt time.Time `json:"created_at"`
+	ID            string    `json:"id"`
+	TenantID      string    `json:"tenant_id,omitempty"`
+	Name          string    `json:"name"`
+	Kind          string    `json:"kind"`
+	Description   string    `json:"description,omitempty"`
+	RiskLevel     string    `json:"risk_level"`
+	State         string    `json:"state"`
+	ProvenanceURL string    `json:"provenance_url,omitempty"`
+	CreatedBy     string    `json:"created_by,omitempty"`
+	CreatedAt     time.Time `json:"created_at"`
+	UpdatedAt     time.Time `json:"updated_at,omitempty"`
+	RetiredAt     time.Time `json:"retired_at,omitempty"`
 }
 
 type AdapterVersion struct {
-	ID         string    `json:"id"`
-	AdapterID  string    `json:"adapter_id"`
-	Name       string    `json:"name"`
-	Version    string    `json:"version"`
-	ConfigHash string    `json:"config_hash"`
-	State      string    `json:"state"`
-	CreatedAt  time.Time `json:"created_at"`
+	ID               string          `json:"id"`
+	TenantID         string          `json:"tenant_id,omitempty"`
+	AdapterID        string          `json:"adapter_id"`
+	Name             string          `json:"name"`
+	Version          string          `json:"version"`
+	Kind             string          `json:"kind"`
+	ConfigHash       string          `json:"config_hash"`
+	Definition       json.RawMessage `json:"definition,omitempty"`
+	DefinitionSHA256 string          `json:"definition_sha256,omitempty"`
+	PackageSHA256    string          `json:"package_sha256,omitempty"`
+	PackageSignature string          `json:"package_signature,omitempty"`
+	SBOMSHA256       string          `json:"sbom_sha256,omitempty"`
+	ProvenanceURL    string          `json:"provenance_url,omitempty"`
+	RiskLevel        string          `json:"risk_level"`
+	TestResults      json.RawMessage `json:"test_results,omitempty"`
+	ReviewNotes      string          `json:"review_notes,omitempty"`
+	State            string          `json:"state"`
+	CreatedBy        string          `json:"created_by,omitempty"`
+	ReviewedBy       string          `json:"reviewed_by,omitempty"`
+	ActivatedBy      string          `json:"activated_by,omitempty"`
+	CreatedAt        time.Time       `json:"created_at"`
+	ReviewedAt       time.Time       `json:"reviewed_at,omitempty"`
+	ActivatedAt      time.Time       `json:"activated_at,omitempty"`
+	DeprecatedAt     time.Time       `json:"deprecated_at,omitempty"`
+	RetiredAt        time.Time       `json:"retired_at,omitempty"`
+}
+
+type AdapterTestVector struct {
+	ID               string          `json:"id"`
+	TenantID         string          `json:"tenant_id"`
+	AdapterVersionID string          `json:"adapter_version_id"`
+	Name             string          `json:"name"`
+	Purpose          string          `json:"purpose,omitempty"`
+	Request          json.RawMessage `json:"request"`
+	Expected         json.RawMessage `json:"expected"`
+	RequestSHA256    string          `json:"request_sha256"`
+	ExpectedSHA256   string          `json:"expected_sha256"`
+	State            string          `json:"state"`
+	CreatedBy        string          `json:"created_by,omitempty"`
+	CreatedAt        time.Time       `json:"created_at"`
+	UpdatedAt        time.Time       `json:"updated_at,omitempty"`
+}
+
+type AdapterVersionReview struct {
+	ID               string    `json:"id"`
+	TenantID         string    `json:"tenant_id"`
+	AdapterVersionID string    `json:"adapter_version_id"`
+	Action           string    `json:"action"`
+	FromState        string    `json:"from_state"`
+	ToState          string    `json:"to_state"`
+	ActorID          string    `json:"actor_id"`
+	Reason           string    `json:"reason"`
+	CreatedAt        time.Time `json:"created_at"`
 }
 
 type NormalizedEnvelope struct {
