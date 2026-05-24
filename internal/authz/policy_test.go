@@ -36,6 +36,13 @@ func TestPolicyAllowsOperatorOpsReadWithScope(t *testing.T) {
 	}
 }
 
+func TestPolicyAllowsOperatorOpsWriteWithScope(t *testing.T) {
+	actor := Actor{TenantID: "ten_a", Role: RoleOperator, Scopes: []string{"ops:write"}}
+	if !Can(actor, "ops:write", "ten_a") {
+		t.Fatal("operator with ops:write scope should manage alert rules and firings")
+	}
+}
+
 func TestPolicyRoleStillRestrictsScopedKeys(t *testing.T) {
 	actor := Actor{TenantID: "ten_a", Role: RoleAuditor, Scopes: []string{"*"}}
 	if !Can(actor, "audit:read", "ten_a") {

@@ -64,6 +64,10 @@ type MetricsStore interface {
 	RefreshMetricsRollups(ctx context.Context, workerID string, limit int) error
 }
 
+type AlertStore interface {
+	EvaluateAlertRules(ctx context.Context, workerID string, limit int) error
+}
+
 type Worker struct {
 	Store          OutboxStore
 	Processor      OutboxProcessor
@@ -71,6 +75,7 @@ type Worker struct {
 	DeliveryClient DeliveryClient
 	RetentionStore RetentionStore
 	MetricsStore   MetricsStore
+	AlertStore     AlertStore
 	WorkerID       string
 	Limit          int
 }
@@ -116,6 +121,11 @@ func (w Worker) RunOnce(ctx context.Context) error {
 	}
 	if w.MetricsStore != nil {
 		if err := w.MetricsStore.RefreshMetricsRollups(ctx, w.WorkerID, limit); err != nil {
+			return err
+		}
+	}
+	if w.AlertStore != nil {
+		if err := w.AlertStore.EvaluateAlertRules(ctx, w.WorkerID, limit); err != nil {
 			return err
 		}
 	}

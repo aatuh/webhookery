@@ -979,6 +979,56 @@ func TestControlServiceMetricRollupsRequireOpsReadAndValidateFilter(t *testing.T
 	}
 }
 
+func TestControlServiceAlertRulesRequireOpsWriteAndReason(t *testing.T) {
+	store := &fakeControlStore{}
+	svc := NewControlService(store, ssrf.Validator{Resolver: ssrf.StaticResolver{}})
+	reader := authz.Actor{ID: "usr_1", TenantID: "ten_a", Role: authz.RoleOperator, Scopes: []string{"ops:read"}}
+	operator := authz.Actor{ID: "usr_2", TenantID: "ten_a", Role: authz.RoleOperator, Scopes: []string{"ops:write", "ops:read"}}
+
+	_, err := svc.CreateAlertRule(context.Background(), reader, CreateAlertRuleRequest{Name: "DLQ", RuleType: domain.AlertRuleDeadLetterOpen, Threshold: 1})
+	if err != ErrForbidden {
+		t.Fatalf("expected forbidden alert create, got %v", err)
+	}
+	_, err = svc.CreateAlertRule(context.Background(), operator, CreateAlertRuleRequest{Name: "bad", RuleType: "unknown", Threshold: 1})
+	if !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("expected invalid rule type, got %v", err)
+	}
+	rule, err := svc.CreateAlertRule(context.Background(), operator, CreateAlertRuleRequest{Name: "DLQ", RuleType: domain.AlertRuleDeadLetterOpen, Threshold: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rule.TenantID != "ten_a" || store.alertTenantID != "ten_a" || store.alertActorID != "usr_2" {
+		t.Fatalf("expected tenant-scoped alert create, rule=%+v tenant=%q actor=%q", rule, store.alertTenantID, store.alertActorID)
+	}
+	_, err = svc.DeleteAlertRule(context.Background(), operator, "alr_1", StateChangeRequest{})
+	if !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("expected delete reason validation, got %v", err)
+	}
+}
+
+func TestControlServiceAlertFiringAckRequiresOpsWriteAndReason(t *testing.T) {
+	store := &fakeControlStore{}
+	svc := NewControlService(store, ssrf.Validator{Resolver: ssrf.StaticResolver{}})
+	reader := authz.Actor{ID: "usr_1", TenantID: "ten_a", Role: authz.RoleOperator, Scopes: []string{"ops:read"}}
+	operator := authz.Actor{ID: "usr_2", TenantID: "ten_a", Role: authz.RoleOperator, Scopes: []string{"ops:write"}}
+
+	_, err := svc.AcknowledgeAlertFiring(context.Background(), reader, "alf_1", StateChangeRequest{Reason: "seen"})
+	if err != ErrForbidden {
+		t.Fatalf("expected forbidden alert ack, got %v", err)
+	}
+	_, err = svc.AcknowledgeAlertFiring(context.Background(), operator, "alf_1", StateChangeRequest{})
+	if !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("expected ack reason validation, got %v", err)
+	}
+	item, err := svc.AcknowledgeAlertFiring(context.Background(), operator, "alf_1", StateChangeRequest{Reason: "seen"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if item.TenantID != "ten_a" || store.alertTenantID != "ten_a" || store.alertActorID != "usr_2" {
+		t.Fatalf("expected tenant-scoped alert ack, item=%+v tenant=%q actor=%q", item, store.alertTenantID, store.alertActorID)
+	}
+}
+
 func testClientCertificatePEM(t *testing.T, commonName string) (string, string) {
 	t.Helper()
 	key, err := rsa.GenerateKey(rand.Reader, 2048)
@@ -1042,6 +1092,8 @@ type fakeControlStore struct {
 	reconciliationTenantID     string
 	opsTenantID                string
 	metricName                 string
+	alertTenantID              string
+	alertActorID               string
 	replayReq                  ReplayRequest
 	approveReplayTenantID      string
 	approveReplayActorID       string
@@ -1395,6 +1447,36 @@ func (f *fakeControlStore) ListMetricRollups(_ context.Context, tenantID, metric
 		Dimensions:    map[string]string{"state": "scheduled"},
 		Value:         3,
 	}}, nil
+}
+func (f *fakeControlStore) CreateAlertRule(_ context.Context, tenantID, actorID string, req CreateAlertRuleRequest) (domain.AlertRule, error) {
+	f.alertTenantID = tenantID
+	f.alertActorID = actorID
+	return domain.AlertRule{ID: "alr_1", TenantID: tenantID, Name: req.Name, RuleType: req.RuleType, MetricName: req.MetricName, Threshold: req.Threshold, Comparator: req.Comparator, WindowSeconds: req.WindowSeconds, State: req.State, CreatedBy: actorID}, nil
+}
+func (f *fakeControlStore) ListAlertRules(context.Context, string, int) ([]domain.AlertRule, error) {
+	return nil, nil
+}
+func (f *fakeControlStore) GetAlertRule(context.Context, string, string) (domain.AlertRule, error) {
+	return domain.AlertRule{}, nil
+}
+func (f *fakeControlStore) UpdateAlertRule(context.Context, string, string, string, UpdateAlertRuleRequest) (domain.AlertRule, error) {
+	return domain.AlertRule{}, nil
+}
+func (f *fakeControlStore) DeleteAlertRule(_ context.Context, tenantID, alertID, actorID, reason string) (domain.AlertRule, error) {
+	f.alertTenantID = tenantID
+	f.alertActorID = actorID
+	return domain.AlertRule{ID: alertID, TenantID: tenantID, State: domain.StateDisabled}, nil
+}
+func (f *fakeControlStore) ListAlertFirings(context.Context, string, string, int) ([]domain.AlertFiring, error) {
+	return nil, nil
+}
+func (f *fakeControlStore) GetAlertFiring(context.Context, string, string) (domain.AlertFiring, error) {
+	return domain.AlertFiring{}, nil
+}
+func (f *fakeControlStore) AcknowledgeAlertFiring(_ context.Context, tenantID, firingID, actorID, reason string) (domain.AlertFiring, error) {
+	f.alertTenantID = tenantID
+	f.alertActorID = actorID
+	return domain.AlertFiring{ID: firingID, TenantID: tenantID, State: domain.AlertFiringAcknowledged, AcknowledgedBy: actorID, Reason: reason}, nil
 }
 func (f *fakeControlStore) ListAuditEvents(context.Context, string, int) ([]domain.AuditEvent, error) {
 	return nil, nil

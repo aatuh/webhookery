@@ -168,6 +168,14 @@ func (s *Server) Routes() http.Handler {
 			r.Get("/ops/workers", s.listWorkers)
 			r.Get("/ops/workers/{worker_id}", s.getWorker)
 			r.Get("/ops/queues", s.listQueues)
+			r.Get("/alerts", s.listAlertRules)
+			r.Post("/alerts", s.createAlertRule)
+			r.Get("/alerts/{alert_id}", s.getAlertRule)
+			r.Patch("/alerts/{alert_id}", s.updateAlertRule)
+			r.Delete("/alerts/{alert_id}", s.deleteAlertRule)
+			r.Get("/alert-firings", s.listAlertFirings)
+			r.Get("/alert-firings/{firing_id}", s.getAlertFiring)
+			r.Post("/alert-firings/{firing_id}:acknowledge", s.acknowledgeAlertFiring)
 		})
 	})
 
@@ -1517,6 +1525,94 @@ func (s *Server) opsStorage(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) opsConfig(w http.ResponseWriter, r *http.Request) {
 	item, err := s.cfg.Control.OpsConfig(r.Context(), actorFrom(r))
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, item)
+}
+
+func (s *Server) createAlertRule(w http.ResponseWriter, r *http.Request) {
+	var req app.CreateAlertRuleRequest
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	item, err := s.cfg.Control.CreateAlertRule(r.Context(), actorFrom(r), req)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, item)
+}
+
+func (s *Server) listAlertRules(w http.ResponseWriter, r *http.Request) {
+	items, err := s.cfg.Control.ListAlertRules(r.Context(), actorFrom(r), queryLimit(r))
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, page(items))
+}
+
+func (s *Server) getAlertRule(w http.ResponseWriter, r *http.Request) {
+	item, err := s.cfg.Control.GetAlertRule(r.Context(), actorFrom(r), chi.URLParam(r, "alert_id"))
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, item)
+}
+
+func (s *Server) updateAlertRule(w http.ResponseWriter, r *http.Request) {
+	var req app.UpdateAlertRuleRequest
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	item, err := s.cfg.Control.UpdateAlertRule(r.Context(), actorFrom(r), chi.URLParam(r, "alert_id"), req)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, item)
+}
+
+func (s *Server) deleteAlertRule(w http.ResponseWriter, r *http.Request) {
+	var req app.StateChangeRequest
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	item, err := s.cfg.Control.DeleteAlertRule(r.Context(), actorFrom(r), chi.URLParam(r, "alert_id"), req)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, item)
+}
+
+func (s *Server) listAlertFirings(w http.ResponseWriter, r *http.Request) {
+	items, err := s.cfg.Control.ListAlertFirings(r.Context(), actorFrom(r), r.URL.Query().Get("state"), queryLimit(r))
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, page(items))
+}
+
+func (s *Server) getAlertFiring(w http.ResponseWriter, r *http.Request) {
+	item, err := s.cfg.Control.GetAlertFiring(r.Context(), actorFrom(r), chi.URLParam(r, "firing_id"))
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, item)
+}
+
+func (s *Server) acknowledgeAlertFiring(w http.ResponseWriter, r *http.Request) {
+	var req app.StateChangeRequest
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	item, err := s.cfg.Control.AcknowledgeAlertFiring(r.Context(), actorFrom(r), chi.URLParam(r, "firing_id"), req)
 	if err != nil {
 		s.writeError(w, r, err)
 		return

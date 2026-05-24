@@ -2566,6 +2566,297 @@ func (s *Store) ListMetricRollups(ctx context.Context, tenantID, metricName stri
 	return out, rows.Err()
 }
 
+func (s *Store) CreateAlertRule(ctx context.Context, tenantID, actorID string, req app.CreateAlertRuleRequest) (domain.AlertRule, error) {
+	id := mustID("alr")
+	dimensions, err := json.Marshal(req.Dimensions)
+	if err != nil {
+		return domain.AlertRule{}, err
+	}
+	item, err := scanAlertRule(s.pool.QueryRow(ctx, `
+		INSERT INTO alert_rules(id, tenant_id, name, rule_type, metric_name, threshold, comparator, window_seconds, dimensions, state, created_by)
+		VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+		RETURNING id, tenant_id, name, rule_type, metric_name, threshold, comparator, window_seconds, dimensions, state, created_by, created_at, updated_at`,
+		id, tenantID, req.Name, req.RuleType, req.MetricName, req.Threshold, req.Comparator, req.WindowSeconds, dimensions, req.State, actorID))
+	if err != nil {
+		return domain.AlertRule{}, err
+	}
+	_ = s.recordAuditEvent(ctx, auditEventInput{TenantID: tenantID, ActorID: actorID, Action: "alert_rule.created", Resource: "alert_rule", ResourceID: item.ID, Reason: item.Name})
+	return item, nil
+}
+
+func (s *Store) ListAlertRules(ctx context.Context, tenantID string, limit int) ([]domain.AlertRule, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT id, tenant_id, name, rule_type, metric_name, threshold, comparator, window_seconds, dimensions, state, created_by, created_at, updated_at
+		FROM alert_rules
+		WHERE tenant_id=$1
+		ORDER BY created_at DESC
+		LIMIT $2`, tenantID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []domain.AlertRule
+	for rows.Next() {
+		item, err := scanAlertRule(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, item)
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) GetAlertRule(ctx context.Context, tenantID, alertID string) (domain.AlertRule, error) {
+	item, err := scanAlertRule(s.pool.QueryRow(ctx, `
+		SELECT id, tenant_id, name, rule_type, metric_name, threshold, comparator, window_seconds, dimensions, state, created_by, created_at, updated_at
+		FROM alert_rules
+		WHERE tenant_id=$1 AND id=$2`, tenantID, alertID))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return domain.AlertRule{}, app.ErrNotFound
+	}
+	return item, err
+}
+
+func (s *Store) UpdateAlertRule(ctx context.Context, tenantID, alertID, actorID string, req app.UpdateAlertRuleRequest) (domain.AlertRule, error) {
+	current, err := s.GetAlertRule(ctx, tenantID, alertID)
+	if err != nil {
+		return domain.AlertRule{}, err
+	}
+	if req.Name != nil {
+		current.Name = *req.Name
+	}
+	if req.Threshold != nil {
+		current.Threshold = *req.Threshold
+	}
+	if req.Comparator != nil {
+		current.Comparator = *req.Comparator
+	}
+	if req.WindowSeconds != nil {
+		current.WindowSeconds = *req.WindowSeconds
+	}
+	if req.Dimensions != nil {
+		current.Dimensions = req.Dimensions
+	}
+	if req.State != nil {
+		current.State = *req.State
+	}
+	dimensions, err := json.Marshal(current.Dimensions)
+	if err != nil {
+		return domain.AlertRule{}, err
+	}
+	item, err := scanAlertRule(s.pool.QueryRow(ctx, `
+		UPDATE alert_rules
+		SET name=$3, threshold=$4, comparator=$5, window_seconds=$6, dimensions=$7, state=$8, updated_at=now()
+		WHERE tenant_id=$1 AND id=$2
+		RETURNING id, tenant_id, name, rule_type, metric_name, threshold, comparator, window_seconds, dimensions, state, created_by, created_at, updated_at`,
+		tenantID, alertID, current.Name, current.Threshold, current.Comparator, current.WindowSeconds, dimensions, current.State))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return domain.AlertRule{}, app.ErrNotFound
+	}
+	if err != nil {
+		return domain.AlertRule{}, err
+	}
+	_ = s.recordAuditEvent(ctx, auditEventInput{TenantID: tenantID, ActorID: actorID, Action: "alert_rule.updated", Resource: "alert_rule", ResourceID: alertID, Reason: req.Reason})
+	return item, nil
+}
+
+func (s *Store) DeleteAlertRule(ctx context.Context, tenantID, alertID, actorID, reason string) (domain.AlertRule, error) {
+	item, err := scanAlertRule(s.pool.QueryRow(ctx, `
+		UPDATE alert_rules
+		SET state='disabled', updated_at=now()
+		WHERE tenant_id=$1 AND id=$2
+		RETURNING id, tenant_id, name, rule_type, metric_name, threshold, comparator, window_seconds, dimensions, state, created_by, created_at, updated_at`,
+		tenantID, alertID))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return domain.AlertRule{}, app.ErrNotFound
+	}
+	if err != nil {
+		return domain.AlertRule{}, err
+	}
+	_ = s.recordAuditEvent(ctx, auditEventInput{TenantID: tenantID, ActorID: actorID, Action: "alert_rule.disabled", Resource: "alert_rule", ResourceID: alertID, Reason: reason})
+	return item, nil
+}
+
+func (s *Store) ListAlertFirings(ctx context.Context, tenantID, state string, limit int) ([]domain.AlertFiring, error) {
+	query := `
+		SELECT id, tenant_id, rule_id, state, observed_value, threshold, reason, started_at, last_evaluated_at,
+		       acknowledged_by, COALESCE(acknowledged_at, 'epoch'::timestamptz), COALESCE(resolved_at, 'epoch'::timestamptz), updated_at
+		FROM alert_firings
+		WHERE tenant_id=$1`
+	args := []any{tenantID}
+	if strings.TrimSpace(state) != "" {
+		query += " AND state=$2"
+		args = append(args, strings.TrimSpace(state))
+	}
+	query += " ORDER BY started_at DESC LIMIT $" + strconv.Itoa(len(args)+1)
+	args = append(args, limit)
+	rows, err := s.pool.Query(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []domain.AlertFiring
+	for rows.Next() {
+		item, err := scanAlertFiring(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, normalizeAlertFiring(item))
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) GetAlertFiring(ctx context.Context, tenantID, firingID string) (domain.AlertFiring, error) {
+	item, err := scanAlertFiring(s.pool.QueryRow(ctx, `
+		SELECT id, tenant_id, rule_id, state, observed_value, threshold, reason, started_at, last_evaluated_at,
+		       acknowledged_by, COALESCE(acknowledged_at, 'epoch'::timestamptz), COALESCE(resolved_at, 'epoch'::timestamptz), updated_at
+		FROM alert_firings
+		WHERE tenant_id=$1 AND id=$2`, tenantID, firingID))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return domain.AlertFiring{}, app.ErrNotFound
+	}
+	return normalizeAlertFiring(item), err
+}
+
+func (s *Store) AcknowledgeAlertFiring(ctx context.Context, tenantID, firingID, actorID, reason string) (domain.AlertFiring, error) {
+	item, err := scanAlertFiring(s.pool.QueryRow(ctx, `
+		UPDATE alert_firings
+		SET state='acknowledged', acknowledged_by=$3, acknowledged_at=now(), reason=$4, updated_at=now()
+		WHERE tenant_id=$1 AND id=$2 AND state='open'
+		RETURNING id, tenant_id, rule_id, state, observed_value, threshold, reason, started_at, last_evaluated_at,
+		       acknowledged_by, COALESCE(acknowledged_at, 'epoch'::timestamptz), COALESCE(resolved_at, 'epoch'::timestamptz), updated_at`,
+		tenantID, firingID, actorID, reason))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return domain.AlertFiring{}, app.ErrNotFound
+	}
+	if err != nil {
+		return domain.AlertFiring{}, err
+	}
+	_ = s.recordAuditEvent(ctx, auditEventInput{TenantID: tenantID, ActorID: actorID, Action: "alert_firing.acknowledged", Resource: "alert_firing", ResourceID: firingID, Reason: reason})
+	return normalizeAlertFiring(item), nil
+}
+
+func (s *Store) EvaluateAlertRules(ctx context.Context, workerID string, limit int) error {
+	if limit <= 0 {
+		limit = 10
+	}
+	rows, err := s.pool.Query(ctx, `
+		SELECT id, tenant_id, name, rule_type, metric_name, threshold, comparator, window_seconds, dimensions, state, created_by, created_at, updated_at
+		FROM alert_rules
+		WHERE state='active'
+		ORDER BY updated_at ASC
+		LIMIT $1`, limit)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	var rules []domain.AlertRule
+	for rows.Next() {
+		rule, err := scanAlertRule(rows)
+		if err != nil {
+			return err
+		}
+		rules = append(rules, rule)
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	for _, rule := range rules {
+		observed, err := s.alertObservedValue(ctx, rule)
+		if err != nil {
+			return err
+		}
+		if compareAlertValue(observed, rule.Comparator, rule.Threshold) {
+			if err := s.openOrUpdateAlertFiring(ctx, rule, observed, workerID); err != nil {
+				return err
+			}
+		} else if err := s.resolveAlertFirings(ctx, rule, observed, workerID); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *Store) alertObservedValue(ctx context.Context, rule domain.AlertRule) (float64, error) {
+	dimensions, err := json.Marshal(rule.Dimensions)
+	if err != nil {
+		return 0, err
+	}
+	var value float64
+	if err := s.pool.QueryRow(ctx, `
+		SELECT COALESCE(max(value), 0)
+		FROM metrics_rollups
+		WHERE tenant_id=$1
+		  AND metric_name=$2
+		  AND bucket_start >= now() - ($3::text || ' seconds')::interval
+		  AND dimensions @> $4::jsonb`,
+		rule.TenantID, rule.MetricName, rule.WindowSeconds, string(dimensions)).Scan(&value); err != nil {
+		return 0, err
+	}
+	return value, nil
+}
+
+func compareAlertValue(observed float64, comparator string, threshold float64) bool {
+	switch comparator {
+	case ">":
+		return observed > threshold
+	case ">=":
+		return observed >= threshold
+	case "<":
+		return observed < threshold
+	case "<=":
+		return observed <= threshold
+	case "==":
+		return observed == threshold
+	default:
+		return false
+	}
+}
+
+func (s *Store) openOrUpdateAlertFiring(ctx context.Context, rule domain.AlertRule, observed float64, workerID string) error {
+	var id string
+	err := s.pool.QueryRow(ctx, `
+		INSERT INTO alert_firings(id, tenant_id, rule_id, state, observed_value, threshold, reason)
+		SELECT $1,$2,$3,'open',$4,$5,$6
+		WHERE NOT EXISTS (
+			SELECT 1 FROM alert_firings
+			WHERE tenant_id=$2 AND rule_id=$3 AND state IN ('open', 'acknowledged')
+		)
+		RETURNING id`, mustID("alf"), rule.TenantID, rule.ID, observed, rule.Threshold, "threshold breached").Scan(&id)
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return err
+	}
+	if id != "" {
+		_ = s.recordAuditEvent(ctx, auditEventInput{TenantID: rule.TenantID, ActorID: workerID, Action: "alert_firing.opened", Resource: "alert_firing", ResourceID: id, Reason: rule.Name})
+	}
+	_, err = s.pool.Exec(ctx, `
+		UPDATE alert_firings
+		SET observed_value=$3, threshold=$4, last_evaluated_at=now(), updated_at=now()
+		WHERE tenant_id=$1 AND rule_id=$2 AND state IN ('open', 'acknowledged')`,
+		rule.TenantID, rule.ID, observed, rule.Threshold)
+	return err
+}
+
+func (s *Store) resolveAlertFirings(ctx context.Context, rule domain.AlertRule, observed float64, workerID string) error {
+	rows, err := s.pool.Query(ctx, `
+		UPDATE alert_firings
+		SET state='resolved', observed_value=$3, last_evaluated_at=now(), resolved_at=now(), updated_at=now()
+		WHERE tenant_id=$1 AND rule_id=$2 AND state IN ('open', 'acknowledged')
+		RETURNING id`, rule.TenantID, rule.ID, observed)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return err
+		}
+		_ = s.recordAuditEvent(ctx, auditEventInput{TenantID: rule.TenantID, ActorID: workerID, Action: "alert_firing.resolved", Resource: "alert_firing", ResourceID: id, Reason: rule.Name})
+	}
+	return rows.Err()
+}
+
 func (s *Store) RefreshMetricsRollups(ctx context.Context, workerID string, limit int) error {
 	if limit <= 0 {
 		limit = 10
@@ -2626,6 +2917,12 @@ func (s *Store) refreshTenantMetricsRollups(ctx context.Context, tenantID, worke
 	addRollup("audit_chain.unchained_events", float64(metrics.AuditChainUnchainedEvents), nil)
 	addRollup("audit_chain.verification_failures", float64(metrics.AuditChainVerificationFailures), nil)
 	addRollup("audit_chain.last_anchor_age_seconds", float64(metrics.AuditChainLastAnchorAgeSec), nil)
+	addRollup("reconciliation.failed_items", float64(metrics.ReconciliationItemsByOutcome[domain.ReconciliationOutcomeFailed]+metrics.ReconciliationItemsByOutcome[domain.ReconciliationOutcomeUnrecoverable]), nil)
+	var expiredWorkers int64
+	if err := s.pool.QueryRow(ctx, `SELECT count(*) FROM worker_leases WHERE expires_at <= now()`).Scan(&expiredWorkers); err != nil {
+		return err
+	}
+	addRollup("worker.expired_leases", float64(expiredWorkers), nil)
 	for state, count := range metrics.DeliveriesByState {
 		addRollup("deliveries.by_state", float64(count), map[string]string{"state": state})
 	}
@@ -6176,6 +6473,42 @@ func scanMetricRollup(row rowScanner) (domain.MetricRollup, error) {
 		item.Dimensions = map[string]string{}
 	}
 	return item, nil
+}
+
+func scanAlertRule(row rowScanner) (domain.AlertRule, error) {
+	var item domain.AlertRule
+	var dimensions []byte
+	err := row.Scan(&item.ID, &item.TenantID, &item.Name, &item.RuleType, &item.MetricName, &item.Threshold, &item.Comparator, &item.WindowSeconds, &dimensions, &item.State, &item.CreatedBy, &item.CreatedAt, &item.UpdatedAt)
+	if err != nil {
+		return domain.AlertRule{}, err
+	}
+	if len(dimensions) > 0 {
+		if err := json.Unmarshal(dimensions, &item.Dimensions); err != nil {
+			return domain.AlertRule{}, err
+		}
+	}
+	if item.Dimensions == nil {
+		item.Dimensions = map[string]string{}
+	}
+	return item, nil
+}
+
+func scanAlertFiring(row rowScanner) (domain.AlertFiring, error) {
+	var item domain.AlertFiring
+	err := row.Scan(&item.ID, &item.TenantID, &item.RuleID, &item.State, &item.ObservedValue, &item.Threshold, &item.Reason, &item.StartedAt, &item.LastEvaluatedAt,
+		&item.AcknowledgedBy, &item.AcknowledgedAt, &item.ResolvedAt, &item.UpdatedAt)
+	return item, err
+}
+
+func normalizeAlertFiring(item domain.AlertFiring) domain.AlertFiring {
+	epoch := time.Unix(0, 0).UTC()
+	if item.AcknowledgedAt.Equal(epoch) {
+		item.AcknowledgedAt = time.Time{}
+	}
+	if item.ResolvedAt.Equal(epoch) {
+		item.ResolvedAt = time.Time{}
+	}
+	return item
 }
 
 func scanRoute(row rowScanner) (domain.Route, error) {

@@ -78,7 +78,9 @@ var indexTemplate = template.Must(template.New("index").Parse(`<!doctype html>
       ["ops storage", "/v1/ops/storage"],
       ["ops config", "/v1/ops/config"],
       ["workers", "/v1/ops/workers"],
-      ["queues", "/v1/ops/queues"]
+      ["queues", "/v1/ops/queues"],
+      ["alerts", "/v1/alerts"],
+      ["alert firings", "/v1/alert-firings"]
     ];
     let current = resources[0];
     const token = document.querySelector("#token");
@@ -153,6 +155,12 @@ var indexTemplate = template.Must(template.New("index").Parse(`<!doctype html>
       if (name === "audit anchors") {
         keys = ["id", "from_sequence", "to_sequence", "chain_hash", "manifest_sha256", "storage_backend", "created_at"];
       }
+      if (name === "alerts") {
+        keys = ["id", "name", "rule_type", "metric_name", "threshold", "comparator", "window_seconds", "state"];
+      }
+      if (name === "alert firings") {
+        keys = ["id", "rule_id", "state", "observed_value", "threshold", "started_at", "acknowledged_at", "resolved_at"];
+      }
       const table = document.createElement("table");
       const head = document.createElement("tr");
       for (const key of keys) {
@@ -178,6 +186,11 @@ var indexTemplate = template.Must(template.New("index").Parse(`<!doctype html>
       if (name === "reconciliation") {
         const th = document.createElement("th");
         th.textContent = "items";
+        head.append(th);
+      }
+      if (name === "alert firings") {
+        const th = document.createElement("th");
+        th.textContent = "ack";
         head.append(th);
       }
       table.append(head);
@@ -225,6 +238,16 @@ var indexTemplate = template.Must(template.New("index").Parse(`<!doctype html>
             const button = document.createElement("button");
             button.textContent = "Items";
             button.onclick = () => showReconciliationItems(row.id);
+            td.append(button);
+          }
+          tr.append(td);
+        }
+        if (name === "alert firings") {
+          const td = document.createElement("td");
+          if (row.id && row.state === "open") {
+            const button = document.createElement("button");
+            button.textContent = "Ack";
+            button.onclick = () => acknowledgeAlert(row.id);
             td.append(button);
           }
           tr.append(td);
@@ -353,6 +376,26 @@ var indexTemplate = template.Must(template.New("index").Parse(`<!doctype html>
         raw.hidden = false;
         raw.textContent = JSON.stringify(error, null, 2);
         status.textContent = "Reconciliation items read failed";
+      }
+    }
+
+    async function acknowledgeAlert(id) {
+      const reason = prompt("Reason for alert acknowledgement");
+      if (!reason) return;
+      try {
+        const body = await request("/v1/alert-firings/" + encodeURIComponent(id) + ":acknowledge", {
+          method: "POST",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({reason})
+        });
+        raw.hidden = false;
+        raw.textContent = JSON.stringify(body, null, 2);
+        status.textContent = "Alert acknowledged";
+        load();
+      } catch (error) {
+        raw.hidden = false;
+        raw.textContent = JSON.stringify(error, null, 2);
+        status.textContent = "Alert acknowledgement failed";
       }
     }
   </script>

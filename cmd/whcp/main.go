@@ -79,6 +79,8 @@ func run(args []string) error {
 		return runReconciliationJobs(args[1:])
 	case "ops":
 		return runOps(args[1:])
+	case "alerts":
+		return runAlerts(args[1:])
 	case "audit":
 		return runAudit(args[1:])
 	case "retention":
@@ -97,7 +99,7 @@ func run(args []string) error {
 }
 
 func usage() error {
-	return fmt.Errorf("usage: whcp <api|worker|scheduler|migrate|admin|api-keys|events|sources|provider-connections|endpoints|subscriptions|retry-policies|routes|transformations|deliveries|replay-jobs|reconciliation-jobs|ops|audit|retention|schemas|dead-letter|quarantine|signatures>")
+	return fmt.Errorf("usage: whcp <api|worker|scheduler|migrate|admin|api-keys|events|sources|provider-connections|endpoints|subscriptions|retry-policies|routes|transformations|deliveries|replay-jobs|reconciliation-jobs|ops|alerts|audit|retention|schemas|dead-letter|quarantine|signatures>")
 }
 
 func runAPI() error {
@@ -185,6 +187,7 @@ func runWorker(args []string) error {
 		DeliveryClient: deliveryAdapter{client: deliveryhttp.Client{SSRF: ssrf.Validator{}}},
 		RetentionStore: store,
 		MetricsStore:   store,
+		AlertStore:     store,
 		WorkerID:       "worker-" + time.Now().UTC().Format("20060102150405"),
 		Limit:          10,
 	}
@@ -914,6 +917,81 @@ func runOps(args []string) error {
 		return getJSON(*baseURL, *apiKey, "/v1/ops/queues")
 	default:
 		return fmt.Errorf("usage: whcp ops <metrics|rollups|storage|config|endpoint-health|workers|worker|queues>")
+	}
+}
+
+func runAlerts(args []string) error {
+	if len(args) == 0 {
+		return fmt.Errorf("usage: whcp alerts <list|create|update|disable|firings|ack>")
+	}
+	fs := flag.NewFlagSet("alerts "+args[0], flag.ContinueOnError)
+	baseURL := fs.String("base-url", "http://localhost:8080", "API base URL")
+	apiKey := fs.String("api-key", os.Getenv("WEBHOOKERY_API_KEY"), "API key")
+	alertID := fs.String("alert-id", "", "alert rule id")
+	firingID := fs.String("firing-id", "", "alert firing id")
+	name := fs.String("name", "", "alert name")
+	ruleType := fs.String("rule-type", "", "alert rule type")
+	metricName := fs.String("metric-name", "", "optional metric name override")
+	threshold := fs.Float64("threshold", 0, "threshold")
+	comparator := fs.String("comparator", ">=", "threshold comparator")
+	windowSeconds := fs.Int("window-seconds", 300, "evaluation window seconds")
+	state := fs.String("state", "", "state filter or rule state")
+	reason := fs.String("reason", "", "operator reason")
+	if err := fs.Parse(args[1:]); err != nil {
+		return err
+	}
+	switch args[0] {
+	case "list":
+		return getJSON(*baseURL, *apiKey, "/v1/alerts")
+	case "create":
+		return postJSON(*baseURL, *apiKey, "/v1/alerts", map[string]any{
+			"name":           *name,
+			"rule_type":      *ruleType,
+			"metric_name":    *metricName,
+			"threshold":      *threshold,
+			"comparator":     *comparator,
+			"window_seconds": *windowSeconds,
+			"state":          *state,
+		})
+	case "update":
+		if strings.TrimSpace(*alertID) == "" {
+			return fmt.Errorf("alert-id is required")
+		}
+		body := map[string]any{"reason": *reason}
+		if strings.TrimSpace(*name) != "" {
+			body["name"] = *name
+		}
+		if *threshold != 0 {
+			body["threshold"] = *threshold
+		}
+		if strings.TrimSpace(*comparator) != "" {
+			body["comparator"] = *comparator
+		}
+		if *windowSeconds != 0 {
+			body["window_seconds"] = *windowSeconds
+		}
+		if strings.TrimSpace(*state) != "" {
+			body["state"] = *state
+		}
+		return patchJSON(*baseURL, *apiKey, "/v1/alerts/"+url.PathEscape(*alertID), body)
+	case "disable":
+		if strings.TrimSpace(*alertID) == "" {
+			return fmt.Errorf("alert-id is required")
+		}
+		return deleteJSON(*baseURL, *apiKey, "/v1/alerts/"+url.PathEscape(*alertID), map[string]any{"reason": *reason})
+	case "firings":
+		path := "/v1/alert-firings"
+		if strings.TrimSpace(*state) != "" {
+			path += "?state=" + url.QueryEscape(*state)
+		}
+		return getJSON(*baseURL, *apiKey, path)
+	case "ack":
+		if strings.TrimSpace(*firingID) == "" {
+			return fmt.Errorf("firing-id is required")
+		}
+		return postJSON(*baseURL, *apiKey, "/v1/alert-firings/"+url.PathEscape(*firingID)+":acknowledge", map[string]any{"reason": *reason})
+	default:
+		return fmt.Errorf("usage: whcp alerts <list|create|update|disable|firings|ack>")
 	}
 }
 

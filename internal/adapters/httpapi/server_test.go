@@ -643,6 +643,30 @@ func (noopControlStore) OpsStorage(_ context.Context, tenantID string) (domain.O
 func (noopControlStore) ListMetricRollups(_ context.Context, tenantID, metricName string, limit int) ([]domain.MetricRollup, error) {
 	return []domain.MetricRollup{{ID: "mru_1", TenantID: tenantID, MetricName: metricName, BucketSeconds: 60, Dimensions: map[string]string{}, Value: 1}}, nil
 }
+func (noopControlStore) CreateAlertRule(_ context.Context, tenantID, actorID string, req app.CreateAlertRuleRequest) (domain.AlertRule, error) {
+	return domain.AlertRule{ID: "alr_1", TenantID: tenantID, Name: req.Name, RuleType: req.RuleType, MetricName: req.MetricName, Threshold: req.Threshold, Comparator: req.Comparator, WindowSeconds: req.WindowSeconds, State: req.State, CreatedBy: actorID}, nil
+}
+func (noopControlStore) ListAlertRules(context.Context, string, int) ([]domain.AlertRule, error) {
+	return nil, nil
+}
+func (noopControlStore) GetAlertRule(_ context.Context, tenantID, alertID string) (domain.AlertRule, error) {
+	return domain.AlertRule{ID: alertID, TenantID: tenantID}, nil
+}
+func (noopControlStore) UpdateAlertRule(_ context.Context, tenantID, alertID, actorID string, req app.UpdateAlertRuleRequest) (domain.AlertRule, error) {
+	return domain.AlertRule{ID: alertID, TenantID: tenantID, State: domain.StateActive}, nil
+}
+func (noopControlStore) DeleteAlertRule(_ context.Context, tenantID, alertID, actorID, reason string) (domain.AlertRule, error) {
+	return domain.AlertRule{ID: alertID, TenantID: tenantID, State: domain.StateDisabled}, nil
+}
+func (noopControlStore) ListAlertFirings(context.Context, string, string, int) ([]domain.AlertFiring, error) {
+	return nil, nil
+}
+func (noopControlStore) GetAlertFiring(_ context.Context, tenantID, firingID string) (domain.AlertFiring, error) {
+	return domain.AlertFiring{ID: firingID, TenantID: tenantID, State: domain.AlertFiringOpen}, nil
+}
+func (noopControlStore) AcknowledgeAlertFiring(_ context.Context, tenantID, firingID, actorID, reason string) (domain.AlertFiring, error) {
+	return domain.AlertFiring{ID: firingID, TenantID: tenantID, State: domain.AlertFiringAcknowledged, AcknowledgedBy: actorID, Reason: reason}, nil
+}
 func (noopControlStore) ListAuditEvents(context.Context, string, int) ([]domain.AuditEvent, error) {
 	return nil, nil
 }

@@ -85,6 +85,14 @@ type ControlStore interface {
 	ListQueues(ctx context.Context, tenantID string) ([]domain.QueueStats, error)
 	OpsStorage(ctx context.Context, tenantID string) (domain.OpsStorageStatus, error)
 	ListMetricRollups(ctx context.Context, tenantID, metricName string, limit int) ([]domain.MetricRollup, error)
+	CreateAlertRule(ctx context.Context, tenantID, actorID string, req CreateAlertRuleRequest) (domain.AlertRule, error)
+	ListAlertRules(ctx context.Context, tenantID string, limit int) ([]domain.AlertRule, error)
+	GetAlertRule(ctx context.Context, tenantID, alertID string) (domain.AlertRule, error)
+	UpdateAlertRule(ctx context.Context, tenantID, alertID, actorID string, req UpdateAlertRuleRequest) (domain.AlertRule, error)
+	DeleteAlertRule(ctx context.Context, tenantID, alertID, actorID, reason string) (domain.AlertRule, error)
+	ListAlertFirings(ctx context.Context, tenantID, state string, limit int) ([]domain.AlertFiring, error)
+	GetAlertFiring(ctx context.Context, tenantID, firingID string) (domain.AlertFiring, error)
+	AcknowledgeAlertFiring(ctx context.Context, tenantID, firingID, actorID, reason string) (domain.AlertFiring, error)
 	ListAuditEvents(ctx context.Context, tenantID string, limit int) ([]domain.AuditEvent, error)
 	GetAuditChainHead(ctx context.Context, tenantID string) (domain.AuditChainHead, error)
 	VerifyAuditChain(ctx context.Context, tenantID string, req AuditChainVerifyRequest) (domain.AuditChainVerification, error)
@@ -447,6 +455,27 @@ type CreateTransformationVersionRequest struct {
 
 type ActivateTransformationVersionRequest struct {
 	Reason string `json:"reason"`
+}
+
+type CreateAlertRuleRequest struct {
+	Name          string            `json:"name"`
+	RuleType      string            `json:"rule_type"`
+	MetricName    string            `json:"metric_name,omitempty"`
+	Threshold     float64           `json:"threshold"`
+	Comparator    string            `json:"comparator,omitempty"`
+	WindowSeconds int               `json:"window_seconds,omitempty"`
+	Dimensions    map[string]string `json:"dimensions,omitempty"`
+	State         string            `json:"state,omitempty"`
+}
+
+type UpdateAlertRuleRequest struct {
+	Name          *string           `json:"name,omitempty"`
+	Threshold     *float64          `json:"threshold,omitempty"`
+	Comparator    *string           `json:"comparator,omitempty"`
+	WindowSeconds *int              `json:"window_seconds,omitempty"`
+	Dimensions    map[string]string `json:"dimensions,omitempty"`
+	State         *string           `json:"state,omitempty"`
+	Reason        string            `json:"reason"`
 }
 
 type EvidenceExportDownload struct {
@@ -1383,6 +1412,87 @@ func (s *ControlService) ListMetricRollups(ctx context.Context, actor authz.Acto
 	return s.store.ListMetricRollups(ctx, actor.TenantID, metricName, normalizeLimit(limit))
 }
 
+func (s *ControlService) CreateAlertRule(ctx context.Context, actor authz.Actor, req CreateAlertRuleRequest) (domain.AlertRule, error) {
+	if !authz.Can(actor, "ops:write", actor.TenantID) {
+		return domain.AlertRule{}, ErrForbidden
+	}
+	if err := normalizeCreateAlertRule(&req); err != nil {
+		return domain.AlertRule{}, err
+	}
+	return s.store.CreateAlertRule(ctx, actor.TenantID, actor.ID, req)
+}
+
+func (s *ControlService) ListAlertRules(ctx context.Context, actor authz.Actor, limit int) ([]domain.AlertRule, error) {
+	if !authz.Can(actor, "ops:read", actor.TenantID) {
+		return nil, ErrForbidden
+	}
+	return s.store.ListAlertRules(ctx, actor.TenantID, normalizeLimit(limit))
+}
+
+func (s *ControlService) GetAlertRule(ctx context.Context, actor authz.Actor, alertID string) (domain.AlertRule, error) {
+	if !authz.Can(actor, "ops:read", actor.TenantID) {
+		return domain.AlertRule{}, ErrForbidden
+	}
+	if strings.TrimSpace(alertID) == "" {
+		return domain.AlertRule{}, fmt.Errorf("%w: alert_id is required", ErrInvalidInput)
+	}
+	return s.store.GetAlertRule(ctx, actor.TenantID, alertID)
+}
+
+func (s *ControlService) UpdateAlertRule(ctx context.Context, actor authz.Actor, alertID string, req UpdateAlertRuleRequest) (domain.AlertRule, error) {
+	if !authz.Can(actor, "ops:write", actor.TenantID) {
+		return domain.AlertRule{}, ErrForbidden
+	}
+	if strings.TrimSpace(alertID) == "" || strings.TrimSpace(req.Reason) == "" {
+		return domain.AlertRule{}, fmt.Errorf("%w: alert_id and reason are required", ErrInvalidInput)
+	}
+	if err := normalizeUpdateAlertRule(&req); err != nil {
+		return domain.AlertRule{}, err
+	}
+	return s.store.UpdateAlertRule(ctx, actor.TenantID, alertID, actor.ID, req)
+}
+
+func (s *ControlService) DeleteAlertRule(ctx context.Context, actor authz.Actor, alertID string, req StateChangeRequest) (domain.AlertRule, error) {
+	if !authz.Can(actor, "ops:write", actor.TenantID) {
+		return domain.AlertRule{}, ErrForbidden
+	}
+	if strings.TrimSpace(alertID) == "" || strings.TrimSpace(req.Reason) == "" {
+		return domain.AlertRule{}, fmt.Errorf("%w: alert_id and reason are required", ErrInvalidInput)
+	}
+	return s.store.DeleteAlertRule(ctx, actor.TenantID, alertID, actor.ID, req.Reason)
+}
+
+func (s *ControlService) ListAlertFirings(ctx context.Context, actor authz.Actor, state string, limit int) ([]domain.AlertFiring, error) {
+	if !authz.Can(actor, "ops:read", actor.TenantID) {
+		return nil, ErrForbidden
+	}
+	state = strings.TrimSpace(state)
+	if state != "" && !validAlertFiringState(state) {
+		return nil, fmt.Errorf("%w: alert firing state is invalid", ErrInvalidInput)
+	}
+	return s.store.ListAlertFirings(ctx, actor.TenantID, state, normalizeLimit(limit))
+}
+
+func (s *ControlService) GetAlertFiring(ctx context.Context, actor authz.Actor, firingID string) (domain.AlertFiring, error) {
+	if !authz.Can(actor, "ops:read", actor.TenantID) {
+		return domain.AlertFiring{}, ErrForbidden
+	}
+	if strings.TrimSpace(firingID) == "" {
+		return domain.AlertFiring{}, fmt.Errorf("%w: firing_id is required", ErrInvalidInput)
+	}
+	return s.store.GetAlertFiring(ctx, actor.TenantID, firingID)
+}
+
+func (s *ControlService) AcknowledgeAlertFiring(ctx context.Context, actor authz.Actor, firingID string, req StateChangeRequest) (domain.AlertFiring, error) {
+	if !authz.Can(actor, "ops:write", actor.TenantID) {
+		return domain.AlertFiring{}, ErrForbidden
+	}
+	if strings.TrimSpace(firingID) == "" || strings.TrimSpace(req.Reason) == "" {
+		return domain.AlertFiring{}, fmt.Errorf("%w: firing_id and reason are required", ErrInvalidInput)
+	}
+	return s.store.AcknowledgeAlertFiring(ctx, actor.TenantID, firingID, actor.ID, req.Reason)
+}
+
 func (s *ControlService) DryRunReplay(ctx context.Context, actor authz.Actor, req ReplayRequest) (ReplayDryRun, error) {
 	if !authz.Can(actor, "replay:read", actor.TenantID) {
 		return ReplayDryRun{}, ErrForbidden
@@ -1856,6 +1966,149 @@ func validMetricName(name string) bool {
 		return false
 	}
 	return true
+}
+
+func normalizeCreateAlertRule(req *CreateAlertRuleRequest) error {
+	req.Name = strings.TrimSpace(req.Name)
+	req.RuleType = strings.TrimSpace(req.RuleType)
+	req.MetricName = strings.TrimSpace(req.MetricName)
+	if req.Name == "" {
+		return fmt.Errorf("%w: name is required", ErrInvalidInput)
+	}
+	if !validAlertRuleType(req.RuleType) {
+		return fmt.Errorf("%w: rule_type is invalid", ErrInvalidInput)
+	}
+	if req.MetricName == "" {
+		req.MetricName = defaultAlertMetric(req.RuleType)
+	}
+	if !validMetricName(req.MetricName) {
+		return fmt.Errorf("%w: metric_name is invalid", ErrInvalidInput)
+	}
+	if req.Comparator == "" {
+		req.Comparator = ">="
+	}
+	if !validComparator(req.Comparator) {
+		return fmt.Errorf("%w: comparator is invalid", ErrInvalidInput)
+	}
+	if req.WindowSeconds == 0 {
+		req.WindowSeconds = 300
+	}
+	if req.WindowSeconds < 60 || req.WindowSeconds > 86400 {
+		return fmt.Errorf("%w: window_seconds must be between 60 and 86400", ErrInvalidInput)
+	}
+	if req.State == "" {
+		req.State = domain.StateActive
+	}
+	if req.State != domain.StateActive && req.State != domain.StateDisabled {
+		return fmt.Errorf("%w: alert state must be active or disabled", ErrInvalidInput)
+	}
+	if req.Dimensions == nil {
+		req.Dimensions = map[string]string{}
+	}
+	if err := validateAlertDimensions(req.Dimensions); err != nil {
+		return err
+	}
+	return nil
+}
+
+func normalizeUpdateAlertRule(req *UpdateAlertRuleRequest) error {
+	if req.Name != nil {
+		name := strings.TrimSpace(*req.Name)
+		if name == "" {
+			return fmt.Errorf("%w: name cannot be empty", ErrInvalidInput)
+		}
+		req.Name = &name
+	}
+	if req.Comparator != nil {
+		comparator := strings.TrimSpace(*req.Comparator)
+		if !validComparator(comparator) {
+			return fmt.Errorf("%w: comparator is invalid", ErrInvalidInput)
+		}
+		req.Comparator = &comparator
+	}
+	if req.WindowSeconds != nil && (*req.WindowSeconds < 60 || *req.WindowSeconds > 86400) {
+		return fmt.Errorf("%w: window_seconds must be between 60 and 86400", ErrInvalidInput)
+	}
+	if req.State != nil {
+		state := strings.TrimSpace(*req.State)
+		if state != domain.StateActive && state != domain.StateDisabled {
+			return fmt.Errorf("%w: alert state must be active or disabled", ErrInvalidInput)
+		}
+		req.State = &state
+	}
+	if req.Dimensions != nil {
+		if err := validateAlertDimensions(req.Dimensions); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateAlertDimensions(dimensions map[string]string) error {
+	if len(dimensions) > 8 {
+		return fmt.Errorf("%w: alert dimensions cannot exceed 8 keys", ErrInvalidInput)
+	}
+	for key, value := range dimensions {
+		if strings.TrimSpace(key) == "" || !validMetricName(key) {
+			return fmt.Errorf("%w: alert dimension keys are invalid", ErrInvalidInput)
+		}
+		if len(value) > 128 {
+			return fmt.Errorf("%w: alert dimension values cannot exceed 128 bytes", ErrInvalidInput)
+		}
+	}
+	return nil
+}
+
+func validAlertRuleType(ruleType string) bool {
+	switch ruleType {
+	case domain.AlertRuleDeadLetterOpen, domain.AlertRuleQuarantineOpen, domain.AlertRuleEndpointFailureRate24h,
+		domain.AlertRuleEndpointCircuitOpen, domain.AlertRuleOldestOutboxAgeSeconds, domain.AlertRuleWorkerLeaseExpired,
+		domain.AlertRuleAuditChainVerificationFails, domain.AlertRuleReconciliationFailedItems:
+		return true
+	default:
+		return false
+	}
+}
+
+func defaultAlertMetric(ruleType string) string {
+	switch ruleType {
+	case domain.AlertRuleDeadLetterOpen:
+		return "dead_letter.open"
+	case domain.AlertRuleQuarantineOpen:
+		return "quarantine.open"
+	case domain.AlertRuleEndpointFailureRate24h:
+		return "endpoint.failure_rate_24h"
+	case domain.AlertRuleEndpointCircuitOpen:
+		return "endpoint.circuit_open"
+	case domain.AlertRuleOldestOutboxAgeSeconds:
+		return "outbox.oldest_age_seconds"
+	case domain.AlertRuleWorkerLeaseExpired:
+		return "worker.expired_leases"
+	case domain.AlertRuleAuditChainVerificationFails:
+		return "audit_chain.verification_failures"
+	case domain.AlertRuleReconciliationFailedItems:
+		return "reconciliation.failed_items"
+	default:
+		return ""
+	}
+}
+
+func validComparator(comparator string) bool {
+	switch comparator {
+	case ">", ">=", "<", "<=", "==":
+		return true
+	default:
+		return false
+	}
+}
+
+func validAlertFiringState(state string) bool {
+	switch state {
+	case domain.AlertFiringOpen, domain.AlertFiringAcknowledged, domain.AlertFiringResolved:
+		return true
+	default:
+		return false
+	}
 }
 
 func validateRetentionPolicyInput(resourceType string, retentionDays int, state string) error {

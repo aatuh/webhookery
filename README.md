@@ -81,6 +81,9 @@ go run ./cmd/whcp ops storage --api-key "$WEBHOOKERY_API_KEY"
 go run ./cmd/whcp ops config --api-key "$WEBHOOKERY_API_KEY"
 go run ./cmd/whcp ops workers --api-key "$WEBHOOKERY_API_KEY"
 go run ./cmd/whcp ops queues --api-key "$WEBHOOKERY_API_KEY"
+go run ./cmd/whcp alerts create --name dlq-open --rule-type dead_letter_open --threshold 1 --reason "page on DLQ growth" --api-key "$WEBHOOKERY_API_KEY"
+go run ./cmd/whcp alerts firings --state open --api-key "$WEBHOOKERY_API_KEY"
+go run ./cmd/whcp alerts ack --firing-id alf_... --reason "operator investigating" --api-key "$WEBHOOKERY_API_KEY"
 scripts/backup_postgres.sh backups
 WEBHOOKERY_RESTORE_CONFIRM=restore scripts/restore_postgres.sh backups/webhookery-20260525T000000Z.dump
 helm lint deploy/helm/webhookery

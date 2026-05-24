@@ -71,6 +71,19 @@ const (
 	ProviderAPIEvidenceStorageStatusDeleted  = "deleted"
 	ProviderAPIEvidenceStorageStatusMetadata = "metadata_only"
 
+	AlertRuleDeadLetterOpen              = "dead_letter_open"
+	AlertRuleQuarantineOpen              = "quarantine_open"
+	AlertRuleEndpointFailureRate24h      = "endpoint_failure_rate_24h"
+	AlertRuleEndpointCircuitOpen         = "endpoint_circuit_open"
+	AlertRuleOldestOutboxAgeSeconds      = "oldest_outbox_age_seconds"
+	AlertRuleWorkerLeaseExpired          = "worker_lease_expired"
+	AlertRuleAuditChainVerificationFails = "audit_chain_verification_failures"
+	AlertRuleReconciliationFailedItems   = "reconciliation_failed_items"
+
+	AlertFiringOpen         = "open"
+	AlertFiringAcknowledged = "acknowledged"
+	AlertFiringResolved     = "resolved"
+
 	AuditChainEntryStateActive    = "active"
 	AuditChainEntryStateRetained  = "retained"
 	AuditChainEntrySourceLive     = "live"
@@ -663,6 +676,38 @@ type MetricRollup struct {
 	Source         string            `json:"source"`
 	CreatedAt      time.Time         `json:"created_at"`
 	UpdatedAt      time.Time         `json:"updated_at,omitempty"`
+}
+
+type AlertRule struct {
+	ID            string            `json:"id"`
+	TenantID      string            `json:"tenant_id"`
+	Name          string            `json:"name"`
+	RuleType      string            `json:"rule_type"`
+	MetricName    string            `json:"metric_name"`
+	Threshold     float64           `json:"threshold"`
+	Comparator    string            `json:"comparator"`
+	WindowSeconds int               `json:"window_seconds"`
+	Dimensions    map[string]string `json:"dimensions,omitempty"`
+	State         string            `json:"state"`
+	CreatedBy     string            `json:"created_by"`
+	CreatedAt     time.Time         `json:"created_at"`
+	UpdatedAt     time.Time         `json:"updated_at"`
+}
+
+type AlertFiring struct {
+	ID              string    `json:"id"`
+	TenantID        string    `json:"tenant_id"`
+	RuleID          string    `json:"rule_id"`
+	State           string    `json:"state"`
+	ObservedValue   float64   `json:"observed_value"`
+	Threshold       float64   `json:"threshold"`
+	Reason          string    `json:"reason,omitempty"`
+	StartedAt       time.Time `json:"started_at"`
+	LastEvaluatedAt time.Time `json:"last_evaluated_at"`
+	AcknowledgedBy  string    `json:"acknowledged_by,omitempty"`
+	AcknowledgedAt  time.Time `json:"acknowledged_at,omitempty"`
+	ResolvedAt      time.Time `json:"resolved_at,omitempty"`
+	UpdatedAt       time.Time `json:"updated_at"`
 }
 
 func MetricDimensionsHash(dimensions map[string]string) string {

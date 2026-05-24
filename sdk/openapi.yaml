@@ -2112,6 +2112,166 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/QueueStatsPage"
+  /v1/alerts:
+    get:
+      summary: List alert rules
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: Paginated alert rules.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AlertRulePage"
+    post:
+      summary: Create alert rule
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateAlertRuleRequest"
+      responses:
+        "201":
+          description: Alert rule created.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AlertRule"
+        "403":
+          description: Actor lacks ops:write.
+  /v1/alerts/{alert_id}:
+    get:
+      summary: Get alert rule
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: alert_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Alert rule.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AlertRule"
+    patch:
+      summary: Update alert rule
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: alert_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateAlertRuleRequest"
+      responses:
+        "200":
+          description: Alert rule updated.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AlertRule"
+    delete:
+      summary: Disable alert rule
+      description: Disables the rule and preserves historical firings.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: alert_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/StateChangeRequest"
+      responses:
+        "200":
+          description: Alert rule disabled.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AlertRule"
+  /v1/alert-firings:
+    get:
+      summary: List alert firings
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/Limit"
+        - name: state
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [open, acknowledged, resolved]
+      responses:
+        "200":
+          description: Paginated alert firings.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AlertFiringPage"
+  /v1/alert-firings/{firing_id}:
+    get:
+      summary: Get alert firing
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: firing_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Alert firing.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AlertFiring"
+  /v1/alert-firings/{firing_id}:acknowledge:
+    post:
+      summary: Acknowledge alert firing
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: firing_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/StateChangeRequest"
+      responses:
+        "200":
+          description: Alert firing acknowledged.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AlertFiring"
 components:
   securitySchemes:
     bearerAuth:
@@ -3851,6 +4011,150 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/MetricRollup"
+        next_cursor:
+          type: string
+          nullable: true
+        has_more:
+          type: boolean
+    AlertRule:
+      type: object
+      required: [id, tenant_id, name, rule_type, metric_name, threshold, comparator, window_seconds, state, created_by, created_at, updated_at]
+      properties:
+        id:
+          type: string
+        tenant_id:
+          type: string
+        name:
+          type: string
+        rule_type:
+          type: string
+          enum: [dead_letter_open, quarantine_open, endpoint_failure_rate_24h, endpoint_circuit_open, oldest_outbox_age_seconds, worker_lease_expired, audit_chain_verification_failures, reconciliation_failed_items]
+        metric_name:
+          type: string
+        threshold:
+          type: number
+        comparator:
+          type: string
+          enum: [">", ">=", "<", "<=", "=="]
+        window_seconds:
+          type: integer
+        dimensions:
+          type: object
+          additionalProperties:
+            type: string
+        state:
+          type: string
+          enum: [active, disabled]
+        created_by:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+    CreateAlertRuleRequest:
+      type: object
+      required: [name, rule_type, threshold]
+      properties:
+        name:
+          type: string
+        rule_type:
+          type: string
+          enum: [dead_letter_open, quarantine_open, endpoint_failure_rate_24h, endpoint_circuit_open, oldest_outbox_age_seconds, worker_lease_expired, audit_chain_verification_failures, reconciliation_failed_items]
+        metric_name:
+          type: string
+        threshold:
+          type: number
+        comparator:
+          type: string
+          enum: [">", ">=", "<", "<=", "=="]
+        window_seconds:
+          type: integer
+        dimensions:
+          type: object
+          additionalProperties:
+            type: string
+        state:
+          type: string
+          enum: [active, disabled]
+    UpdateAlertRuleRequest:
+      type: object
+      required: [reason]
+      properties:
+        name:
+          type: string
+        threshold:
+          type: number
+        comparator:
+          type: string
+          enum: [">", ">=", "<", "<=", "=="]
+        window_seconds:
+          type: integer
+        dimensions:
+          type: object
+          additionalProperties:
+            type: string
+        state:
+          type: string
+          enum: [active, disabled]
+        reason:
+          type: string
+    AlertRulePage:
+      type: object
+      properties:
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/AlertRule"
+        next_cursor:
+          type: string
+          nullable: true
+        has_more:
+          type: boolean
+    AlertFiring:
+      type: object
+      required: [id, tenant_id, rule_id, state, observed_value, threshold, started_at, last_evaluated_at, updated_at]
+      properties:
+        id:
+          type: string
+        tenant_id:
+          type: string
+        rule_id:
+          type: string
+        state:
+          type: string
+          enum: [open, acknowledged, resolved]
+        observed_value:
+          type: number
+        threshold:
+          type: number
+        reason:
+          type: string
+        started_at:
+          type: string
+          format: date-time
+        last_evaluated_at:
+          type: string
+          format: date-time
+        acknowledged_by:
+          type: string
+        acknowledged_at:
+          type: string
+          format: date-time
+        resolved_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+    AlertFiringPage:
+      type: object
+      properties:
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/AlertFiring"
         next_cursor:
           type: string
           nullable: true

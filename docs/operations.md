@@ -248,7 +248,7 @@ Authenticated operators with `ops:read` can inspect runtime worker leases and
 tenant-scoped queue depth through `GET /v1/ops/workers`,
 `GET /v1/ops/workers/{worker_id}`, `GET /v1/ops/queues`, `GET
 /v1/ops/storage`, `GET /v1/ops/config`, and `whcp ops
-workers|worker|queues|storage|config`. Worker status exposes only lease metadata (`worker_id`,
+workers|worker|queues|rollups|storage|config`. Worker status exposes only lease metadata (`worker_id`,
 active/expired state, last seen time, and expiry). Queue stats are scoped to the
 actor tenant and report durable outbox kinds plus the delivery queue with
 pending, in-progress, terminal/completed, due-now, oldest pending age, and next
@@ -266,6 +266,17 @@ The scheduler also writes derived one-minute operational rollups to
 states, open DLQ/quarantine counts, endpoint failure-rate summaries, and audit
 chain status. They are dashboard and alert inputs only; the underlying event,
 delivery, audit, retention, and reconciliation rows remain authoritative.
+
+Alert rules are stored in `alert_rules` and evaluated by the scheduler against
+recent rollups. Supported rule types are open DLQ, open quarantine, endpoint
+failure rate, open endpoint circuit, oldest outbox age, expired worker leases,
+audit-chain verification failures, and reconciliation failed/unrecoverable
+items. A breached rule opens one `alert_firings` row until the condition
+resolves; acknowledged firings stay unique per rule and then resolve when the
+metric clears. Reads require `ops:read`; create, update, disable, and
+acknowledge require `ops:write` plus an operator reason for disabling and
+acknowledging. Alert APIs and UI views do not expose payload bodies, endpoint
+secrets, provider credentials, or tenant labels on public `/metrics`.
 
 ## Provider Reconciliation
 
@@ -487,7 +498,9 @@ open endpoint circuits, reconciliation job states, reconciliation item outcomes,
 unchained audit-event count, audit-chain verification failure count, and newest
 anchor age. `/v1/ops/storage` and `/v1/ops/config` provide redacted operational
 status for storage and runtime configuration. `/v1/ops/metrics/rollups` exposes
-tenant-scoped derived rollup buckets for authenticated operators.
+tenant-scoped derived rollup buckets for authenticated operators. `/v1/alerts`
+and `/v1/alert-firings` expose alert rule and firing state for authenticated
+operators; external notification delivery remains a later integration.
 
 ## SSRF Protection
 

@@ -58,7 +58,7 @@ func roleAllows(role Role, scope string) bool {
 		return hasScope(scope, []string{
 			"sources:read", "endpoints:read", "subscriptions:read", "routes:read", "schemas:read",
 			"events:read", "deliveries:read", "deliveries:retry", "replay:read", "replay:write",
-			"ops:read",
+			"ops:read", "ops:write",
 		})
 	case RoleSecurity:
 		return hasScope(scope, []string{"security:read", "security:write", "audit:read", "events:read", "events:raw"})
