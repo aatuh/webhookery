@@ -94,12 +94,28 @@ default and requires `WEBHOOKERY_MASTER_KEY_BASE64` to be a base64-encoded
 Vault Transit-compatible HTTP API configured with `WEBHOOKERY_VAULT_ADDR`,
 `WEBHOOKERY_VAULT_TOKEN`, and `WEBHOOKERY_VAULT_TRANSIT_KEY`; Vault encrypts
 and decrypts secret material while PostgreSQL stores only wrapped
-`vault-transit:` ciphertext. Switching modes does not re-encrypt existing
-rows automatically, so plan a controlled migration if moving live tenants
-between local and Vault-backed envelopes. Example env files contain
-placeholders only. Logs, errors, metrics, and UI surfaces must not print raw
-API keys, webhook secrets, Vault tokens, signatures, bearer tokens, or raw
-payloads by default.
+`vault-transit:` ciphertext.
+
+`WEBHOOKERY_SECRET_BOX_MODE=aws-kms` uses AWS KMS envelope encryption with
+`WEBHOOKERY_AWS_REGION`, `WEBHOOKERY_AWS_KMS_KEY_ID`, and optional
+`WEBHOOKERY_AWS_KMS_ENDPOINT` for LocalStack-style tests. Webhookery calls
+AWS KMS `GenerateDataKey`, encrypts the secret locally with AES-GCM, stores the
+encrypted data key beside the ciphertext, and calls `Decrypt` only to unwrap
+that data key later. This follows the AWS KMS documented envelope pattern of
+using `Plaintext` data keys outside KMS, storing `CiphertextBlob`, and erasing
+plaintext data keys after use:
+https://docs.aws.amazon.com/kms/latest/APIReference/API_GenerateDataKey.html
+and https://docs.aws.amazon.com/kms/latest/APIReference/API_Decrypt.html.
+The adapter is built with AWS SDK for Go v2:
+https://docs.aws.amazon.com/sdk-for-go/v2/developer-guide/getting-started.html.
+Switching modes does not re-encrypt existing rows automatically, so plan a
+controlled migration if moving live tenants between local, Vault-backed, and
+AWS KMS-backed envelopes. `whcp key-custody test` performs a local
+encrypt/decrypt smoke test for the configured mode without printing plaintext,
+ciphertext, or full key ids. Example env files contain placeholders only.
+Logs, errors, metrics, and UI surfaces must not print raw API keys, webhook
+secrets, Vault tokens, AWS credentials, KMS key ids in full, signatures, bearer
+tokens, or raw payloads by default.
 
 Source verification secrets and endpoint signing secrets are versioned.
 Rotation creates a new active version and moves the prior active version to
@@ -610,6 +626,39 @@ security-capable bootstrap/recovery key, rotate it after use, and audit every
 identity or access-control change. Production operators should rotate OIDC
 client secrets and SCIM tokens through the control API rather than editing
 database rows.
+
+## Enterprise Producer Trust
+
+Product-event ingestion at `POST /v1/events` accepts three producer trust
+mechanisms: API keys with `events:write`, OAuth client-credentials bearer
+tokens, and verified producer mTLS identities. Producer credentials can be
+source-bound; when `source_id` is set on the credential, the submitted event
+body must contain the same `source_id` or ingestion is denied before the event
+service is called.
+
+Producer OAuth clients are tenant-scoped resources managed through
+`/v1/producer-clients` and `whcp producer-clients`. Reads require
+`security:read`; create, update, disable, and secret rotation require
+`security:write`. Client secrets are generated once, returned only in the
+create/rotate response, and stored as SHA-256 hashes. Access tokens are opaque
+bearer values, stored hashed, have no refresh tokens, default to a 15-minute
+TTL, and may not exceed one hour. The public token endpoint is
+`POST /v1/oauth/token` with `application/x-www-form-urlencoded`
+`grant_type=client_credentials` and HTTP Basic client authentication only.
+This matches the OAuth 2.0 client credentials grant shape in RFC 6749 section
+4.4: https://www.rfc-editor.org/rfc/rfc6749#section-4.4.
+
+Producer mTLS identities are managed through `/v1/producer-mtls-identities`
+and `whcp producer-mtls-identities`. They store public certificate metadata
+only: SHA-256 fingerprint, subject/SAN metadata, validity timestamps, state,
+and optional source binding. Private keys are never submitted or persisted.
+To require app-side certificate verification, configure
+`WEBHOOKERY_TLS_CERT_FILE`, `WEBHOOKERY_TLS_KEY_FILE`, and
+`WEBHOOKERY_PRODUCER_MTLS_CLIENT_CA_FILE`. The server verifies peer
+certificates against that CA before matching the fingerprint. This slice does
+not trust proxy-supplied mTLS headers; deployments that terminate TLS before
+the API process must use API-key or OAuth producer credentials until a future
+trusted-proxy design is implemented.
 
 ## SSRF Protection
 

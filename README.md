@@ -84,6 +84,11 @@ go run ./cmd/whcp ops storage --api-key "$WEBHOOKERY_API_KEY"
 go run ./cmd/whcp ops config --api-key "$WEBHOOKERY_API_KEY"
 go run ./cmd/whcp ops workers --api-key "$WEBHOOKERY_API_KEY"
 go run ./cmd/whcp ops queues --api-key "$WEBHOOKERY_API_KEY"
+go run ./cmd/whcp key-custody test
+go run ./cmd/whcp producer-clients create --name billing-producer --source-id src_internal --api-key "$WEBHOOKERY_API_KEY"
+go run ./cmd/whcp producer-clients rotate-secret --client-id pcl_... --reason "scheduled rotation" --api-key "$WEBHOOKERY_API_KEY"
+go run ./cmd/whcp producer-mtls-identities create --name billing-cert --source-id src_internal --cert-file producer.crt --api-key "$WEBHOOKERY_API_KEY"
+go run ./cmd/whcp producer-mtls-identities verify --identity-id pmi_... --cert-file producer.crt --api-key "$WEBHOOKERY_API_KEY"
 go run ./cmd/whcp alerts create --name dlq-open --rule-type dead_letter_open --threshold 1 --reason "page on DLQ growth" --api-key "$WEBHOOKERY_API_KEY"
 go run ./cmd/whcp notification-channels create --name ops-webhook --url https://ops.example/hooks/webhookery --signing-secret "$SIGNAL_SECRET" --api-key "$WEBHOOKERY_API_KEY"
 go run ./cmd/whcp alerts update --alert-id alr_... --channel-ids nch_... --reason "send DLQ pages" --api-key "$WEBHOOKERY_API_KEY"
@@ -121,7 +126,24 @@ Operators that already run Vault Transit can set
 `WEBHOOKERY_SECRET_BOX_MODE=vault-transit` with `WEBHOOKERY_VAULT_ADDR`,
 `WEBHOOKERY_VAULT_TOKEN`, and `WEBHOOKERY_VAULT_TRANSIT_KEY`; PostgreSQL then
 stores wrapped Vault ciphertext instead of locally encrypted ciphertext for
-new secret writes.
+new secret writes. Operators using AWS KMS can set
+`WEBHOOKERY_SECRET_BOX_MODE=aws-kms` with `WEBHOOKERY_AWS_REGION`,
+`WEBHOOKERY_AWS_KMS_KEY_ID`, and optional `WEBHOOKERY_AWS_KMS_ENDPOINT`.
+AWS KMS mode uses envelope encryption with generated data keys; it does not
+directly KMS-encrypt large secret values and it does not automatically
+re-encrypt rows written by local or Vault modes. `whcp key-custody test`
+checks the configured mode without printing plaintext, ciphertext, or full key
+ids.
+
+Product event producers can use API keys with `events:write`, OAuth client
+credentials from `/v1/producer-clients`, or app-verified producer mTLS
+identities from `/v1/producer-mtls-identities`. Source-bound producer
+credentials must match the `source_id` in the `POST /v1/events` body. Producer
+client secrets and OAuth access tokens are stored only as hashes, and mTLS
+identity records store certificate metadata only, never private keys. Producer
+mTLS requires app-side TLS configuration with
+`WEBHOOKERY_PRODUCER_MTLS_CLIENT_CA_FILE`; proxy-supplied certificate headers
+are not trusted.
 
 Verified events also get canonical normalized envelope records. Routes and
 subscriptions can reference deterministic JSON Pointer transformations; new

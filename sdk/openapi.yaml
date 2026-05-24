@@ -93,6 +93,282 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/APIKey"
+  /v1/oauth/token:
+    post:
+      summary: Issue producer OAuth access token
+      description: Issues an opaque short-lived bearer token for product-event producers using the client credentials grant. Only HTTP Basic client authentication is accepted; client secrets in the form body are rejected.
+      security:
+        - basicAuth: []
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: "#/components/schemas/OAuthClientCredentialsRequest"
+      responses:
+        "200":
+          description: Non-cacheable producer access token response.
+          headers:
+            Cache-Control:
+              schema:
+                type: string
+              description: Always `no-store`.
+            Pragma:
+              schema:
+                type: string
+              description: Always `no-cache`.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProducerTokenResponse"
+        "400":
+          $ref: "#/components/responses/Problem"
+        "401":
+          $ref: "#/components/responses/Problem"
+  /v1/producer-clients:
+    get:
+      summary: List producer OAuth clients
+      description: Lists tenant-scoped producer client metadata. Client secret hashes and token values are never returned.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: Paginated producer client metadata.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProducerClientPage"
+    post:
+      summary: Create producer OAuth client
+      description: Creates a tenant/source-bound product-event producer credential. The generated client secret is returned once only.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateProducerClientRequest"
+      responses:
+        "201":
+          description: Producer client created.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProducerClientCreated"
+        "403":
+          $ref: "#/components/responses/Problem"
+  /v1/producer-clients/{client_id}:
+    get:
+      summary: Get producer OAuth client
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: client_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Producer client metadata.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProducerClient"
+    patch:
+      summary: Update producer OAuth client
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: client_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateProducerClientRequest"
+      responses:
+        "200":
+          description: Producer client updated.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProducerClient"
+    delete:
+      summary: Disable producer OAuth client
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: client_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ReasonRequest"
+      responses:
+        "200":
+          description: Producer client disabled.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProducerClient"
+  /v1/producer-clients/{client_id}/secrets:rotate:
+    post:
+      summary: Rotate producer client secret
+      description: Revokes active producer client secrets and returns the new client secret once only.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: client_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ReasonRequest"
+      responses:
+        "200":
+          description: Producer client secret rotated.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProducerClientSecretRotated"
+  /v1/producer-mtls-identities:
+    get:
+      summary: List producer mTLS identities
+      description: Lists tenant-scoped producer client-certificate identities. Private keys and raw certificate private material are never stored or returned.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: Paginated producer mTLS identities.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProducerMTLSIdentityPage"
+    post:
+      summary: Create producer mTLS identity
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateProducerMTLSIdentityRequest"
+      responses:
+        "201":
+          description: Producer mTLS identity created.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProducerMTLSIdentity"
+  /v1/producer-mtls-identities/{identity_id}:
+    get:
+      summary: Get producer mTLS identity
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: identity_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Producer mTLS identity metadata.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProducerMTLSIdentity"
+    patch:
+      summary: Update producer mTLS identity
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: identity_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateProducerMTLSIdentityRequest"
+      responses:
+        "200":
+          description: Producer mTLS identity updated.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProducerMTLSIdentity"
+    delete:
+      summary: Disable producer mTLS identity
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: identity_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ReasonRequest"
+      responses:
+        "200":
+          description: Producer mTLS identity disabled.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProducerMTLSIdentity"
+  /v1/producer-mtls-identities/{identity_id}:verify:
+    post:
+      summary: Verify producer mTLS certificate against identity
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: identity_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/VerifyProducerMTLSIdentityRequest"
+      responses:
+        "200":
+          description: Certificate verification result.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProducerMTLSIdentityVerification"
   /v1/auth/oidc/login:
     get:
       summary: Start OIDC management login
@@ -1970,11 +2246,23 @@ paths:
           description: Paginated event list.
     post:
       summary: Ingest product event
+      description: Accepts product events from management API keys, producer OAuth bearer tokens, or verified producer mTLS identities. Source-bound credentials must match the submitted `source_id`.
       security:
         - bearerAuth: []
+        - producerMTLS: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ProductEventIngestRequest"
       responses:
         "202":
           description: Product event accepted after durable capture.
+        "401":
+          $ref: "#/components/responses/Problem"
+        "403":
+          $ref: "#/components/responses/Problem"
   /v1/events/{event_id}:
     get:
       summary: Get event
@@ -3400,6 +3688,11 @@ components:
     bearerAuth:
       type: http
       scheme: bearer
+    basicAuth:
+      type: http
+      scheme: basic
+    producerMTLS:
+      type: mutualTLS
   parameters:
     Limit:
       name: limit
@@ -3518,6 +3811,292 @@ components:
           nullable: true
         has_more:
           type: boolean
+    OAuthClientCredentialsRequest:
+      type: object
+      required: [grant_type]
+      additionalProperties: false
+      properties:
+        grant_type:
+          type: string
+          enum: [client_credentials]
+        scope:
+          type: string
+          description: Optional requested scope string. The server issues only scopes allowed by the producer client.
+    ProducerTokenResponse:
+      type: object
+      required: [access_token, token_type, expires_in, scope]
+      properties:
+        access_token:
+          type: string
+          description: Opaque bearer token returned once and stored hashed server-side.
+        token_type:
+          type: string
+          enum: [Bearer]
+        expires_in:
+          type: integer
+          minimum: 1
+          maximum: 3600
+        scope:
+          type: string
+    CreateProducerClientRequest:
+      type: object
+      required: [name]
+      additionalProperties: false
+      properties:
+        name:
+          type: string
+          minLength: 1
+        source_id:
+          type: string
+          description: Optional source binding. Bound clients may ingest only matching source_id events.
+        scopes:
+          type: array
+          items:
+            type: string
+          default: [events:write]
+        token_ttl_seconds:
+          type: integer
+          minimum: 60
+          maximum: 3600
+          default: 900
+    UpdateProducerClientRequest:
+      type: object
+      required: [reason]
+      additionalProperties: false
+      properties:
+        name:
+          type: string
+        source_id:
+          type: string
+        scopes:
+          type: array
+          items:
+            type: string
+        token_ttl_seconds:
+          type: integer
+          minimum: 60
+          maximum: 3600
+        state:
+          type: string
+          enum: [active, disabled]
+        reason:
+          type: string
+          minLength: 1
+          maxLength: 500
+    ProducerClient:
+      type: object
+      required: [id, tenant_id, name, scopes, token_ttl_seconds, state, created_at, updated_at]
+      properties:
+        id:
+          type: string
+        tenant_id:
+          type: string
+        name:
+          type: string
+        source_id:
+          type: string
+        scopes:
+          type: array
+          items:
+            type: string
+        token_ttl_seconds:
+          type: integer
+        state:
+          type: string
+          enum: [active, disabled]
+        created_by:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+        disabled_at:
+          type: string
+          format: date-time
+    ProducerClientCreated:
+      type: object
+      required: [client, client_secret]
+      properties:
+        client:
+          $ref: "#/components/schemas/ProducerClient"
+        client_secret:
+          type: string
+          description: One-time generated client secret. It is not retrievable later.
+    ProducerClientSecret:
+      type: object
+      required: [id, tenant_id, client_id, prefix, last4, state, created_at]
+      properties:
+        id:
+          type: string
+        tenant_id:
+          type: string
+        client_id:
+          type: string
+        prefix:
+          type: string
+        last4:
+          type: string
+        state:
+          type: string
+          enum: [active, revoked]
+        created_at:
+          type: string
+          format: date-time
+        last_used_at:
+          type: string
+          format: date-time
+        revoked_at:
+          type: string
+          format: date-time
+    ProducerClientSecretRotated:
+      type: object
+      required: [secret, client_secret]
+      properties:
+        secret:
+          $ref: "#/components/schemas/ProducerClientSecret"
+        client_secret:
+          type: string
+          description: One-time generated replacement secret. It is not retrievable later.
+    ProducerClientPage:
+      type: object
+      required: [data, has_more]
+      properties:
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/ProducerClient"
+        next_cursor:
+          type: string
+          nullable: true
+        has_more:
+          type: boolean
+    CreateProducerMTLSIdentityRequest:
+      type: object
+      required: [name, certificate_pem]
+      additionalProperties: false
+      properties:
+        name:
+          type: string
+          minLength: 1
+        source_id:
+          type: string
+          description: Optional source binding for product-event ingestion.
+        certificate_pem:
+          type: string
+          description: PEM-encoded public certificate. Private keys are never submitted.
+    UpdateProducerMTLSIdentityRequest:
+      type: object
+      required: [reason]
+      additionalProperties: false
+      properties:
+        name:
+          type: string
+        source_id:
+          type: string
+        state:
+          type: string
+          enum: [active, disabled]
+        reason:
+          type: string
+          minLength: 1
+          maxLength: 500
+    VerifyProducerMTLSIdentityRequest:
+      type: object
+      required: [certificate_pem]
+      additionalProperties: false
+      properties:
+        certificate_pem:
+          type: string
+    ProducerMTLSIdentity:
+      type: object
+      required: [id, tenant_id, name, certificate_fingerprint_sha256, cert_subject, not_before, not_after, state, created_at, updated_at]
+      properties:
+        id:
+          type: string
+        tenant_id:
+          type: string
+        name:
+          type: string
+        source_id:
+          type: string
+        certificate_fingerprint_sha256:
+          type: string
+          description: SHA-256 fingerprint of the public certificate.
+        cert_subject:
+          type: string
+        dns_sans:
+          type: array
+          items:
+            type: string
+        uri_sans:
+          type: array
+          items:
+            type: string
+        email_sans:
+          type: array
+          items:
+            type: string
+        not_before:
+          type: string
+          format: date-time
+        not_after:
+          type: string
+          format: date-time
+        state:
+          type: string
+          enum: [active, disabled]
+        created_by:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+        disabled_at:
+          type: string
+          format: date-time
+    ProducerMTLSIdentityVerification:
+      type: object
+      required: [matched]
+      properties:
+        matched:
+          type: boolean
+        identity:
+          $ref: "#/components/schemas/ProducerMTLSIdentity"
+    ProducerMTLSIdentityPage:
+      type: object
+      required: [data, has_more]
+      properties:
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/ProducerMTLSIdentity"
+        next_cursor:
+          type: string
+          nullable: true
+        has_more:
+          type: boolean
+    ProductEventIngestRequest:
+      type: object
+      required: [source_id]
+      additionalProperties: true
+      properties:
+        id:
+          type: string
+          description: Producer-supplied event id.
+        type:
+          type: string
+          description: Product event type.
+        source_id:
+          type: string
+          description: Source identifier used for source-bound credential checks.
+        data:
+          type: object
+          additionalProperties: true
+          description: Product event payload.
     IdentityProvider:
       type: object
       required: [id, tenant_id, name, provider_type, issuer_url, client_id, state, created_at]
