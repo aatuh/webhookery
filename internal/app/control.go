@@ -995,6 +995,7 @@ func (s *ControlService) CreateSource(ctx context.Context, actor authz.Actor, re
 		Provider:           req.Provider,
 		Adapter:            adapter,
 		State:              domain.StateActive,
+		CreatedBy:          actor.ID,
 		VerificationSecret: []byte(req.VerificationSecret),
 	})
 }
@@ -1078,6 +1079,7 @@ func (s *ControlService) CreateEndpoint(ctx context.Context, actor authz.Actor, 
 		MTLSCertSubject:   mtlsSubject,
 		MTLSClientCertPEM: mtlsCertPEM,
 		MTLSClientKeyPEM:  mtlsKeyPEM,
+		CreatedBy:         actor.ID,
 	})
 	return endpoint, result, err
 }
@@ -1297,6 +1299,7 @@ func (s *ControlService) CreateRoute(ctx context.Context, actor authz.Actor, req
 		TransformationID: strings.TrimSpace(req.TransformationID),
 		State:            state,
 		Version:          1,
+		CreatedBy:        actor.ID,
 	})
 }
 

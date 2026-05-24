@@ -36,10 +36,10 @@ require_executable scripts/backup_postgres.sh
 require_executable scripts/restore_postgres.sh
 
 say "running fast repository checks"
-make fast-check
+env -u RANDONNEE_TEST_DATABASE_URL make fast-check
 
 say "running release acceptance evidence checks"
-make release-acceptance
+env -u RANDONNEE_TEST_DATABASE_URL make release-acceptance
 
 say "running targeted production-core tests"
 go test ./cmd/whcp ./internal/adapters/httpapi ./internal/adapters/postgres ./internal/app ./internal/worker ./internal/provider ./internal/ssrf ./internal/evidence ./pkg/client ./pkg/verifier

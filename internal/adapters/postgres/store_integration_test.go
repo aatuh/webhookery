@@ -76,6 +76,12 @@ func TestPostgresWorkerLeaseRecoveryAndLivePriority(t *testing.T) {
 	defer store.Close()
 
 	now := time.Date(2026, 5, 26, 16, 0, 0, 0, time.UTC)
+	if _, err := store.pool.Exec(ctx, `UPDATE outbox SET state='completed', locked_by=NULL, lock_expires_at=NULL WHERE tenant_id LIKE 'ten_it_%' AND state <> 'completed'`); err != nil {
+		t.Fatalf("clear prior integration outbox work: %v", err)
+	}
+	if _, err := store.pool.Exec(ctx, `UPDATE deliveries SET state='succeeded', locked_by=NULL, lock_expires_at=NULL WHERE tenant_id LIKE 'ten_it_%' AND state IN ('scheduled','in_progress')`); err != nil {
+		t.Fatalf("clear prior integration delivery work: %v", err)
+	}
 	control := app.NewControlService(store, ssrf.Validator{Resolver: ssrf.StaticResolver{"receiver.example.com": {netip.MustParseAddr("93.184.216.34")}}})
 	source, _ := createPostgresIntegrationRoute(t, ctx, control, actor, "invoice.created")
 	first := ingestPostgresIntegrationEvent(t, ctx, store, actor, source.ID, "invoice.created", "evt_it_recovery_"+time.Now().UTC().Format("150405.000000000"), now)
@@ -126,7 +132,7 @@ func TestPostgresWorkerLeaseRecoveryAndLivePriority(t *testing.T) {
 	}
 
 	second := ingestPostgresIntegrationEvent(t, ctx, store, actor, source.ID, "invoice.created", "evt_it_priority_"+time.Now().UTC().Format("150405.000000000"), now.Add(time.Second))
-	if _, err := control.CreateReplay(ctx, actor, app.ReplayRequest{EventID: second.EventID, Reason: "integration priority drill", ConfigMode: app.ReplayConfigCurrent}); err != nil {
+	if _, err := store.CreateReplay(ctx, actor.TenantID, actor.ID, app.ReplayRequest{EventID: second.EventID, Reason: "integration priority drill", ConfigMode: app.ReplayConfigCurrent}); err != nil {
 		t.Fatalf("create replay for priority drill: %v", err)
 	}
 	outboxItems, err := store.ClaimOutbox(ctx, "it-priority-outbox", 10)

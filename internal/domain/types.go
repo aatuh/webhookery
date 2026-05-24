@@ -136,6 +136,7 @@ type Source struct {
 	Provider            string
 	Adapter             string
 	State               string
+	CreatedBy           string
 	VerificationSecret  []byte
 	VerificationSecrets [][]byte
 	CreatedAt           time.Time
@@ -155,6 +156,7 @@ type Endpoint struct {
 	CircuitState      string    `json:"circuit_state,omitempty"`
 	FailureCount      int       `json:"failure_count,omitempty"`
 	DisabledUntil     time.Time `json:"disabled_until,omitempty"`
+	CreatedBy         string    `json:"-"`
 	CreatedAt         time.Time `json:"created_at"`
 }
 
@@ -414,6 +416,7 @@ type Route struct {
 	RetryPolicyID           string    `json:"retry_policy_id,omitempty"`
 	TransformationID        string    `json:"transformation_id,omitempty"`
 	TransformationVersionID string    `json:"transformation_version_id,omitempty"`
+	CreatedBy               string    `json:"-"`
 	CreatedAt               time.Time `json:"created_at"`
 }
 

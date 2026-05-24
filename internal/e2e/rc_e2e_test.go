@@ -13,6 +13,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgxpool"
+
 	"webhookery/internal/adapters/crypto"
 	"webhookery/internal/adapters/deliveryhttp"
 	"webhookery/internal/adapters/postgres"
@@ -699,6 +701,7 @@ func openRCStoreWithOptions(t *testing.T, opts postgres.StoreOptions) (context.C
 	if err := postgres.MigrateUp(ctx, databaseURL, migrationsDir); err != nil {
 		t.Fatalf("migrate test database: %v", err)
 	}
+	clearPriorRCE2EWork(t, ctx, databaseURL)
 	box := rcTestSecretBox(t)
 	store, err := postgres.NewWithOptions(ctx, databaseURL, box, opts)
 	if err != nil {
@@ -711,7 +714,38 @@ func openRCStoreWithOptions(t *testing.T, opts postgres.StoreOptions) (context.C
 		Role:     authz.RoleOwner,
 		Scopes:   []string{"*"},
 	}
+	if _, err := store.CreateAPIKey(ctx, app.APIKeyCreateInput{
+		Key: domain.APIKey{
+			TenantID: actor.TenantID,
+			UserID:   actor.ID,
+			Name:     "RC E2E owner",
+			Prefix:   "rc-e2e",
+			Last4:    "test",
+			Hash:     app.HashToken("rc-e2e-" + suffix),
+			Scopes:   []string{"*"},
+			State:    domain.StateActive,
+		},
+		Role:    authz.RoleOwner,
+		ActorID: actor.ID,
+	}); err != nil {
+		t.Fatalf("create RC E2E actor membership: %v", err)
+	}
 	return ctx, store, actor
+}
+
+func clearPriorRCE2EWork(t *testing.T, ctx context.Context, databaseURL string) {
+	t.Helper()
+	pool, err := pgxpool.New(ctx, databaseURL)
+	if err != nil {
+		t.Fatalf("open cleanup pool: %v", err)
+	}
+	defer pool.Close()
+	if _, err := pool.Exec(ctx, `UPDATE outbox SET state='completed', locked_by=NULL, lock_expires_at=NULL WHERE (tenant_id LIKE 'ten_rc_%' OR tenant_id LIKE 'ten_it_%') AND state <> 'completed'`); err != nil {
+		t.Fatalf("clear prior RC outbox work: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE deliveries SET state='canceled', locked_by=NULL, lock_expires_at=NULL WHERE (tenant_id LIKE 'ten_rc_%' OR tenant_id LIKE 'ten_it_%') AND state IN ('scheduled','in_progress')`); err != nil {
+		t.Fatalf("clear prior RC delivery work: %v", err)
+	}
 }
 
 func rcTestSecretBox(t *testing.T) crypto.Envelope {
