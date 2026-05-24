@@ -35,6 +35,8 @@ type EnterpriseIdentityStore interface {
 	CreateOIDCLoginState(ctx context.Context, state domain.OIDCLoginState) error
 	ConsumeOIDCLoginState(ctx context.Context, stateHash string) (domain.OIDCLoginState, domain.IdentityProvider, error)
 	CreateOIDCSession(ctx context.Context, input OIDCSessionInput) (domain.AuthSession, authz.Actor, error)
+	ListAuthSessions(ctx context.Context, tenantID string, limit int) ([]domain.AuthSession, error)
+	RevokeAuthSessionByID(ctx context.Context, tenantID, sessionID, actorID, reason string) (domain.AuthSession, error)
 	RevokeAuthSession(ctx context.Context, tenantID, actorID, sessionHash, reason string) error
 	CurrentAuthSession(ctx context.Context, tenantID, actorID, sessionHash string) (domain.AuthSession, error)
 	AuthenticateSCIMTokenHash(ctx context.Context, tokenHash string) (authz.Actor, error)
@@ -480,6 +482,31 @@ func (s *ControlService) CurrentAuthSession(ctx context.Context, actor authz.Act
 		return domain.AuthSession{}, err
 	}
 	return store.CurrentAuthSession(ctx, actor.TenantID, actor.ID, HashToken(rawSessionToken))
+}
+
+func (s *ControlService) ListAuthSessions(ctx context.Context, actor authz.Actor, limit int) ([]domain.AuthSession, error) {
+	if !authz.Can(actor, "security:read", actor.TenantID) {
+		return nil, ErrForbidden
+	}
+	store, err := s.enterpriseStore()
+	if err != nil {
+		return nil, err
+	}
+	return store.ListAuthSessions(ctx, actor.TenantID, normalizeLimit(limit))
+}
+
+func (s *ControlService) RevokeAuthSessionByID(ctx context.Context, actor authz.Actor, sessionID string, req StateChangeRequest) (domain.AuthSession, error) {
+	if !authz.Can(actor, "security:write", actor.TenantID) {
+		return domain.AuthSession{}, ErrForbidden
+	}
+	if strings.TrimSpace(sessionID) == "" || strings.TrimSpace(req.Reason) == "" {
+		return domain.AuthSession{}, fmt.Errorf("%w: session_id and reason are required", ErrInvalidInput)
+	}
+	store, err := s.enterpriseStore()
+	if err != nil {
+		return domain.AuthSession{}, err
+	}
+	return store.RevokeAuthSessionByID(ctx, actor.TenantID, sessionID, actor.ID, req.Reason)
 }
 
 func (s *ControlService) AuthenticateSCIMToken(ctx context.Context, rawToken string) (authz.Actor, error) {

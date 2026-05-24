@@ -429,6 +429,53 @@ func (s *Store) RevokeAuthSession(ctx context.Context, tenantID, actorID, sessio
 	return tx.Commit(ctx)
 }
 
+func (s *Store) ListAuthSessions(ctx context.Context, tenantID string, limit int) ([]domain.AuthSession, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT id, tenant_id, user_id, COALESCE(external_identity_id,''), state, created_at, last_seen_at, expires_at, COALESCE(revoked_at, 'epoch'::timestamptz)
+		FROM auth_sessions
+		WHERE tenant_id=$1
+		ORDER BY created_at DESC
+		LIMIT $2`, tenantID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []domain.AuthSession
+	for rows.Next() {
+		var item domain.AuthSession
+		if err := rows.Scan(&item.ID, &item.TenantID, &item.UserID, &item.ExternalIdentityID, &item.State, &item.CreatedAt, &item.LastSeenAt, &item.ExpiresAt, &item.RevokedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, item)
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) RevokeAuthSessionByID(ctx context.Context, tenantID, sessionID, actorID, reason string) (domain.AuthSession, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return domain.AuthSession{}, err
+	}
+	defer rollback(ctx, tx)
+	var item domain.AuthSession
+	err = tx.QueryRow(ctx, `
+		UPDATE auth_sessions
+		SET state='revoked', revoked_at=now()
+		WHERE tenant_id=$1 AND id=$2
+		RETURNING id, tenant_id, user_id, COALESCE(external_identity_id,''), state, created_at, last_seen_at, expires_at, COALESCE(revoked_at, 'epoch'::timestamptz)`,
+		tenantID, sessionID).Scan(&item.ID, &item.TenantID, &item.UserID, &item.ExternalIdentityID, &item.State, &item.CreatedAt, &item.LastSeenAt, &item.ExpiresAt, &item.RevokedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return domain.AuthSession{}, app.ErrNotFound
+	}
+	if err != nil {
+		return domain.AuthSession{}, err
+	}
+	if _, err := recordAuditEventTx(ctx, tx, auditEventInput{TenantID: tenantID, ActorID: actorID, Action: "auth_session.revoked", Resource: "auth_session", ResourceID: sessionID, Reason: reason}); err != nil {
+		return domain.AuthSession{}, err
+	}
+	return item, tx.Commit(ctx)
+}
+
 func (s *Store) CurrentAuthSession(ctx context.Context, tenantID, actorID, sessionHash string) (domain.AuthSession, error) {
 	var session domain.AuthSession
 	err := s.pool.QueryRow(ctx, `

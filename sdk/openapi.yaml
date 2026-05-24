@@ -158,6 +158,44 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/AuthSession"
+  /v1/auth/sessions:
+    get:
+      summary: List active management sessions
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: Paginated tenant-scoped session metadata.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthSessionPage"
+  /v1/auth/sessions/{session_id}:revoke:
+    post:
+      summary: Revoke management session
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: session_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ReasonRequest"
+      responses:
+        "200":
+          description: Session revoked.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthSession"
   /v1/identity-providers:
     get:
       summary: List identity providers
@@ -3452,6 +3490,18 @@ components:
         expires_at:
           type: string
           format: date-time
+    AuthSessionPage:
+      type: object
+      properties:
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/AuthSession"
+        next_cursor:
+          type: string
+          nullable: true
+        has_more:
+          type: boolean
     AuthSessionCreated:
       type: object
       properties:

@@ -73,6 +73,7 @@ var indexTemplate = template.Must(template.New("index").Parse(`<!doctype html>
       ["audit exports", "/v1/audit-exports"],
       ["retention", "/v1/admin/retention-policies"],
       ["identity providers", "/v1/identity-providers"],
+      ["active sessions", "/v1/auth/sessions"],
       ["scim tokens", "/v1/scim-tokens"],
       ["role bindings", "/v1/role-bindings"],
       ["access policies", "/v1/access-policies"],
@@ -168,6 +169,9 @@ var indexTemplate = template.Must(template.New("index").Parse(`<!doctype html>
       }
       if (name === "identity providers") {
         keys = ["id", "name", "provider_type", "issuer_url", "client_id", "state", "created_at", "updated_at"];
+      }
+      if (name === "active sessions") {
+        keys = ["id", "user_id", "external_identity_id", "state", "created_at", "last_seen_at", "expires_at", "revoked_at"];
       }
       if (name === "scim tokens") {
         keys = ["id", "name", "prefix", "last4", "state", "created_at", "last_used_at", "revoked_at"];

@@ -169,6 +169,12 @@ func (s *enterpriseFakeStore) CreateOIDCSession(_ context.Context, input OIDCSes
 	s.createdSession = input
 	return domain.AuthSession{ID: "ses_1", TenantID: input.TenantID, UserID: "usr_1", SessionHash: input.SessionHash, State: domain.StateActive, ExpiresAt: input.ExpiresAt}, authz.Actor{ID: "usr_1", TenantID: input.TenantID, Role: authz.RoleSupport}, nil
 }
+func (s *enterpriseFakeStore) ListAuthSessions(context.Context, string, int) ([]domain.AuthSession, error) {
+	return nil, nil
+}
+func (s *enterpriseFakeStore) RevokeAuthSessionByID(context.Context, string, string, string, string) (domain.AuthSession, error) {
+	return domain.AuthSession{}, nil
+}
 func (s *enterpriseFakeStore) RevokeAuthSession(context.Context, string, string, string, string) error {
 	return nil
 }

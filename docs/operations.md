@@ -569,7 +569,9 @@ issuer, audience/client id, expiry, and the signed ID token before creating a
 hashed `webhookery_session` cookie. Session cookies are HttpOnly, SameSite=Lax,
 and marked Secure. Logout revokes the server-side session hash.
 Disabling an identity provider revokes active sessions created through that
-provider. SAML assertion processing is not implemented in this slice.
+provider. Security operators can list and revoke tenant sessions through
+`/v1/auth/sessions`; session token hashes are never returned. SAML assertion
+processing is not implemented in this slice.
 
 SCIM provisioning is available at `/v1/scim/v2/Users` and
 `/v1/scim/v2/Groups`. SCIM bearer tokens are created through

@@ -82,6 +82,8 @@ func (s *Server) Routes() http.Handler {
 			r.Use(s.requireAuth)
 			r.Post("/auth/logout", s.logout)
 			r.Get("/auth/session", s.currentSession)
+			r.Get("/auth/sessions", s.listAuthSessions)
+			r.Post("/auth/sessions/{session_id}:revoke", s.revokeAuthSession)
 			r.Get("/identity-providers", s.listIdentityProviders)
 			r.Post("/identity-providers", s.createIdentityProvider)
 			r.Get("/identity-providers/{provider_id}", s.getIdentityProvider)
@@ -1665,6 +1667,28 @@ func (s *Server) currentSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	item, err := s.cfg.Control.CurrentAuthSession(r.Context(), actorFrom(r), cookie.Value)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, item)
+}
+
+func (s *Server) listAuthSessions(w http.ResponseWriter, r *http.Request) {
+	items, err := s.cfg.Control.ListAuthSessions(r.Context(), actorFrom(r), queryLimit(r))
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, page(items))
+}
+
+func (s *Server) revokeAuthSession(w http.ResponseWriter, r *http.Request) {
+	var req app.StateChangeRequest
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	item, err := s.cfg.Control.RevokeAuthSessionByID(r.Context(), actorFrom(r), chi.URLParam(r, "session_id"), req)
 	if err != nil {
 		s.writeError(w, r, err)
 		return
