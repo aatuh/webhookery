@@ -127,6 +127,141 @@ WEBHOOKERY_OBJECT_STORAGE_USE_SSL=true
 go run ./cmd/whcp doctor production
 ```
 
+## Production RC Checklist
+
+The release-candidate target is a single-region self-hosted deployment with
+PostgreSQL as the source of truth. It is production-respectable only when the
+core product checks, failure drills, restore rehearsal, and operator preflight
+are repeatable. It is not a certification, hosted SLA, or exactly-once claim.
+
+Before promotion, complete this checklist:
+
+- `go run ./cmd/whcp doctor production` exits with no `blocker` findings.
+  Warnings require an explicit operator decision.
+- `make finalize` passes on the release candidate commit.
+- `make rc-check` passes without live third-party provider, AWS, Vault, Slack,
+  PagerDuty, SIEM, or customer receiver calls.
+- `RANDONNEE_TEST_DATABASE_URL=postgres://... make rc-check` passes against a
+  disposable PostgreSQL database. This runs migrations, Postgres integration,
+  and DB-backed RC E2E flows serially.
+- `WEBHOOKERY_RC_RESTORE_DATABASE_URL=postgres://...` is set to a separate
+  disposable restore database and the restore drill passes before upgrades that
+  touch migrations, audit chain behavior, retention, exports, or storage.
+- Object storage, if enabled, has its own backup/restore procedure; PostgreSQL
+  dumps do not contain S3 object bodies.
+- Bootstrap API key posture is reviewed: the bootstrap hash is removed,
+  rotated, or restricted after a database-backed owner/security key exists.
+- `/readyz`, `/v1/ops/storage`, `/v1/ops/config`, `/v1/ops/queues`,
+  `/v1/ops/metrics`, alert firings, and audit-chain verification are checked
+  after deployment.
+
+Expected local RC command sequence:
+
+```bash
+docker compose up -d postgres
+RANDONNEE_TEST_DATABASE_URL=postgres://webhookery:change-me@localhost:5432/webhookery?sslmode=disable make rc-check
+```
+
+A successful run ends with:
+
+```text
+rc-check: release-candidate acceptance checks passed
+```
+
+Restore drills require a separate disposable restore database URL. The source
+and restore URLs must not point at the same database:
+
+```bash
+RANDONNEE_TEST_DATABASE_URL=postgres://webhookery:change-me@localhost:5432/webhookery?sslmode=disable \
+WEBHOOKERY_RC_RESTORE_DATABASE_URL=postgres://webhookery_restore:change-me@localhost:5433/webhookery_restore?sslmode=disable \
+make rc-check
+```
+
+Use whatever local PostgreSQL topology provides that second URL; the drill is
+destructive for the restore target and the restore script refuses to run
+without `WEBHOOKERY_RESTORE_CONFIRM=restore`.
+
+## Upgrade And Restore Drill
+
+For production upgrades, rehearse the restore path before changing live
+storage, migrations, retention policies, audit-chain code, or key-custody mode.
+
+1. Stop API, worker, and scheduler processes for the restore target.
+2. Back up the source PostgreSQL database:
+
+   ```bash
+   WEBHOOKERY_DATABASE_URL=postgres://... scripts/backup_postgres.sh backups
+   ```
+
+   Expected result: a `backups/webhookery-<timestamp>.dump` path is printed.
+
+3. Restore into a fresh disposable database:
+
+   ```bash
+   WEBHOOKERY_DATABASE_URL=postgres://... WEBHOOKERY_RESTORE_CONFIRM=restore scripts/restore_postgres.sh backups/webhookery-20260525T000000Z.dump
+   ```
+
+   Expected result: `pg_restore` exits zero.
+
+4. Run migrations on the restored database:
+
+   ```bash
+   WEBHOOKERY_DATABASE_URL=postgres://... go run ./cmd/whcp migrate up
+   ```
+
+5. Verify restored evidence surfaces:
+
+   ```bash
+   go run ./cmd/whcp audit verify-chain --api-key "$WEBHOOKERY_API_KEY"
+   go run ./cmd/whcp audit verify-bundle --file evidence.tar.gz
+   ```
+
+   Expected result: the chain verification is valid, and bundle verification
+   reports valid file hashes and audit-chain continuity.
+
+6. Start API and workers, then check:
+
+   ```bash
+   curl -fsS http://localhost:8080/readyz
+   go run ./cmd/whcp ops storage --api-key "$WEBHOOKERY_API_KEY"
+   go run ./cmd/whcp ops queues --api-key "$WEBHOOKERY_API_KEY"
+   ```
+
+The automated RC restore drill in `internal/e2e` creates evidence, backs up
+PostgreSQL, restores to a fresh DB, migrates, and verifies event, export, and
+audit-chain readability. It intentionally treats object bodies as outside the
+PostgreSQL dump scope.
+
+## Incident Triage
+
+Use the control-plane evidence before assuming provider loss or downstream
+success. Inbound 2xx only means durable capture.
+
+| Symptom | First checks | Expected operator action |
+| --- | --- | --- |
+| Provider receives non-2xx or no ack | `/readyz`, API logs, PostgreSQL availability, `WEBHOOKERY_RAW_STORAGE_MODE`, object-store health in S3 mode | Restore durable storage first; do not force 2xx while capture is unavailable. |
+| Invalid signatures or quarantine growth | `go run ./cmd/whcp events timeline --event-id evt_...`, quarantine list, source secret versions | Verify exact raw-body signing settings, timestamp windows, and secret rotation grace periods before replaying. |
+| DLQ growth or receiver failures | `go run ./cmd/whcp ops queues`, `go run ./cmd/whcp alerts firings`, delivery attempts, endpoint circuit state | Fix receiver/SSRF/TLS errors, then release DLQ entries with a reason. |
+| Replay backlog affects live traffic | `go run ./cmd/whcp ops queues`, replay job status and rate limits | Pause or rate-limit replay; live deliveries should remain prioritized. |
+| Audit chain verification failure | `go run ./cmd/whcp audit verify-chain`, latest audit exports, retention run records | Stop retention/export changes, preserve database state, and investigate mismatched or missing entries before anchoring. |
+| SIEM or notification egress failures | `go run ./cmd/whcp notification-deliveries list --state failed`, `go run ./cmd/whcp siem-deliveries list --state failed` | Fix receiver availability/signature config and retry; cursors must not be advanced manually. |
+| Reconciliation gaps | `go run ./cmd/whcp reconciliation-jobs items --job-id rec_...` | Distinguish `captured`, `redelivery_requested`, `unrecoverable`, and provider limitation evidence before claiming recovery. |
+| Restore uncertainty | Restore into a disposable DB and run audit-chain plus bundle verification | Do not restore over live state until the drill succeeds and object-storage backup scope is understood. |
+
+## Explicit Non-Goals
+
+The implemented core product does not claim:
+
+- exactly-once delivery or provider-side event completeness;
+- multi-region active-active coordination;
+- external timestamping, HSM/PKCS#11 custody, or compliance-certified evidence
+  packs;
+- live Stripe/GitHub/Shopify/Slack/AWS/Vault calls in release acceptance;
+- Kafka, NATS, Redis, or object storage as the authority for accepted event
+  evidence;
+- arbitrary code plugins, visual workflow builders, marketplace distribution,
+  GraphQL, SAML assertion processing, or vendor-specific alert integrations.
+
 ## Backup And Restore
 
 PostgreSQL is the authoritative metadata store for accepted events, receipts,

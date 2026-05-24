@@ -220,3 +220,24 @@ Webhookery does not promise exactly-once delivery. Inbound success means the
 platform durably captured raw request evidence and verification metadata. Every
 loss boundary, duplicate, replay, and delivery attempt is intended to remain
 visible and auditable.
+
+## Production RC Readiness
+
+The production-respectable target for this repository is a single-region
+self-hosted release candidate. Before promoting a deployment:
+
+1. Run `go run ./cmd/whcp doctor production`; production blockers must be
+   fixed before promotion.
+2. Run `make finalize`; all unit, contract, SDK, vulnerability, gosec, and race
+   checks must pass.
+3. Run `RANDONNEE_TEST_DATABASE_URL=postgres://... make rc-check` against a
+   disposable PostgreSQL database; it should end with
+   `release-candidate acceptance checks passed`.
+4. Run the restore drill with a separate disposable restore database by setting
+   `WEBHOOKERY_RC_RESTORE_DATABASE_URL=postgres://...` before `make rc-check`.
+5. Confirm the operator runbooks in `docs/operations.md` match the deployed
+   storage, key-custody, TLS, and retention configuration.
+
+This RC scope does not claim exactly-once delivery, multi-region active-active
+operation, external timestamping, compliance certification, managed provider
+availability, or live third-party recovery guarantees.

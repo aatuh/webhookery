@@ -28,6 +28,12 @@ grep -q "blocker" docs/operations.md
 grep -q "warning" docs/operations.md
 grep -q "WEBHOOKERY_SECRET_BOX_MODE=aws-kms" docs/operations.md
 grep -q "WEBHOOKERY_RAW_STORAGE_MODE=s3" docs/operations.md
+grep -q "Production RC Checklist" docs/operations.md
+grep -q "Upgrade And Restore Drill" docs/operations.md
+grep -q "Incident Triage" docs/operations.md
+grep -q "Explicit Non-Goals" docs/operations.md
+grep -q "Production RC Readiness" README.md
+grep -q "make rc-check" README.md
 
 if [ -n "${RANDONNEE_TEST_DATABASE_URL:-}" ]; then
   make postgres-integration-test
