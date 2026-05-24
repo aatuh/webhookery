@@ -145,6 +145,7 @@ func runAPI() error {
 		Ingest:              apppkg.NewIngestService(store, apppkg.SystemClock{}),
 		Auth:                runtimeAuth(cfg, store),
 		SessionAuth:         apppkg.SessionAuthenticator{Lookup: store},
+		ProducerAuth:        apppkg.ProducerTokenAuthenticator{Lookup: store},
 		OpenAPI:             openAPI,
 		EnableUI:            cfg.EnableUI,
 		SessionCookieSecure: cfg.Environment == "production",

@@ -23,6 +23,10 @@ type SessionLookup interface {
 	AuthenticateSession(ctx context.Context, sessionHash string) (authz.Actor, error)
 }
 
+type ProducerAccessTokenLookup interface {
+	AuthenticateProducerAccessToken(ctx context.Context, tokenHash string) (authz.Actor, error)
+}
+
 type APIKeyAuthenticator struct {
 	Lookup APIKeyLookup
 }
@@ -43,6 +47,17 @@ func (a SessionAuthenticator) Authenticate(ctx context.Context, rawSessionToken 
 		return authz.Actor{}, ErrUnauthorized
 	}
 	return a.Lookup.AuthenticateSession(ctx, HashToken(rawSessionToken))
+}
+
+type ProducerTokenAuthenticator struct {
+	Lookup ProducerAccessTokenLookup
+}
+
+func (a ProducerTokenAuthenticator) Authenticate(ctx context.Context, bearerToken string) (authz.Actor, error) {
+	if bearerToken == "" || a.Lookup == nil {
+		return authz.Actor{}, ErrUnauthorized
+	}
+	return a.Lookup.AuthenticateProducerAccessToken(ctx, HashToken(bearerToken))
 }
 
 type MultiAuthenticator struct {

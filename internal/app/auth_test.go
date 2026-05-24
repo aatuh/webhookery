@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"webhookery/internal/authz"
+	"webhookery/internal/domain"
 	"webhookery/internal/ssrf"
 )
 
@@ -50,6 +51,35 @@ func TestCreateAPIKeyReturnsTokenOnlyOnce(t *testing.T) {
 	}
 }
 
+func TestIssueProducerTokenHashesSecretAndStoresOpaqueToken(t *testing.T) {
+	store := &fakeProducerTokenStore{
+		client: domain.ProducerClient{
+			ID:              "pcl_1",
+			TenantID:        "ten_a",
+			SourceID:        "src_1",
+			Scopes:          []string{"events:write"},
+			TokenTTLSeconds: 7200,
+			State:           domain.StateActive,
+		},
+	}
+	svc := NewControlService(store, ssrf.Validator{Resolver: ssrf.StaticResolver{}})
+
+	result, err := svc.IssueProducerToken(context.Background(), "pcl_1", "client-secret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.AccessToken == "" || result.TokenType != "Bearer" || result.ExpiresIn != 3600 || result.Scope != "events:write" {
+		t.Fatalf("unexpected token response: %+v", result)
+	}
+	if store.secretHash != HashToken("client-secret") {
+		t.Fatalf("client secret must be hashed before lookup, got %q", store.secretHash)
+	}
+	stored := store.tokenInput.Token
+	if stored.Hash == "" || stored.Hash == result.AccessToken || stored.TenantID != "ten_a" || stored.ClientID != "pcl_1" {
+		t.Fatalf("store must receive hashed tenant-scoped access token metadata: %+v", stored)
+	}
+}
+
 type fakeAPIKeyLookup struct {
 	actor authz.Actor
 	hash  string
@@ -58,4 +88,24 @@ type fakeAPIKeyLookup struct {
 func (f *fakeAPIKeyLookup) AuthenticateAPIKey(_ context.Context, hash string) (authz.Actor, error) {
 	f.hash = hash
 	return f.actor, nil
+}
+
+type fakeProducerTokenStore struct {
+	fakeControlStore
+	client     domain.ProducerClient
+	secretHash string
+	tokenInput ProducerAccessTokenCreateInput
+}
+
+func (f *fakeProducerTokenStore) AuthenticateProducerClient(_ context.Context, clientID, secretHash string) (domain.ProducerClient, error) {
+	f.secretHash = secretHash
+	if clientID != f.client.ID {
+		return domain.ProducerClient{}, ErrUnauthorized
+	}
+	return f.client, nil
+}
+
+func (f *fakeProducerTokenStore) CreateProducerAccessToken(_ context.Context, input ProducerAccessTokenCreateInput) (domain.ProducerAccessToken, error) {
+	f.tokenInput = input
+	return input.Token, nil
 }

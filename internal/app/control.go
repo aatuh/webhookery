@@ -230,6 +230,18 @@ type ProducerAccessTokenCreateInput struct {
 	Token domain.ProducerAccessToken
 }
 
+type producerTokenStore interface {
+	AuthenticateProducerClient(ctx context.Context, clientID, secretHash string) (domain.ProducerClient, error)
+	CreateProducerAccessToken(ctx context.Context, input ProducerAccessTokenCreateInput) (domain.ProducerAccessToken, error)
+}
+
+type ProducerTokenResponse struct {
+	AccessToken string `json:"access_token"`
+	TokenType   string `json:"token_type"`
+	ExpiresIn   int    `json:"expires_in"`
+	Scope       string `json:"scope"`
+}
+
 type CreateEndpointRequest struct {
 	Name              string `json:"name"`
 	URL               string `json:"url"`
@@ -630,6 +642,49 @@ func (s *ControlService) RevokeAPIKey(ctx context.Context, actor authz.Actor, ap
 	key, err := s.store.RevokeAPIKey(ctx, actor.TenantID, apiKeyID, actor.ID, req.Reason)
 	key.Hash = ""
 	return key, err
+}
+
+func (s *ControlService) IssueProducerToken(ctx context.Context, clientID, clientSecret string) (ProducerTokenResponse, error) {
+	clientID = strings.TrimSpace(clientID)
+	if clientID == "" || clientSecret == "" {
+		return ProducerTokenResponse{}, ErrUnauthorized
+	}
+	store, ok := s.store.(producerTokenStore)
+	if !ok {
+		return ProducerTokenResponse{}, ErrUnauthorized
+	}
+	client, err := store.AuthenticateProducerClient(ctx, clientID, HashToken(clientSecret))
+	if err != nil {
+		return ProducerTokenResponse{}, err
+	}
+	if client.State != domain.StateActive || !containsScope(client.Scopes, "events:write") {
+		return ProducerTokenResponse{}, ErrForbidden
+	}
+	ttl := client.TokenTTLSeconds
+	if ttl <= 0 {
+		ttl = 900
+	}
+	if ttl > 3600 {
+		ttl = 3600
+	}
+	token, err := random.Token("whpt", 32)
+	if err != nil {
+		return ProducerTokenResponse{}, err
+	}
+	_, err = store.CreateProducerAccessToken(ctx, ProducerAccessTokenCreateInput{Token: domain.ProducerAccessToken{
+		TenantID:  client.TenantID,
+		ClientID:  client.ID,
+		Hash:      HashToken(token),
+		Prefix:    tokenPrefix(token),
+		Last4:     tokenLast4(token),
+		Scopes:    []string{"events:write"},
+		State:     domain.StateActive,
+		ExpiresAt: time.Now().UTC().Add(time.Duration(ttl) * time.Second),
+	}})
+	if err != nil {
+		return ProducerTokenResponse{}, err
+	}
+	return ProducerTokenResponse{AccessToken: token, TokenType: "Bearer", ExpiresIn: ttl, Scope: "events:write"}, nil
 }
 
 func (s *ControlService) CreateSource(ctx context.Context, actor authz.Actor, req CreateSourceRequest) (domain.Source, error) {
@@ -2761,6 +2816,15 @@ func normalizeScopes(scopes []string) []string {
 		out = append(out, scope)
 	}
 	return out
+}
+
+func containsScope(scopes []string, want string) bool {
+	for _, scope := range scopes {
+		if scope == want || scope == "*" {
+			return true
+		}
+	}
+	return false
 }
 
 func tokenPrefix(token string) string {

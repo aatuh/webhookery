@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 
@@ -35,6 +36,7 @@ type ServerConfig struct {
 	Ingest              *app.IngestService
 	Auth                app.Authenticator
 	SessionAuth         app.Authenticator
+	ProducerAuth        app.Authenticator
 	OpenAPI             []byte
 	EnableUI            bool
 	SessionCookieSecure bool
@@ -60,6 +62,8 @@ func (s *Server) Routes() http.Handler {
 	r.Route("/v1", func(r chi.Router) {
 		r.Post("/ingest/{tenant_id}/{source_id}", s.ingestGeneric)
 		r.Post("/ingest/{provider}/{source_id}", s.ingestProvider)
+		r.Post("/oauth/token", s.issueOAuthToken)
+		r.With(s.requireProducerAuth).Post("/events", s.ingestProductEvent)
 		r.Get("/auth/oidc/login", s.oidcLogin)
 		r.Get("/auth/oidc/callback", s.oidcCallback)
 		r.Route("/scim/v2", func(r chi.Router) {
@@ -162,7 +166,6 @@ func (s *Server) Routes() http.Handler {
 			r.Post("/event-types/{event_type}/schemas/{schema_version}:validate", s.validateEventSchema)
 			r.Post("/event-types/{event_type}/schemas/{schema_version}:check-compatibility", s.checkEventSchemaCompatibility)
 			r.Get("/events", s.listEvents)
-			r.Post("/events", s.ingestProductEvent)
 			r.Get("/events/{event_id}", s.getEvent)
 			r.Get("/events/{event_id}/raw", s.getRawPayload)
 			r.Get("/events/{event_id}/normalized", s.getNormalizedEvent)
@@ -306,6 +309,42 @@ func (s *Server) requireAuth(next http.Handler) http.Handler {
 	})
 }
 
+func (s *Server) requireProducerAuth(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestID := requestID(r)
+		token := app.BearerToken(r.Header.Get("Authorization"))
+		if s.cfg.ProducerAuth != nil {
+			actor, err := s.cfg.ProducerAuth.Authenticate(r.Context(), token)
+			if err == nil {
+				if !authz.Can(actor, "events:write", actor.TenantID) {
+					writeProblem(w, problem.Forbidden(requestID))
+					return
+				}
+				next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), actorContextKey{}, actor)))
+				return
+			}
+			if !errors.Is(err, app.ErrUnauthorized) {
+				writeProblem(w, problem.Internal(requestID))
+				return
+			}
+		}
+		if s.cfg.Auth == nil {
+			writeProblem(w, problem.Unauthorized(requestID))
+			return
+		}
+		actor, err := s.cfg.Auth.Authenticate(r.Context(), token)
+		if err != nil {
+			writeProblem(w, problem.Unauthorized(requestID))
+			return
+		}
+		if !authz.Can(actor, "events:write", actor.TenantID) {
+			writeProblem(w, problem.Forbidden(requestID))
+			return
+		}
+		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), actorContextKey{}, actor)))
+	})
+}
+
 func (s *Server) requireSCIMAuth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if s.cfg.Control == nil {
@@ -354,6 +393,39 @@ func (s *Server) revokeAPIKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, item)
+}
+
+func (s *Server) issueOAuthToken(w http.ResponseWriter, r *http.Request) {
+	body, ok := readLimitedBody(w, r, 64<<10)
+	if !ok {
+		return
+	}
+	form, err := url.ParseQuery(string(body))
+	if err != nil {
+		writeProblem(w, problem.BadRequest(requestID(r), "validation_error", "Invalid form body."))
+		return
+	}
+	if form.Get("grant_type") != "client_credentials" {
+		writeProblem(w, problem.BadRequest(requestID(r), "unsupported_grant_type", "Only client_credentials grant is supported."))
+		return
+	}
+	if form.Get("client_secret") != "" {
+		writeProblem(w, problem.BadRequest(requestID(r), "invalid_request", "Client credentials must use HTTP Basic authentication."))
+		return
+	}
+	clientID, clientSecret, basicOK := r.BasicAuth()
+	if !basicOK || strings.TrimSpace(clientID) == "" || clientSecret == "" {
+		writeProblem(w, problem.Unauthorized(requestID(r)))
+		return
+	}
+	result, err := s.cfg.Control.IssueProducerToken(r.Context(), clientID, clientSecret)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Pragma", "no-cache")
+	writeJSON(w, http.StatusOK, result)
 }
 
 func (s *Server) createSource(w http.ResponseWriter, r *http.Request) {
@@ -1067,6 +1139,10 @@ func (s *Server) ingestProductEvent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	actor := actorFrom(r)
+	if actor.SourceID != "" && actor.SourceID != sourceID {
+		writeProblem(w, problem.Forbidden(requestID(r)))
+		return
+	}
 	result, err := s.cfg.Ingest.Ingest(r.Context(), app.IngestRequest{
 		TenantID:    actor.TenantID,
 		SourceID:    sourceID,

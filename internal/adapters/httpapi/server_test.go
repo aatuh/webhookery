@@ -55,6 +55,102 @@ func TestProductEventSourceIDExtractionPreservesRawBodyPath(t *testing.T) {
 	}
 }
 
+func TestOAuthTokenEndpointUsesBasicAuthAndNoStore(t *testing.T) {
+	store := &producerTokenControlStore{
+		client: domain.ProducerClient{
+			ID:              "pcl_1",
+			TenantID:        "ten_1",
+			Scopes:          []string{"events:write"},
+			TokenTTLSeconds: 900,
+			State:           domain.StateActive,
+		},
+	}
+	server := NewServer(ServerConfig{
+		Control: app.NewControlService(store, ssrf.Validator{Resolver: ssrf.StaticResolver{}}),
+		Ingest:  app.NewIngestService(&fakeIngestStore{}, app.SystemClock{}),
+		Auth:    app.NewStaticAuthenticator("api-key", authz.Actor{ID: "usr_1", TenantID: "ten_1", Role: authz.RoleAdmin, Scopes: []string{"*"}}),
+		OpenAPI: []byte("openapi: 3.1.0\n"),
+	})
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/v1/oauth/token", strings.NewReader("grant_type=client_credentials"))
+	req.SetBasicAuth("pcl_1", "client-secret")
+
+	server.Routes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected token response, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, `"token_type":"Bearer"`) || !strings.Contains(body, `"expires_in":900`) {
+		t.Fatalf("unexpected token body: %s", body)
+	}
+	if strings.Contains(body, "client-secret") || store.secretHash != app.HashToken("client-secret") || store.tokenInput.Token.Hash == "" {
+		t.Fatalf("token endpoint leaked or failed to hash credentials: body=%s hash=%q token=%+v", body, store.secretHash, store.tokenInput.Token)
+	}
+	if rec.Header().Get("Cache-Control") != "no-store" || rec.Header().Get("Pragma") != "no-cache" {
+		t.Fatalf("token response must be non-cacheable: headers=%v", rec.Header())
+	}
+}
+
+func TestOAuthTokenEndpointRejectsBodyClientSecret(t *testing.T) {
+	server := NewServer(ServerConfig{
+		Control: NewNoopControl(),
+		Ingest:  app.NewIngestService(&fakeIngestStore{}, app.SystemClock{}),
+		OpenAPI: []byte("openapi: 3.1.0\n"),
+	})
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/v1/oauth/token", strings.NewReader("grant_type=client_credentials&client_secret=body-secret"))
+
+	server.Routes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), "body-secret") {
+		t.Fatalf("error response leaked submitted secret: %s", rec.Body.String())
+	}
+}
+
+func TestProductEventsRequireEventsWrite(t *testing.T) {
+	server := NewServer(ServerConfig{
+		Control: NewNoopControl(),
+		Ingest:  app.NewIngestService(&fakeIngestStore{}, app.SystemClock{}),
+		Auth:    app.NewStaticAuthenticator("token", authz.Actor{ID: "usr_1", TenantID: "ten_1", Role: authz.RoleDeveloper, Scopes: []string{"events:read"}}),
+		OpenAPI: []byte("openapi: 3.1.0\n"),
+	})
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/v1/events", strings.NewReader(`{"source_id":"src_1","id":"evt_1"}`))
+	req.Header.Set("Authorization", "Bearer token")
+
+	server.Routes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("expected 403, got %d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestProductEventsRejectSourceBoundProducerMismatch(t *testing.T) {
+	ingest := &trackingIngestStore{}
+	server := NewServer(ServerConfig{
+		Control:      NewNoopControl(),
+		Ingest:       app.NewIngestService(ingest, app.SystemClock{}),
+		ProducerAuth: app.NewStaticAuthenticator("producer-token", authz.Actor{ID: "producer_client:pcl_1", TenantID: "ten_1", Role: authz.RoleDeveloper, Scopes: []string{"events:write"}, SourceID: "src_allowed"}),
+		OpenAPI:      []byte("openapi: 3.1.0\n"),
+	})
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/v1/events", strings.NewReader(`{"source_id":"src_other","id":"evt_1"}`))
+	req.Header.Set("Authorization", "Bearer producer-token")
+
+	server.Routes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("expected 403, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if ingest.called {
+		t.Fatal("source-bound producer mismatch must not reach ingestion")
+	}
+}
+
 func TestPrometheusMetricsDoesNotRequireBearer(t *testing.T) {
 	server := NewServer(ServerConfig{
 		Control: NewNoopControl(),
@@ -437,6 +533,26 @@ func (f *trackingIngestStore) FindSourceByProviderPath(context.Context, string, 
 func (f *trackingIngestStore) CaptureInbound(context.Context, app.CaptureInboundInput) (app.CaptureInboundResult, error) {
 	f.called = true
 	return app.CaptureInboundResult{}, nil
+}
+
+type producerTokenControlStore struct {
+	noopControlStore
+	client     domain.ProducerClient
+	secretHash string
+	tokenInput app.ProducerAccessTokenCreateInput
+}
+
+func (f *producerTokenControlStore) AuthenticateProducerClient(_ context.Context, clientID, secretHash string) (domain.ProducerClient, error) {
+	f.secretHash = secretHash
+	if clientID != f.client.ID {
+		return domain.ProducerClient{}, app.ErrUnauthorized
+	}
+	return f.client, nil
+}
+
+func (f *producerTokenControlStore) CreateProducerAccessToken(_ context.Context, input app.ProducerAccessTokenCreateInput) (domain.ProducerAccessToken, error) {
+	f.tokenInput = input
+	return input.Token, nil
 }
 
 func NewNoopControl() *app.ControlService {
