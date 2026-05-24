@@ -104,9 +104,11 @@ go run ./cmd/whcp access-policies create --name deny-prod-raw --action events:ra
 go run ./cmd/whcp authz explain --actor-id usr_... --action events:raw --resource-family event --resource-id evt_... --environment production --api-key "$WEBHOOKERY_API_KEY"
 scripts/backup_postgres.sh backups
 WEBHOOKERY_RESTORE_CONFIRM=restore scripts/restore_postgres.sh backups/webhookery-20260525T000000Z.dump
+go run ./cmd/whcp doctor production
 helm lint deploy/helm/webhookery
 terraform fmt -check -recursive deploy/terraform
 make release-acceptance
+make rc-check
 make collections-check
 ```
 
@@ -134,6 +136,14 @@ directly KMS-encrypt large secret values and it does not automatically
 re-encrypt rows written by local or Vault modes. `whcp key-custody test`
 checks the configured mode without printing plaintext, ciphertext, or full key
 ids.
+
+Run `go run ./cmd/whcp doctor production` before promoting a self-hosted
+deployment. The doctor reads environment/configuration only, prints
+`blocker`, `warning`, and `ok` findings, and returns non-zero when blockers
+remain. It never prints database passwords, API keys, webhook secrets, Vault
+tokens, AWS credentials, raw KMS key ids, or object-store credentials.
+Warnings are operator review items; blockers are unsafe or incomplete
+production settings.
 
 Product event producers can use API keys with `events:write`, OAuth client
 credentials from `/v1/producer-clients`, or app-verified producer mTLS

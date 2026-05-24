@@ -40,6 +40,93 @@ store.
 
 The project makes no FIPS/NIST/CMVP certification claim.
 
+## Production Doctor
+
+Run the production doctor before promoting or upgrading a self-hosted
+deployment:
+
+```bash
+WEBHOOKERY_ENVIRONMENT=production go run ./cmd/whcp doctor production
+```
+
+The command reads local environment/configuration only. It does not connect to
+PostgreSQL, object storage, Vault, AWS KMS, or webhook receivers, and it does
+not replace `make rc-check`, readiness probes, backup/restore drills, or
+tenant-scoped ops APIs. Its output is deliberately redacted and must not print
+database passwords, API keys, webhook secrets, OAuth tokens, Vault tokens, AWS
+credentials, raw KMS key ids, object-store credentials, private keys, or raw
+payload bodies.
+
+Doctor severities are:
+
+- `blocker`: unsafe or incomplete production posture. The command exits
+  non-zero.
+- `warning`: an operator must explicitly accept or remediate the risk. The
+  command may exit zero when only warnings remain.
+- `ok`: the checked setting has production-acceptable shape.
+
+Local development should use `.env.example`, `WEBHOOKERY_ENVIRONMENT=development`,
+and Docker Compose. The production doctor is not a local-development pass/fail
+gate; use `make fast-check` and local smoke tests for development feedback.
+
+A production-local deployment that uses local envelope encryption must provide
+a non-placeholder database URL, API TLS certificate/key files, a generated
+32-byte base64 `WEBHOOKERY_MASTER_KEY_BASE64`, and a non-placeholder bootstrap
+key hash or no bootstrap key. Example shape:
+
+```bash
+WEBHOOKERY_ENVIRONMENT=production
+WEBHOOKERY_DATABASE_URL=postgres://webhookery:<password>@postgres.example:5432/webhookery?sslmode=require
+WEBHOOKERY_TLS_CERT_FILE=/etc/webhookery/tls/tls.crt
+WEBHOOKERY_TLS_KEY_FILE=/etc/webhookery/tls/tls.key
+WEBHOOKERY_SECRET_BOX_MODE=local
+WEBHOOKERY_MASTER_KEY_BASE64=<base64-32-byte-key>
+WEBHOOKERY_BOOTSTRAP_API_KEY_HASH=<sha256-hash-or-empty-after-bootstrap>
+go run ./cmd/whcp doctor production
+```
+
+Local secret-box mode can be acceptable for smaller self-hosted installations
+with disciplined key custody, but the doctor reports it as a warning because
+Vault Transit or AWS KMS gives stronger operational separation.
+
+Vault Transit mode requires a TLS Vault address, token, and transit key name.
+The token is consumed from the environment and is never printed:
+
+```bash
+WEBHOOKERY_ENVIRONMENT=production
+WEBHOOKERY_SECRET_BOX_MODE=vault-transit
+WEBHOOKERY_VAULT_ADDR=https://vault.internal
+WEBHOOKERY_VAULT_TOKEN=<vault-token>
+WEBHOOKERY_VAULT_TRANSIT_KEY=webhookery
+go run ./cmd/whcp doctor production
+```
+
+AWS KMS mode requires region and key id. A custom endpoint is intended for
+LocalStack-style testing; non-TLS endpoint overrides produce a warning:
+
+```bash
+WEBHOOKERY_ENVIRONMENT=production
+WEBHOOKERY_SECRET_BOX_MODE=aws-kms
+WEBHOOKERY_AWS_REGION=us-east-1
+WEBHOOKERY_AWS_KMS_KEY_ID=<kms-key-id-or-arn>
+go run ./cmd/whcp doctor production
+```
+
+S3-compatible raw payload storage is strict when enabled: inbound success
+requires the object write plus PostgreSQL metadata commit. Production S3 mode
+must define the endpoint, bucket, access key, secret key, and TLS posture:
+
+```bash
+WEBHOOKERY_ENVIRONMENT=production
+WEBHOOKERY_RAW_STORAGE_MODE=s3
+WEBHOOKERY_OBJECT_STORAGE_ENDPOINT=s3.example
+WEBHOOKERY_OBJECT_STORAGE_BUCKET=webhookery-raw
+WEBHOOKERY_OBJECT_STORAGE_ACCESS_KEY=<object-access-key>
+WEBHOOKERY_OBJECT_STORAGE_SECRET_KEY=<object-secret-key>
+WEBHOOKERY_OBJECT_STORAGE_USE_SSL=true
+go run ./cmd/whcp doctor production
+```
+
 ## Backup And Restore
 
 PostgreSQL is the authoritative metadata store for accepted events, receipts,

@@ -22,6 +22,12 @@ test -x scripts/backup_postgres.sh
 test -x scripts/restore_postgres.sh
 grep -q "backup_postgres.sh" docs/operations.md
 grep -q "restore_postgres.sh" docs/operations.md
+grep -q "Production Doctor" docs/operations.md
+grep -q "doctor production" README.md
+grep -q "blocker" docs/operations.md
+grep -q "warning" docs/operations.md
+grep -q "WEBHOOKERY_SECRET_BOX_MODE=aws-kms" docs/operations.md
+grep -q "WEBHOOKERY_RAW_STORAGE_MODE=s3" docs/operations.md
 
 if [ -n "${RANDONNEE_TEST_DATABASE_URL:-}" ]; then
   make postgres-integration-test
