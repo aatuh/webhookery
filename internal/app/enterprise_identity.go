@@ -310,6 +310,13 @@ func (s *ControlService) TestIdentityProvider(ctx context.Context, actor authz.A
 	if err != nil {
 		return domain.IdentityProvider{}, err
 	}
+	idp, err := store.GetIdentityProvider(ctx, actor.TenantID, providerID)
+	if err != nil {
+		return domain.IdentityProvider{}, err
+	}
+	if _, _, err := oidcProviderEndpoint(ctx, idp); err != nil {
+		return domain.IdentityProvider{}, err
+	}
 	return store.TestIdentityProvider(ctx, actor.TenantID, providerID, actor.ID, req.Reason)
 }
 
@@ -708,6 +715,9 @@ func (s *ControlService) CreateAccessPolicyRule(ctx context.Context, actor authz
 	if err := validateAccessPolicy(req.Name, req.Action, req.Effect, req.ResourceFamily, req.Environment, req.Conditions, req.Reason); err != nil {
 		return domain.AccessPolicyRule{}, err
 	}
+	if wouldDenySecurityWrite(req.Effect, req.Action, req.ResourceFamily, req.Environment) {
+		return domain.AccessPolicyRule{}, fmt.Errorf("%w: refusing policy that can lock out security administration", ErrInvalidInput)
+	}
 	store, err := s.enterpriseStore()
 	if err != nil {
 		return domain.AccessPolicyRule{}, err
@@ -732,6 +742,27 @@ func (s *ControlService) UpdateAccessPolicyRule(ctx context.Context, actor authz
 	}
 	if strings.TrimSpace(req.Reason) == "" {
 		return domain.AccessPolicyRule{}, fmt.Errorf("%w: reason is required", ErrInvalidInput)
+	}
+	if req.Effect != nil || req.Action != nil || req.ResourceFamily != nil || req.Environment != nil {
+		effect := ""
+		action := ""
+		resourceFamily := ""
+		environment := ""
+		if req.Effect != nil {
+			effect = *req.Effect
+		}
+		if req.Action != nil {
+			action = *req.Action
+		}
+		if req.ResourceFamily != nil {
+			resourceFamily = *req.ResourceFamily
+		}
+		if req.Environment != nil {
+			environment = *req.Environment
+		}
+		if wouldDenySecurityWrite(effect, action, resourceFamily, environment) {
+			return domain.AccessPolicyRule{}, fmt.Errorf("%w: refusing policy that can lock out security administration", ErrInvalidInput)
+		}
 	}
 	store, err := s.enterpriseStore()
 	if err != nil {
@@ -854,6 +885,21 @@ func validateAccessPolicy(name, action, effect, resourceFamily, environment stri
 		return fmt.Errorf("%w: conditions must be valid JSON", ErrInvalidInput)
 	}
 	return nil
+}
+
+func wouldDenySecurityWrite(effect, action, resourceFamily, environment string) bool {
+	return strings.EqualFold(strings.TrimSpace(effect), PolicyEffectDeny) &&
+		(strings.TrimSpace(action) == "security:write" || strings.TrimSpace(action) == "*") &&
+		(identityWildcard(resourceFamily) == "*" || strings.EqualFold(strings.TrimSpace(resourceFamily), "security")) &&
+		identityWildcard(environment) == "*"
+}
+
+func identityWildcard(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "*"
+	}
+	return value
 }
 
 func oidcProviderEndpoint(ctx context.Context, idp domain.IdentityProvider) (*oidc.Provider, oauth2.Endpoint, error) {

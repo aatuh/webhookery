@@ -2,8 +2,19 @@ package app
 
 import (
 	"context"
+	"crypto"
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/json"
+	"errors"
+	"math/big"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"webhookery/internal/authz"
 	"webhookery/internal/domain"
@@ -52,10 +63,81 @@ func TestCreateSCIMTokenPersistsHashOnlyAndReturnsValueOnce(t *testing.T) {
 	}
 }
 
+func TestCompleteOIDCCallbackValidatesIDTokenNonce(t *testing.T) {
+	issuer := newFakeOIDCIssuer(t, "client", "wrong-nonce")
+	store := &enterpriseFakeStore{
+		idp: domain.IdentityProvider{
+			ID:           "idp_1",
+			TenantID:     "ten_1",
+			IssuerURL:    issuer.URL,
+			ClientID:     "client",
+			ClientSecret: []byte("secret"),
+			RedirectURI:  "https://webhookery.example/v1/auth/oidc/callback",
+			State:        domain.StateActive,
+		},
+		loginState: domain.OIDCLoginState{
+			TenantID:           "ten_1",
+			IdentityProviderID: "idp_1",
+			StateHash:          HashToken("state"),
+			NonceHash:          HashToken("expected-nonce"),
+			PKCEVerifier:       []byte("verifier"),
+			ExpiresAt:          time.Now().Add(time.Hour),
+		},
+	}
+	svc := NewControlService(store, ssrf.Validator{})
+
+	_, err := svc.CompleteOIDCCallback(context.Background(), "state", "code", "user-agent", "127.0.0.1")
+	if !errors.Is(err, ErrUnauthorized) {
+		t.Fatalf("expected nonce mismatch to be unauthorized, got %v", err)
+	}
+	if store.createdSession.SessionHash != "" {
+		t.Fatal("OIDC session must not be created when nonce validation fails")
+	}
+}
+
+func TestCompleteOIDCCallbackCreatesHashedSession(t *testing.T) {
+	issuer := newFakeOIDCIssuer(t, "client", "expected-nonce")
+	store := &enterpriseFakeStore{
+		idp: domain.IdentityProvider{
+			ID:                  "idp_1",
+			TenantID:            "ten_1",
+			IssuerURL:           issuer.URL,
+			ClientID:            "client",
+			ClientSecret:        []byte("secret"),
+			RedirectURI:         "https://webhookery.example/v1/auth/oidc/callback",
+			AllowedEmailDomains: []string{"example.com"},
+			State:               domain.StateActive,
+		},
+		loginState: domain.OIDCLoginState{
+			TenantID:           "ten_1",
+			IdentityProviderID: "idp_1",
+			StateHash:          HashToken("state"),
+			NonceHash:          HashToken("expected-nonce"),
+			PKCEVerifier:       []byte("verifier"),
+			ExpiresAt:          time.Now().Add(time.Hour),
+		},
+	}
+	svc := NewControlService(store, ssrf.Validator{})
+
+	result, err := svc.CompleteOIDCCallback(context.Background(), "state", "code", "user-agent", "127.0.0.1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.SessionToken == "" || store.createdSession.SessionHash == "" || !strings.HasPrefix(store.createdSession.SessionHash, "sha256:") {
+		t.Fatalf("session token/hash not created correctly: result=%+v input=%+v", result, store.createdSession)
+	}
+	if strings.Contains(store.createdSession.SessionHash, result.SessionToken) {
+		t.Fatal("raw session token leaked into persisted session hash")
+	}
+}
+
 type enterpriseFakeStore struct {
 	fakeControlStore
 	identityTenantID string
 	scimToken        domain.SCIMToken
+	idp              domain.IdentityProvider
+	loginState       domain.OIDCLoginState
+	createdSession   OIDCSessionInput
 }
 
 func (s *enterpriseFakeStore) CreateIdentityProvider(_ context.Context, tenantID, actorID string, req CreateIdentityProviderRequest) (domain.IdentityProvider, error) {
@@ -66,7 +148,7 @@ func (s *enterpriseFakeStore) ListIdentityProviders(context.Context, string, int
 	return nil, nil
 }
 func (s *enterpriseFakeStore) GetIdentityProvider(context.Context, string, string) (domain.IdentityProvider, error) {
-	return domain.IdentityProvider{}, nil
+	return s.idp, nil
 }
 func (s *enterpriseFakeStore) UpdateIdentityProvider(context.Context, string, string, string, UpdateIdentityProviderRequest) (domain.IdentityProvider, error) {
 	return domain.IdentityProvider{}, nil
@@ -81,10 +163,11 @@ func (s *enterpriseFakeStore) CreateOIDCLoginState(context.Context, domain.OIDCL
 	return nil
 }
 func (s *enterpriseFakeStore) ConsumeOIDCLoginState(context.Context, string) (domain.OIDCLoginState, domain.IdentityProvider, error) {
-	return domain.OIDCLoginState{}, domain.IdentityProvider{}, nil
+	return s.loginState, s.idp, nil
 }
-func (s *enterpriseFakeStore) CreateOIDCSession(context.Context, OIDCSessionInput) (domain.AuthSession, authz.Actor, error) {
-	return domain.AuthSession{}, authz.Actor{}, nil
+func (s *enterpriseFakeStore) CreateOIDCSession(_ context.Context, input OIDCSessionInput) (domain.AuthSession, authz.Actor, error) {
+	s.createdSession = input
+	return domain.AuthSession{ID: "ses_1", TenantID: input.TenantID, UserID: "usr_1", SessionHash: input.SessionHash, State: domain.StateActive, ExpiresAt: input.ExpiresAt}, authz.Actor{ID: "usr_1", TenantID: input.TenantID, Role: authz.RoleSupport}, nil
 }
 func (s *enterpriseFakeStore) RevokeAuthSession(context.Context, string, string, string, string) error {
 	return nil
@@ -164,4 +247,91 @@ func (s *enterpriseFakeStore) DisableAccessPolicyRule(context.Context, string, s
 }
 func (s *enterpriseFakeStore) ExplainAuthorization(context.Context, string, string, AuthzExplainRequest) (authz.Decision, error) {
 	return authz.Decision{}, nil
+}
+
+func newFakeOIDCIssuer(t *testing.T, clientID, nonce string) *httptest.Server {
+	t.Helper()
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var issuerURL string
+	mux := http.NewServeMux()
+	mux.HandleFunc("/.well-known/openid-configuration", func(w http.ResponseWriter, r *http.Request) {
+		writeTestJSON(t, w, map[string]any{
+			"issuer":                 issuerURL,
+			"authorization_endpoint": issuerURL + "/authorize",
+			"token_endpoint":         issuerURL + "/token",
+			"jwks_uri":               issuerURL + "/jwks",
+		})
+	})
+	mux.HandleFunc("/jwks", func(w http.ResponseWriter, r *http.Request) {
+		writeTestJSON(t, w, map[string]any{"keys": []map[string]any{rsaJWK(&key.PublicKey, "kid-1")}})
+	})
+	mux.HandleFunc("/token", func(w http.ResponseWriter, r *http.Request) {
+		claims := map[string]any{
+			"iss":            issuerURL,
+			"sub":            "sub_123",
+			"aud":            clientID,
+			"nonce":          nonce,
+			"email":          "person@example.com",
+			"email_verified": true,
+			"name":           "Person Example",
+			"iat":            time.Now().Add(-time.Minute).Unix(),
+			"exp":            time.Now().Add(time.Hour).Unix(),
+		}
+		writeTestJSON(t, w, map[string]any{
+			"access_token": "access",
+			"token_type":   "Bearer",
+			"expires_in":   3600,
+			"id_token":     signedJWT(t, key, "kid-1", claims),
+		})
+	})
+	server := httptest.NewServer(mux)
+	issuerURL = server.URL
+	t.Cleanup(server.Close)
+	return server
+}
+
+func signedJWT(t *testing.T, key *rsa.PrivateKey, kid string, claims map[string]any) string {
+	t.Helper()
+	header := map[string]any{"alg": "RS256", "typ": "JWT", "kid": kid}
+	encodedHeader := encodeJWTPart(t, header)
+	encodedClaims := encodeJWTPart(t, claims)
+	signingInput := encodedHeader + "." + encodedClaims
+	sum := sha256.Sum256([]byte(signingInput))
+	signature, err := rsa.SignPKCS1v15(rand.Reader, key, crypto.SHA256, sum[:])
+	if err != nil {
+		t.Fatal(err)
+	}
+	return signingInput + "." + base64.RawURLEncoding.EncodeToString(signature)
+}
+
+func encodeJWTPart(t *testing.T, value any) string {
+	t.Helper()
+	raw, err := json.Marshal(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return base64.RawURLEncoding.EncodeToString(raw)
+}
+
+func rsaJWK(key *rsa.PublicKey, kid string) map[string]any {
+	exponent := big.NewInt(int64(key.E)).Bytes()
+	return map[string]any{
+		"kty": "RSA",
+		"use": "sig",
+		"kid": kid,
+		"alg": "RS256",
+		"n":   base64.RawURLEncoding.EncodeToString(key.N.Bytes()),
+		"e":   base64.RawURLEncoding.EncodeToString(exponent),
+	}
+}
+
+func writeTestJSON(t *testing.T, w http.ResponseWriter, value any) {
+	t.Helper()
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(value); err != nil {
+		t.Fatal(err)
+	}
 }

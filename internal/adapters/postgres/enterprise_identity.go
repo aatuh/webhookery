@@ -1105,6 +1105,23 @@ func (s *Store) ExplainAuthorization(ctx context.Context, tenantID, actorID stri
 			decision.MatchedRole = bindingRole
 			decision.MatchedRoleBindingID = bindingID
 			decision.Reason = "allowed by resource role binding"
+		} else {
+			err = s.pool.QueryRow(ctx, `
+				SELECT rb.id, rb.role
+				FROM role_bindings rb
+				JOIN scim_group_memberships gm ON gm.tenant_id=rb.tenant_id AND gm.group_id=rb.principal_id
+				WHERE rb.tenant_id=$1 AND gm.user_id=$2 AND rb.principal_type='group' AND rb.state='active'
+				  AND (rb.resource_family='*' OR rb.resource_family=$3)
+				  AND (rb.resource_id='*' OR rb.resource_id=$4)
+				  AND (rb.environment='*' OR rb.environment=$5)
+				ORDER BY rb.created_at DESC
+				LIMIT 1`, tenantID, actorID, req.ResourceFamily, defaultWildcard(req.ResourceID), defaultWildcard(req.Environment)).Scan(&bindingID, &bindingRole)
+			if err == nil && authz.Can(authz.Actor{ID: actorID, TenantID: tenantID, Role: authz.Role(bindingRole)}, req.Action, tenantID) {
+				decision.Allowed = true
+				decision.MatchedRole = bindingRole
+				decision.MatchedRoleBindingID = bindingID
+				decision.Reason = "allowed by group role binding"
+			}
 		}
 	}
 	var policyID, effect string
