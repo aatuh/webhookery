@@ -167,3 +167,82 @@ func TestRunKeyCustodyTestDoesNotPrintCiphertextOrKeyIDInLocalMode(t *testing.T)
 		t.Fatalf("key custody output leaked test plaintext: %s", body)
 	}
 }
+
+func TestProductionDoctorBlocksUnsafeDefaultsAndRedactsValues(t *testing.T) {
+	env := map[string]string{
+		"WEBHOOKERY_ENVIRONMENT":               "production",
+		"WEBHOOKERY_DATABASE_URL":              "postgres://webhookery:secret-db-password@db/webhookery?sslmode=disable",
+		"WEBHOOKERY_SECRET_BOX_MODE":           "local",
+		"WEBHOOKERY_MASTER_KEY_BASE64":         "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+		"WEBHOOKERY_RAW_STORAGE_MODE":          "s3",
+		"WEBHOOKERY_OBJECT_STORAGE_ENDPOINT":   "storage.internal:9000",
+		"WEBHOOKERY_OBJECT_STORAGE_BUCKET":     "webhookery-raw",
+		"WEBHOOKERY_OBJECT_STORAGE_ACCESS_KEY": "prod-access-key",
+		"WEBHOOKERY_OBJECT_STORAGE_SECRET_KEY": "object-secret-password",
+		"WEBHOOKERY_OBJECT_STORAGE_USE_SSL":    "false",
+		"WEBHOOKERY_AWS_KMS_KEY_ID":            "arn:aws:kms:us-east-1:123456789012:key/secret-key-id",
+	}
+
+	findings := productionDoctorFindings(func(name string) string { return env[name] })
+	if countDoctorBlockers(findings) == 0 {
+		t.Fatalf("expected production doctor blockers, got %+v", findings)
+	}
+	var out bytes.Buffer
+	writeDoctorFindings(&out, findings)
+	for _, forbidden := range []string{"secret-db-password", "object-secret-password", "secret-key-id", "123456789012", env["WEBHOOKERY_DATABASE_URL"]} {
+		if bytes.Contains(out.Bytes(), []byte(forbidden)) {
+			t.Fatalf("doctor output leaked sensitive value %q in %s", forbidden, out.String())
+		}
+	}
+}
+
+func TestProductionDoctorAcceptsHardenedVaultS3Config(t *testing.T) {
+	env := map[string]string{
+		"WEBHOOKERY_ENVIRONMENT":               "production",
+		"WEBHOOKERY_DATABASE_URL":              "postgres://webhookery@db.internal/webhookery?sslmode=require",
+		"WEBHOOKERY_TLS_CERT_FILE":             "/etc/webhookery/tls.crt",
+		"WEBHOOKERY_TLS_KEY_FILE":              "/etc/webhookery/tls.key",
+		"WEBHOOKERY_SECRET_BOX_MODE":           "vault-transit",
+		"WEBHOOKERY_VAULT_ADDR":                "https://vault.internal",
+		"WEBHOOKERY_VAULT_TOKEN":               "vault-token",
+		"WEBHOOKERY_VAULT_TRANSIT_KEY":         "webhookery",
+		"WEBHOOKERY_RAW_STORAGE_MODE":          "s3",
+		"WEBHOOKERY_OBJECT_STORAGE_ENDPOINT":   "s3.internal",
+		"WEBHOOKERY_OBJECT_STORAGE_BUCKET":     "webhookery-raw",
+		"WEBHOOKERY_OBJECT_STORAGE_ACCESS_KEY": "prod-access-key",
+		"WEBHOOKERY_OBJECT_STORAGE_SECRET_KEY": "prod-object-secret",
+		"WEBHOOKERY_OBJECT_STORAGE_USE_SSL":    "true",
+	}
+
+	findings := productionDoctorFindings(func(name string) string { return env[name] })
+	if blockers := countDoctorBlockers(findings); blockers != 0 {
+		t.Fatalf("expected no blockers, got %d: %+v", blockers, findings)
+	}
+}
+
+func TestRunDoctorProductionReturnsNonZeroOnBlockers(t *testing.T) {
+	t.Setenv("WEBHOOKERY_ENVIRONMENT", "production")
+	t.Setenv("WEBHOOKERY_DATABASE_URL", "postgres://webhookery:secret@db/webhookery?sslmode=require")
+	t.Setenv("WEBHOOKERY_SECRET_BOX_MODE", "local")
+	t.Setenv("WEBHOOKERY_MASTER_KEY_BASE64", "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=")
+	oldStdout := os.Stdout
+	reader, writer, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Stdout = writer
+	defer func() { os.Stdout = oldStdout }()
+
+	err = runDoctor([]string{"production"})
+	_ = writer.Close()
+	if err == nil {
+		t.Fatal("expected production doctor to fail on blockers")
+	}
+	body, readErr := io.ReadAll(reader)
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if bytes.Contains(body, []byte("webhookery:secret")) || bytes.Contains(body, []byte("secret@db")) {
+		t.Fatalf("doctor output leaked database password: %s", body)
+	}
+}
