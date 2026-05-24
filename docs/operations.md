@@ -567,7 +567,7 @@ The OIDC login flow starts at `/v1/auth/oidc/login?tenant_id=...&provider_id=...
 and completes at `/v1/auth/oidc/callback`. The callback validates state, nonce,
 issuer, audience/client id, expiry, and the signed ID token before creating a
 hashed `webhookery_session` cookie. Session cookies are HttpOnly, SameSite=Lax,
-and marked Secure in production. Logout revokes the server-side session hash.
+and marked Secure. Logout revokes the server-side session hash.
 Disabling an identity provider revokes active sessions created through that
 provider. SAML assertion processing is not implemented in this slice.
 

@@ -314,8 +314,12 @@ func (s *ControlService) TestIdentityProvider(ctx context.Context, actor authz.A
 	if err != nil {
 		return domain.IdentityProvider{}, err
 	}
-	if _, _, err := oidcProviderEndpoint(ctx, idp); err != nil {
+	provider, _, err := oidcProviderEndpoint(ctx, idp)
+	if err != nil {
 		return domain.IdentityProvider{}, err
+	}
+	if provider == nil && strings.TrimSpace(idp.JWKSURL) == "" {
+		return domain.IdentityProvider{}, fmt.Errorf("%w: jwks_uri is required when OIDC discovery is unavailable", ErrInvalidInput)
 	}
 	return store.TestIdentityProvider(ctx, actor.TenantID, providerID, actor.ID, req.Reason)
 }
