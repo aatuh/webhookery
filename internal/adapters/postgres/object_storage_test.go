@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"webhookery/internal/blobstore"
@@ -35,7 +36,7 @@ func TestPrepareRawPayloadStorageWritesObjectInS3Mode(t *testing.T) {
 }
 
 func TestPrepareRawPayloadStoragePropagatesObjectWriteFailure(t *testing.T) {
-	putErr := errors.New("put failed")
+	putErr := errors.New("put failed with whsec_secret and evt_body_secret")
 	store := &Store{
 		rawStorageMode: domain.RawStorageS3,
 		objectStore:    &fakeObjectStore{putErr: putErr},
@@ -46,6 +47,9 @@ func TestPrepareRawPayloadStoragePropagatesObjectWriteFailure(t *testing.T) {
 	_, _, err := store.prepareRawPayloadStorage(context.Background(), "ten_1", "raw_1", raw)
 	if !errors.Is(err, putErr) {
 		t.Fatalf("expected put error, got %v", err)
+	}
+	if strings.Contains(err.Error(), "whsec_secret") || strings.Contains(err.Error(), "evt_body_secret") {
+		t.Fatalf("storage error leaked sensitive backend detail: %v", err)
 	}
 }
 

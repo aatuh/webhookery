@@ -17,6 +17,7 @@ import (
 	"webhookery/internal/adapters/postgres"
 	"webhookery/internal/app"
 	"webhookery/internal/authz"
+	"webhookery/internal/blobstore"
 	"webhookery/internal/domain"
 	"webhookery/internal/evidence"
 	"webhookery/internal/ssrf"
@@ -530,7 +531,69 @@ func TestRCE2EEvidenceLifecycleRetentionExportAndPermissionGates(t *testing.T) {
 	}
 }
 
+func TestRCE2EStorageFailureDrillsRejectInboundSuccess(t *testing.T) {
+	ctx, store, actor := openRCStore(t)
+	now := time.Date(2026, 5, 26, 15, 0, 0, 0, time.UTC)
+	control := app.NewControlService(store, ssrf.Validator{Resolver: rcResolver})
+	source, _ := createRCRoute(t, ctx, control, actor, "stripe", "stripe", "setup_intent.created")
+	store.Close()
+
+	body := []byte(`{"id":"evt_rc_db_down_` + testSuffix(t) + `","type":"setup_intent.created","account":"acct_rc"}`)
+	ingest := app.NewIngestService(store, fixedClock{now: now})
+	dbDownResult, err := ingest.Ingest(ctx, app.IngestRequest{
+		TenantID:    actor.TenantID,
+		SourceID:    source.ID,
+		Provider:    "stripe",
+		RawBody:     body,
+		Headers:     []domain.HeaderPair{{Name: "Stripe-Signature", Value: verifier.TimestampedHeader("v1", now, []byte("whsec_rc"), body)}},
+		ContentType: "application/json",
+		RemoteIP:    "198.51.100.15",
+	})
+	if err == nil {
+		t.Fatalf("expected DB-down ingest to fail before acceptance: %+v", dbDownResult)
+	}
+	if dbDownResult.Accepted || dbDownResult.EventID != "" || dbDownResult.RawPayloadID != "" {
+		t.Fatalf("DB-down ingest must not return accepted durable ids: %+v", dbDownResult)
+	}
+	if leaksSensitiveValue(err.Error(), "whsec_rc", string(body)) {
+		t.Fatalf("DB-down error leaked secret or raw body: %v", err)
+	}
+
+	ctx, s3Store, s3Actor := openRCStoreWithOptions(t, postgres.StoreOptions{
+		RawStorageMode: domain.RawStorageS3,
+		ObjectStore:    &failingBlobStore{putErr: errors.New("backend failure with whsec_rc and " + string(body))},
+		ObjectBucket:   "rc-test-bucket",
+	})
+	defer s3Store.Close()
+	s3Control := app.NewControlService(s3Store, ssrf.Validator{Resolver: rcResolver})
+	s3Source, _ := createRCRoute(t, ctx, s3Control, s3Actor, "stripe", "stripe", "setup_intent.created")
+	s3Ingest := app.NewIngestService(s3Store, fixedClock{now: now})
+	s3Result, err := s3Ingest.Ingest(ctx, app.IngestRequest{
+		TenantID:    s3Actor.TenantID,
+		SourceID:    s3Source.ID,
+		Provider:    "stripe",
+		RawBody:     body,
+		Headers:     []domain.HeaderPair{{Name: "Stripe-Signature", Value: verifier.TimestampedHeader("v1", now, []byte("whsec_rc"), body)}},
+		ContentType: "application/json",
+		RemoteIP:    "198.51.100.16",
+	})
+	if err == nil {
+		t.Fatalf("expected S3 object write failure to block inbound success: %+v", s3Result)
+	}
+	if s3Result.Accepted || s3Result.EventID != "" || s3Result.RawPayloadID != "" {
+		t.Fatalf("S3 failure must not return accepted durable ids: %+v", s3Result)
+	}
+	if leaksSensitiveValue(err.Error(), "whsec_rc", string(body)) {
+		t.Fatalf("S3 storage error leaked secret or raw body: %v", err)
+	}
+}
+
 func openRCStore(t *testing.T) (context.Context, *postgres.Store, authz.Actor) {
+	t.Helper()
+	return openRCStoreWithOptions(t, postgres.StoreOptions{RawStorageMode: domain.RawStoragePostgres})
+}
+
+func openRCStoreWithOptions(t *testing.T, opts postgres.StoreOptions) (context.Context, *postgres.Store, authz.Actor) {
 	t.Helper()
 	databaseURL := os.Getenv("RANDONNEE_TEST_DATABASE_URL")
 	if databaseURL == "" {
@@ -547,7 +610,7 @@ func openRCStore(t *testing.T) (context.Context, *postgres.Store, authz.Actor) {
 	if err != nil {
 		t.Fatalf("create test envelope: %v", err)
 	}
-	store, err := postgres.New(ctx, databaseURL, box)
+	store, err := postgres.NewWithOptions(ctx, databaseURL, box, opts)
 	if err != nil {
 		t.Fatalf("open postgres store: %v", err)
 	}
@@ -559,6 +622,22 @@ func openRCStore(t *testing.T) (context.Context, *postgres.Store, authz.Actor) {
 		Scopes:   []string{"*"},
 	}
 	return ctx, store, actor
+}
+
+type failingBlobStore struct {
+	putErr error
+}
+
+func (s *failingBlobStore) Put(context.Context, blobstore.Object, []byte) error {
+	return s.putErr
+}
+
+func (s *failingBlobStore) Get(context.Context, string, string) ([]byte, error) {
+	return nil, blobstore.ErrNotFound
+}
+
+func (s *failingBlobStore) Delete(context.Context, string, string) error {
+	return nil
 }
 
 func createRCRoute(t *testing.T, ctx context.Context, control *app.ControlService, actor authz.Actor, providerName, adapterName, eventType string) (domain.Source, domain.Endpoint) {
@@ -706,6 +785,15 @@ func countReplayDeliveries(items []domain.Delivery, eventID string) int {
 		}
 	}
 	return count
+}
+
+func leaksSensitiveValue(text string, values ...string) bool {
+	for _, value := range values {
+		if value != "" && strings.Contains(text, value) {
+			return true
+		}
+	}
+	return false
 }
 
 func testSuffix(t *testing.T) string {

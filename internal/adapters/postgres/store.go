@@ -2500,9 +2500,22 @@ func (s *Store) prepareRawPayloadStorage(ctx context.Context, tenantID, rawID st
 		SizeBytes:   raw.SizeBytes,
 	}
 	if err := s.objectStore.Put(ctx, object, raw.Body); err != nil {
-		return rawPayloadStorage{}, nil, err
+		return rawPayloadStorage{}, nil, storageOperationError{operation: "raw payload object write", err: err}
 	}
 	return rawPayloadStorage{backend: domain.RawStorageS3, bucket: s.objectBucket, key: key}, []byte{}, nil
+}
+
+type storageOperationError struct {
+	operation string
+	err       error
+}
+
+func (e storageOperationError) Error() string {
+	return e.operation + " failed"
+}
+
+func (e storageOperationError) Unwrap() error {
+	return e.err
 }
 
 func (s *Store) lookupAdapterVersionID(ctx context.Context, tx pgx.Tx, adapter string) (string, error) {
