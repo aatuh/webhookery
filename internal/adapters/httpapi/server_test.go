@@ -767,6 +767,27 @@ func (noopControlStore) VerifyProviderConnection(_ context.Context, tenantID, co
 func (noopControlStore) RevokeProviderConnection(_ context.Context, tenantID, connectionID, actorID, reason string) (domain.ProviderConnection, error) {
 	return domain.ProviderConnection{ID: connectionID, TenantID: tenantID, State: domain.ProviderConnectionStateRevoked, CreatedBy: actorID}, nil
 }
+func (noopControlStore) CreateProviderAdapter(_ context.Context, tenantID, actorID string, req app.CreateProviderAdapterRequest) (domain.ProviderAdapter, error) {
+	return domain.ProviderAdapter{ID: "pad_1", TenantID: tenantID, Name: req.Name, Kind: req.Kind, State: domain.AdapterStateDraft}, nil
+}
+func (noopControlStore) ListProviderAdapters(context.Context, string, int) ([]domain.ProviderAdapter, error) {
+	return nil, nil
+}
+func (noopControlStore) GetProviderAdapter(_ context.Context, tenantID, adapterID string) (domain.ProviderAdapter, error) {
+	return domain.ProviderAdapter{ID: adapterID, TenantID: tenantID}, nil
+}
+func (noopControlStore) CreateAdapterVersion(_ context.Context, tenantID, adapterID, actorID string, req app.CreateAdapterVersionRequest) (domain.AdapterVersion, error) {
+	return domain.AdapterVersion{ID: "adv_1", TenantID: tenantID, AdapterID: adapterID, Version: req.Version, State: domain.AdapterStateDraft}, nil
+}
+func (noopControlStore) ListAdapterVersions(context.Context, string, string, int) ([]domain.AdapterVersion, error) {
+	return nil, nil
+}
+func (noopControlStore) CreateAdapterTestVector(_ context.Context, tenantID, adapterID, versionID, actorID string, req app.CreateAdapterTestVectorRequest) (domain.AdapterTestVector, error) {
+	return domain.AdapterTestVector{ID: "atv_1", TenantID: tenantID, AdapterVersionID: versionID, Name: req.Name}, nil
+}
+func (noopControlStore) TransitionAdapterVersion(_ context.Context, tenantID, adapterID, versionID, actorID string, req app.AdapterVersionTransitionRequest) (domain.AdapterVersion, error) {
+	return domain.AdapterVersion{ID: versionID, TenantID: tenantID, AdapterID: adapterID, State: req.Action}, nil
+}
 func (noopControlStore) DryRunReconciliation(_ context.Context, tenantID string, req app.ReconciliationJobRequest) (domain.ReconciliationJob, error) {
 	return domain.ReconciliationJob{ID: "rec_dry", TenantID: tenantID, ConnectionID: req.ConnectionID, State: domain.ReconciliationJobStateCompleted, DryRun: true}, nil
 }

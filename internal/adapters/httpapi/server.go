@@ -116,6 +116,13 @@ func (s *Server) Routes() http.Handler {
 			r.Get("/provider-connections/{connection_id}", s.getProviderConnection)
 			r.Post("/provider-connections/{connection_id}:verify", s.verifyProviderConnection)
 			r.Post("/provider-connections/{connection_id}:revoke", s.revokeProviderConnection)
+			r.Get("/adapters", s.listProviderAdapters)
+			r.Post("/adapters", s.createProviderAdapter)
+			r.Get("/adapters/{adapter_id}", s.getProviderAdapter)
+			r.Get("/adapters/{adapter_id}/versions", s.listAdapterVersions)
+			r.Post("/adapters/{adapter_id}/versions", s.createAdapterVersion)
+			r.Post("/adapters/{adapter_id}/versions/{version_id}/test-vectors", s.createAdapterTestVector)
+			r.Post("/adapters/{adapter_id}/versions/{version_id}:transition", s.transitionAdapterVersion)
 			r.Get("/endpoints", s.listEndpoints)
 			r.Post("/endpoints", s.createEndpoint)
 			r.Get("/endpoints/{endpoint_id}", s.getEndpoint)
@@ -2046,6 +2053,85 @@ func (s *Server) authzExplain(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	item, err := s.cfg.Control.ExplainAuthorization(r.Context(), actorFrom(r), req)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, item)
+}
+
+func (s *Server) createProviderAdapter(w http.ResponseWriter, r *http.Request) {
+	var req app.CreateProviderAdapterRequest
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	item, err := s.cfg.Control.CreateProviderAdapter(r.Context(), actorFrom(r), req)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, item)
+}
+
+func (s *Server) listProviderAdapters(w http.ResponseWriter, r *http.Request) {
+	items, err := s.cfg.Control.ListProviderAdapters(r.Context(), actorFrom(r), queryLimit(r))
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, page(items))
+}
+
+func (s *Server) getProviderAdapter(w http.ResponseWriter, r *http.Request) {
+	item, err := s.cfg.Control.GetProviderAdapter(r.Context(), actorFrom(r), chi.URLParam(r, "adapter_id"))
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, item)
+}
+
+func (s *Server) createAdapterVersion(w http.ResponseWriter, r *http.Request) {
+	var req app.CreateAdapterVersionRequest
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	item, err := s.cfg.Control.CreateAdapterVersion(r.Context(), actorFrom(r), chi.URLParam(r, "adapter_id"), req)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, item)
+}
+
+func (s *Server) listAdapterVersions(w http.ResponseWriter, r *http.Request) {
+	items, err := s.cfg.Control.ListAdapterVersions(r.Context(), actorFrom(r), chi.URLParam(r, "adapter_id"), queryLimit(r))
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, page(items))
+}
+
+func (s *Server) createAdapterTestVector(w http.ResponseWriter, r *http.Request) {
+	var req app.CreateAdapterTestVectorRequest
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	item, err := s.cfg.Control.CreateAdapterTestVector(r.Context(), actorFrom(r), chi.URLParam(r, "adapter_id"), chi.URLParam(r, "version_id"), req)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, item)
+}
+
+func (s *Server) transitionAdapterVersion(w http.ResponseWriter, r *http.Request) {
+	var req app.AdapterVersionTransitionRequest
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	item, err := s.cfg.Control.TransitionAdapterVersion(r.Context(), actorFrom(r), chi.URLParam(r, "adapter_id"), chi.URLParam(r, "version_id"), req)
 	if err != nil {
 		s.writeError(w, r, err)
 		return

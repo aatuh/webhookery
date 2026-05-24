@@ -30,6 +30,8 @@ ALTER TABLE adapter_versions ADD COLUMN IF NOT EXISTS activated_at timestamptz;
 ALTER TABLE adapter_versions ADD COLUMN IF NOT EXISTS deprecated_at timestamptz;
 ALTER TABLE adapter_versions ADD COLUMN IF NOT EXISTS retired_at timestamptz;
 UPDATE adapter_versions SET kind='builtin', risk_level='core' WHERE kind='';
+ALTER TABLE adapter_versions DROP CONSTRAINT IF EXISTS adapter_versions_name_version_key;
+CREATE UNIQUE INDEX IF NOT EXISTS adapter_versions_scope_name_version_idx ON adapter_versions(COALESCE(tenant_id, ''), name, version);
 CREATE INDEX IF NOT EXISTS adapter_versions_scope_name_state_idx ON adapter_versions(COALESCE(tenant_id, ''), name, state, version DESC);
 
 CREATE TABLE IF NOT EXISTS adapter_test_vectors (

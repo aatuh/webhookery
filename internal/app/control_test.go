@@ -839,6 +839,51 @@ func TestControlServiceProviderConnectionMutationRequiresSourcesWrite(t *testing
 	}
 }
 
+func TestControlServiceAdapterRegistryRequiresSecurityWriteAndScopesTenant(t *testing.T) {
+	store := &fakeControlStore{}
+	svc := NewControlService(store, ssrf.Validator{Resolver: ssrf.StaticResolver{}})
+	reader := authz.Actor{ID: "usr_reader", TenantID: "ten_a", Role: authz.RoleDeveloper, Scopes: []string{"sources:read"}}
+	security := authz.Actor{ID: "usr_sec", TenantID: "ten_a", Role: authz.RoleSecurity, Scopes: []string{"security:write", "sources:read"}}
+
+	_, err := svc.CreateProviderAdapter(context.Background(), reader, CreateProviderAdapterRequest{Name: "acme", Kind: domain.AdapterKindDeclarative})
+	if err != ErrForbidden {
+		t.Fatalf("expected forbidden adapter create, got %v", err)
+	}
+	adapter, err := svc.CreateProviderAdapter(context.Background(), security, CreateProviderAdapterRequest{Name: "Acme-HMAC", Kind: domain.AdapterKindDeclarative})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if adapter.Name != "acme-hmac" || store.adapterTenantID != "ten_a" || store.adapterActorID != "usr_sec" {
+		t.Fatalf("adapter create was not normalized and tenant scoped: adapter=%+v tenant=%q actor=%q", adapter, store.adapterTenantID, store.adapterActorID)
+	}
+}
+
+func TestControlServiceAdapterVersionRejectsSecretFields(t *testing.T) {
+	store := &fakeControlStore{}
+	svc := NewControlService(store, ssrf.Validator{Resolver: ssrf.StaticResolver{}})
+	security := authz.Actor{ID: "usr_sec", TenantID: "ten_a", Role: authz.RoleSecurity, Scopes: []string{"security:write"}}
+
+	_, err := svc.CreateAdapterVersion(context.Background(), security, "pad_1", CreateAdapterVersionRequest{
+		Version:    "2026-05-01",
+		Definition: json.RawMessage(`{"verification":{"type":"hmac_sha256","client_secret":"leak"}}`),
+		Reason:     "upload",
+	})
+	if !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("expected secret field rejection, got %v", err)
+	}
+	_, err = svc.CreateAdapterVersion(context.Background(), security, "pad_1", CreateAdapterVersionRequest{
+		Version:    "2026-05-01",
+		Definition: json.RawMessage(`{"verification":{"type":"hmac_sha256","signature_header":"X-Acme-Signature"}}`),
+		Reason:     "upload",
+	})
+	if err != nil {
+		t.Fatalf("expected adapter version create, got %v", err)
+	}
+	if store.adapterVersionReq.Version != "2026-05-01" || store.adapterTenantID != "ten_a" {
+		t.Fatalf("adapter version not passed through tenant boundary: req=%+v tenant=%q", store.adapterVersionReq, store.adapterTenantID)
+	}
+}
+
 func TestControlServiceReconciliationRequiresReasonAndScopesTenant(t *testing.T) {
 	store := &fakeControlStore{}
 	svc := NewControlService(store, ssrf.Validator{Resolver: ssrf.StaticResolver{}})
@@ -1210,6 +1255,9 @@ type fakeControlStore struct {
 	transformationTenantID     string
 	providerConnectionTenantID string
 	providerConnectionReq      CreateProviderConnectionRequest
+	adapterTenantID            string
+	adapterActorID             string
+	adapterVersionReq          CreateAdapterVersionRequest
 	reconciliationTenantID     string
 	opsTenantID                string
 	metricName                 string
@@ -1759,6 +1807,39 @@ func (f *fakeControlStore) ListReconciliationItems(context.Context, string, stri
 }
 func (f *fakeControlStore) CancelReconciliationJob(context.Context, string, string, string, string) (domain.ReconciliationJob, error) {
 	return domain.ReconciliationJob{}, nil
+}
+func (f *fakeControlStore) CreateProviderAdapter(_ context.Context, tenantID, actorID string, req CreateProviderAdapterRequest) (domain.ProviderAdapter, error) {
+	f.adapterTenantID = tenantID
+	f.adapterActorID = actorID
+	return domain.ProviderAdapter{ID: "pad_1", TenantID: tenantID, Name: req.Name, Kind: req.Kind, State: domain.AdapterStateDraft, RiskLevel: req.RiskLevel, CreatedBy: actorID}, nil
+}
+func (f *fakeControlStore) ListProviderAdapters(_ context.Context, tenantID string, limit int) ([]domain.ProviderAdapter, error) {
+	f.adapterTenantID = tenantID
+	return []domain.ProviderAdapter{{ID: "pad_1", TenantID: tenantID, Name: "acme", Kind: domain.AdapterKindDeclarative, State: domain.AdapterStateDraft, RiskLevel: domain.AdapterRiskMedium}}, nil
+}
+func (f *fakeControlStore) GetProviderAdapter(_ context.Context, tenantID, adapterID string) (domain.ProviderAdapter, error) {
+	f.adapterTenantID = tenantID
+	return domain.ProviderAdapter{ID: adapterID, TenantID: tenantID, Name: "acme", Kind: domain.AdapterKindDeclarative, State: domain.AdapterStateDraft, RiskLevel: domain.AdapterRiskMedium}, nil
+}
+func (f *fakeControlStore) CreateAdapterVersion(_ context.Context, tenantID, adapterID, actorID string, req CreateAdapterVersionRequest) (domain.AdapterVersion, error) {
+	f.adapterTenantID = tenantID
+	f.adapterActorID = actorID
+	f.adapterVersionReq = req
+	return domain.AdapterVersion{ID: "adv_1", TenantID: tenantID, AdapterID: adapterID, Name: "acme", Version: req.Version, Kind: domain.AdapterKindDeclarative, State: domain.AdapterStateDraft, Definition: req.Definition, CreatedBy: actorID}, nil
+}
+func (f *fakeControlStore) ListAdapterVersions(_ context.Context, tenantID, adapterID string, limit int) ([]domain.AdapterVersion, error) {
+	f.adapterTenantID = tenantID
+	return []domain.AdapterVersion{{ID: "adv_1", TenantID: tenantID, AdapterID: adapterID, Name: "acme", Version: "2026-05-01", Kind: domain.AdapterKindDeclarative, State: domain.AdapterStateDraft}}, nil
+}
+func (f *fakeControlStore) CreateAdapterTestVector(_ context.Context, tenantID, adapterID, versionID, actorID string, req CreateAdapterTestVectorRequest) (domain.AdapterTestVector, error) {
+	f.adapterTenantID = tenantID
+	f.adapterActorID = actorID
+	return domain.AdapterTestVector{ID: "atv_1", TenantID: tenantID, AdapterVersionID: versionID, Name: req.Name, Request: req.Request, Expected: req.Expected, State: domain.StateActive, CreatedBy: actorID}, nil
+}
+func (f *fakeControlStore) TransitionAdapterVersion(_ context.Context, tenantID, adapterID, versionID, actorID string, req AdapterVersionTransitionRequest) (domain.AdapterVersion, error) {
+	f.adapterTenantID = tenantID
+	f.adapterActorID = actorID
+	return domain.AdapterVersion{ID: versionID, TenantID: tenantID, AdapterID: adapterID, Name: "acme", Version: "2026-05-01", Kind: domain.AdapterKindDeclarative, State: req.Action, CreatedBy: actorID}, nil
 }
 func (f *fakeControlStore) CreateAuditExport(_ context.Context, tenantID, actorID string, req CreateAuditExportRequest) (domain.EvidenceExport, error) {
 	return domain.EvidenceExport{ID: "exp_1", TenantID: tenantID, IncludeRawPayloads: req.IncludeRawPayloads, IncludePayloadBodies: req.IncludePayloadBodies, CreatedBy: actorID}, nil

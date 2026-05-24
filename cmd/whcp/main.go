@@ -72,6 +72,8 @@ func run(args []string) error {
 		return runSources(args[1:])
 	case "provider-connections":
 		return runProviderConnections(args[1:])
+	case "adapters":
+		return runAdapters(args[1:])
 	case "endpoints":
 		return runEndpoints(args[1:])
 	case "subscriptions":
@@ -118,7 +120,7 @@ func run(args []string) error {
 }
 
 func usage() error {
-	return fmt.Errorf("usage: whcp <api|worker|scheduler|migrate|admin|api-keys|identity-providers|scim-tokens|role-bindings|access-policies|authz|events|sources|provider-connections|endpoints|subscriptions|retry-policies|routes|transformations|deliveries|replay-jobs|reconciliation-jobs|ops|alerts|notification-channels|notification-deliveries|siem-sinks|siem-deliveries|audit|retention|schemas|dead-letter|quarantine|signatures>")
+	return fmt.Errorf("usage: whcp <api|worker|scheduler|migrate|admin|api-keys|identity-providers|scim-tokens|role-bindings|access-policies|authz|events|sources|provider-connections|adapters|endpoints|subscriptions|retry-policies|routes|transformations|deliveries|replay-jobs|reconciliation-jobs|ops|alerts|notification-channels|notification-deliveries|siem-sinks|siem-deliveries|audit|retention|schemas|dead-letter|quarantine|signatures>")
 }
 
 func runAPI() error {
@@ -1734,6 +1736,68 @@ func runQuarantine(args []string) error {
 		return postJSON(*baseURL, *apiKey, "/v1/quarantine/"+url.PathEscape(*entryID)+":reject", map[string]string{"reason": *reason})
 	default:
 		return fmt.Errorf("usage: whcp quarantine <approve|reject>")
+	}
+}
+
+func runAdapters(args []string) error {
+	if len(args) == 0 {
+		return fmt.Errorf("usage: whcp adapters <list|get|create|versions|version-create|vector-create|transition>")
+	}
+	fs := flag.NewFlagSet("adapters "+args[0], flag.ContinueOnError)
+	baseURL := fs.String("base-url", "http://localhost:8080", "API base URL")
+	apiKey := fs.String("api-key", os.Getenv("WEBHOOKERY_API_KEY"), "API key")
+	adapterID := fs.String("adapter-id", "", "adapter id")
+	versionID := fs.String("version-id", "", "adapter version id")
+	name := fs.String("name", "", "adapter name")
+	kind := fs.String("kind", domain.AdapterKindDeclarative, "adapter kind")
+	version := fs.String("version", "", "adapter version")
+	definitionPath := fs.String("definition-file", "", "declarative adapter definition JSON file")
+	requestPath := fs.String("request-file", "", "adapter test-vector request JSON file")
+	expectedPath := fs.String("expected-file", "", "adapter test-vector expected JSON file")
+	action := fs.String("action", "", "transition action")
+	reason := fs.String("reason", "", "audit reason")
+	riskLevel := fs.String("risk-level", "", "risk level")
+	packageSHA := fs.String("package-sha256", "", "plugin package sha256")
+	packageSignature := fs.String("package-signature", "", "plugin package signature")
+	sbomSHA := fs.String("sbom-sha256", "", "plugin SBOM sha256")
+	provenanceURL := fs.String("provenance-url", "", "provenance URL")
+	description := fs.String("description", "", "description")
+	if err := fs.Parse(args[1:]); err != nil {
+		return err
+	}
+	switch args[0] {
+	case "list":
+		return getJSON(*baseURL, *apiKey, "/v1/adapters")
+	case "get":
+		return getJSON(*baseURL, *apiKey, "/v1/adapters/"+url.PathEscape(*adapterID))
+	case "create":
+		return postJSON(*baseURL, *apiKey, "/v1/adapters", map[string]any{"name": *name, "kind": *kind, "description": *description, "risk_level": *riskLevel, "provenance_url": *provenanceURL})
+	case "versions":
+		return getJSON(*baseURL, *apiKey, "/v1/adapters/"+url.PathEscape(*adapterID)+"/versions")
+	case "version-create":
+		definition, err := readOptionalOperatorFile(*definitionPath)
+		if err != nil {
+			return err
+		}
+		body := map[string]any{"version": *version, "reason": *reason, "risk_level": *riskLevel, "package_sha256": *packageSHA, "package_signature": *packageSignature, "sbom_sha256": *sbomSHA, "provenance_url": *provenanceURL}
+		if definition != "" {
+			body["definition"] = json.RawMessage(definition)
+		}
+		return postJSON(*baseURL, *apiKey, "/v1/adapters/"+url.PathEscape(*adapterID)+"/versions", body)
+	case "vector-create":
+		requestBody, err := readRequiredOperatorFile(*requestPath, "request-file")
+		if err != nil {
+			return err
+		}
+		expectedBody, err := readRequiredOperatorFile(*expectedPath, "expected-file")
+		if err != nil {
+			return err
+		}
+		return postJSON(*baseURL, *apiKey, "/v1/adapters/"+url.PathEscape(*adapterID)+"/versions/"+url.PathEscape(*versionID)+"/test-vectors", map[string]any{"name": *name, "request": json.RawMessage(requestBody), "expected": json.RawMessage(expectedBody)})
+	case "transition":
+		return postJSON(*baseURL, *apiKey, "/v1/adapters/"+url.PathEscape(*adapterID)+"/versions/"+url.PathEscape(*versionID)+":transition", map[string]string{"action": *action, "reason": *reason})
+	default:
+		return fmt.Errorf("usage: whcp adapters <list|get|create|versions|version-create|vector-create|transition>")
 	}
 }
 

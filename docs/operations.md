@@ -364,6 +364,17 @@ data, and metadata, and retention state. Existing verified events are backfilled
 as `legacy_metadata_only` envelopes so historical event metadata remains visible
 without inventing payload data.
 
+Tenant custom adapter governance is available through `/v1/adapters` and
+`whcp adapters`. Custom adapter rows are tenant-scoped and have immutable
+versions that move through `draft`, `automated_tests`, `security_review`,
+`staging_approved`, `active`, `deprecated`, and `retired`. Declarative adapter
+definitions and plugin package metadata are stored with SHA-256 hashes,
+provenance fields, and test-vector hashes; definitions that contain
+secret-shaped fields are rejected. Code-plugin package metadata can be
+registered for review, but Webhookery does not execute custom plugin code in
+this slice. Adapter state transitions require `security:write`, a reason, and
+write audit events.
+
 Transformations are tenant-scoped configuration resources managed through
 `/v1/transformations` and `whcp transformations`. A transformation version is
 immutable and declarative. Implemented operations are JSON Pointer based only:

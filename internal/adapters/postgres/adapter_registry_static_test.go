@@ -18,6 +18,7 @@ func TestAdapterRegistryMigrationDefinesTenantScopedGovernance(t *testing.T) {
 		"adapter_test_vectors",
 		"adapter_version_reviews",
 		"provider_adapters_scope_name_idx",
+		"adapter_versions_scope_name_version_idx",
 		"adapter_versions_scope_name_state_idx",
 	} {
 		if !strings.Contains(sql, want) {

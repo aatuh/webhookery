@@ -918,6 +918,158 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ProviderConnection"
+  /v1/adapters:
+    get:
+      summary: List built-in and tenant custom adapters
+      description: Returns adapter governance metadata only. Plugin packages are not executed by this endpoint.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: Paginated adapter metadata.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProviderAdapterPage"
+    post:
+      summary: Create tenant custom adapter
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateProviderAdapterRequest"
+      responses:
+        "201":
+          description: Adapter created in draft state.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProviderAdapter"
+  /v1/adapters/{adapter_id}:
+    get:
+      summary: Get adapter metadata
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: adapter_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Adapter metadata.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProviderAdapter"
+  /v1/adapters/{adapter_id}/versions:
+    get:
+      summary: List adapter versions
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: adapter_id
+          in: path
+          required: true
+          schema:
+            type: string
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: Paginated adapter versions.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdapterVersionPage"
+    post:
+      summary: Create adapter version
+      description: Declarative versions store JSON definitions. Plugin versions store signed package metadata only and are not executed.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: adapter_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateAdapterVersionRequest"
+      responses:
+        "201":
+          description: Adapter version created.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdapterVersion"
+  /v1/adapters/{adapter_id}/versions/{version_id}/test-vectors:
+    post:
+      summary: Add adapter version test vector
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: adapter_id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: version_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateAdapterTestVectorRequest"
+      responses:
+        "201":
+          description: Test vector metadata and hashes.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdapterTestVector"
+  /v1/adapters/{adapter_id}/versions/{version_id}:transition:
+    post:
+      summary: Transition adapter version through approval workflow
+      description: Supported actions are submit_tests, request_review, approve_staging, activate, deprecate, and retire.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: adapter_id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: version_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AdapterVersionTransitionRequest"
+      responses:
+        "200":
+          description: Updated adapter version.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdapterVersion"
   /v1/endpoints:
     get:
       summary: List outbound endpoints
@@ -4549,6 +4701,203 @@ components:
           nullable: true
         has_more:
           type: boolean
+    CreateProviderAdapterRequest:
+      type: object
+      required: [name, kind]
+      additionalProperties: false
+      properties:
+        name:
+          type: string
+          pattern: "^[a-z0-9_-]+$"
+        kind:
+          type: string
+          enum: [declarative, plugin]
+        description:
+          type: string
+        risk_level:
+          type: string
+          enum: [low, medium, high]
+        provenance_url:
+          type: string
+          format: uri
+    ProviderAdapter:
+      type: object
+      properties:
+        id:
+          type: string
+        tenant_id:
+          type: string
+        name:
+          type: string
+        kind:
+          type: string
+          enum: [builtin, declarative, plugin]
+        description:
+          type: string
+        risk_level:
+          type: string
+        state:
+          type: string
+          enum: [draft, active, deprecated, retired, disabled]
+        provenance_url:
+          type: string
+        created_by:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+    ProviderAdapterPage:
+      type: object
+      properties:
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/ProviderAdapter"
+        next_cursor:
+          type: string
+          nullable: true
+        has_more:
+          type: boolean
+    CreateAdapterVersionRequest:
+      type: object
+      required: [version, reason]
+      additionalProperties: false
+      properties:
+        version:
+          type: string
+        definition:
+          type: object
+          description: Declarative adapter definition. Must not contain secrets or bearer tokens.
+        package_sha256:
+          type: string
+        package_signature:
+          type: string
+        sbom_sha256:
+          type: string
+        provenance_url:
+          type: string
+        risk_level:
+          type: string
+          enum: [low, medium, high]
+        reason:
+          type: string
+    AdapterVersion:
+      type: object
+      properties:
+        id:
+          type: string
+        tenant_id:
+          type: string
+        adapter_id:
+          type: string
+        name:
+          type: string
+        version:
+          type: string
+        kind:
+          type: string
+          enum: [builtin, declarative, plugin]
+        config_hash:
+          type: string
+        definition:
+          type: object
+        definition_sha256:
+          type: string
+        package_sha256:
+          type: string
+        package_signature:
+          type: string
+        sbom_sha256:
+          type: string
+        provenance_url:
+          type: string
+        risk_level:
+          type: string
+        test_results:
+          type: array
+          items: {}
+        review_notes:
+          type: string
+        state:
+          type: string
+          enum: [draft, automated_tests, security_review, staging_approved, active, deprecated, retired]
+        created_by:
+          type: string
+        reviewed_by:
+          type: string
+        activated_by:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        reviewed_at:
+          type: string
+          format: date-time
+        activated_at:
+          type: string
+          format: date-time
+    AdapterVersionPage:
+      type: object
+      properties:
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/AdapterVersion"
+        next_cursor:
+          type: string
+          nullable: true
+        has_more:
+          type: boolean
+    CreateAdapterTestVectorRequest:
+      type: object
+      required: [name, request, expected]
+      additionalProperties: false
+      properties:
+        name:
+          type: string
+        purpose:
+          type: string
+        request:
+          type: object
+        expected:
+          type: object
+    AdapterTestVector:
+      type: object
+      properties:
+        id:
+          type: string
+        tenant_id:
+          type: string
+        adapter_version_id:
+          type: string
+        name:
+          type: string
+        purpose:
+          type: string
+        request_sha256:
+          type: string
+        expected_sha256:
+          type: string
+        state:
+          type: string
+    AdapterVersionTransitionRequest:
+      type: object
+      required: [action, reason]
+      additionalProperties: false
+      properties:
+        action:
+          type: string
+          enum: [submit_tests, request_review, approve_staging, activate, deprecate, retire]
+        reason:
+          type: string
+        test_results:
+          type: array
+          items: {}
+        review_notes:
+          type: string
     ReconciliationJobRequest:
       type: object
       required: [connection_id]

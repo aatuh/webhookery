@@ -48,6 +48,9 @@ go run ./cmd/whcp retention create --resource-type raw_payload --retention-days 
 go run ./cmd/whcp retention update --policy-id ret_... --legal-hold --hold-reason "customer legal request" --api-key "$WEBHOOKERY_API_KEY"
 go run ./cmd/whcp provider-connections create --name stripe-prod --provider stripe --credential "$STRIPE_API_KEY" --config source_id=src_stripe --api-key "$WEBHOOKERY_API_KEY"
 go run ./cmd/whcp provider-connections verify --connection-id pcn_... --reason "initial credential check" --api-key "$WEBHOOKERY_API_KEY"
+go run ./cmd/whcp adapters create --name acme-hmac --kind declarative --api-key "$WEBHOOKERY_API_KEY"
+go run ./cmd/whcp adapters version-create --adapter-id pad_... --version 2026-05-01 --definition-file acme-adapter.json --reason "upload declarative adapter" --api-key "$WEBHOOKERY_API_KEY"
+go run ./cmd/whcp adapters transition --adapter-id pad_... --version-id adv_... --action request_review --reason "ready for security review" --api-key "$WEBHOOKERY_API_KEY"
 go run ./cmd/whcp sources update --source-id src_... --state disabled --reason "retire old webhook" --api-key "$WEBHOOKERY_API_KEY"
 go run ./cmd/whcp endpoints update --endpoint-id end_... --url https://receiver.example/webhook --reason "move receiver" --api-key "$WEBHOOKERY_API_KEY"
 go run ./cmd/whcp endpoints delete --endpoint-id end_... --reason "retire old receiver" --api-key "$WEBHOOKERY_API_KEY"
@@ -125,6 +128,12 @@ subscriptions can reference deterministic JSON Pointer transformations; new
 deliveries snapshot the exact outbound payload bytes and sign those stored
 bytes. Transformation payloads may contain PII, so body reads and payload-body
 exports require `events:raw`.
+
+Private adapter registry governance is available through `/v1/adapters` and
+`whcp adapters`. Declarative adapter definitions and plugin package metadata
+are tenant-scoped, versioned, hashed, audited, and moved through the approval
+workflow before activation. Code-plugin packages are recorded for review only;
+Webhookery does not execute arbitrary plugin code.
 
 Provider reconciliation jobs compare provider-side API evidence to local
 Webhookery evidence when provider APIs permit it. Stripe event reconciliation

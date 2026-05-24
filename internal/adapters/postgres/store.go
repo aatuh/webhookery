@@ -4029,6 +4029,208 @@ func (s *Store) UpdateRetentionPolicy(ctx context.Context, tenantID, policyID, a
 	return existing, nil
 }
 
+func (s *Store) CreateProviderAdapter(ctx context.Context, tenantID, actorID string, req app.CreateProviderAdapterRequest) (domain.ProviderAdapter, error) {
+	item, err := scanProviderAdapter(s.pool.QueryRow(ctx, `
+		INSERT INTO provider_adapters(id, tenant_id, name, kind, description, risk_level, state, provenance_url, created_by)
+		VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)
+		RETURNING id, COALESCE(tenant_id,''), name, kind, description, risk_level, state, provenance_url, created_by, created_at, updated_at, COALESCE(retired_at, 'epoch'::timestamptz)`,
+		mustID("pad"), tenantID, req.Name, req.Kind, req.Description, req.RiskLevel, domain.AdapterStateDraft, req.ProvenanceURL, actorID,
+	))
+	if err != nil {
+		return domain.ProviderAdapter{}, err
+	}
+	_ = s.recordAuditEvent(ctx, auditEventInput{TenantID: tenantID, ActorID: actorID, Action: "adapter.created", Resource: "provider_adapter", ResourceID: item.ID, Reason: item.Name})
+	return normalizeProviderAdapter(item), nil
+}
+
+func (s *Store) ListProviderAdapters(ctx context.Context, tenantID string, limit int) ([]domain.ProviderAdapter, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT id, COALESCE(tenant_id,''), name, kind, description, risk_level, state, provenance_url, created_by, created_at, updated_at, COALESCE(retired_at, 'epoch'::timestamptz)
+		FROM provider_adapters
+		WHERE tenant_id IS NULL OR tenant_id=$1
+		ORDER BY tenant_id NULLS FIRST, name
+		LIMIT $2`, tenantID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []domain.ProviderAdapter
+	for rows.Next() {
+		item, err := scanProviderAdapter(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, normalizeProviderAdapter(item))
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) GetProviderAdapter(ctx context.Context, tenantID, adapterID string) (domain.ProviderAdapter, error) {
+	item, err := scanProviderAdapter(s.pool.QueryRow(ctx, `
+		SELECT id, COALESCE(tenant_id,''), name, kind, description, risk_level, state, provenance_url, created_by, created_at, updated_at, COALESCE(retired_at, 'epoch'::timestamptz)
+		FROM provider_adapters
+		WHERE id=$2 AND (tenant_id IS NULL OR tenant_id=$1)`, tenantID, adapterID))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return domain.ProviderAdapter{}, app.ErrNotFound
+	}
+	return normalizeProviderAdapter(item), err
+}
+
+func (s *Store) CreateAdapterVersion(ctx context.Context, tenantID, adapterID, actorID string, req app.CreateAdapterVersionRequest) (domain.AdapterVersion, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return domain.AdapterVersion{}, err
+	}
+	defer rollback(ctx, tx)
+
+	adapter, err := scanProviderAdapter(tx.QueryRow(ctx, `
+		SELECT id, COALESCE(tenant_id,''), name, kind, description, risk_level, state, provenance_url, created_by, created_at, updated_at, COALESCE(retired_at, 'epoch'::timestamptz)
+		FROM provider_adapters
+		WHERE tenant_id=$1 AND id=$2 AND state <> 'retired'
+		FOR UPDATE`, tenantID, adapterID))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return domain.AdapterVersion{}, app.ErrNotFound
+	}
+	if err != nil {
+		return domain.AdapterVersion{}, err
+	}
+	definition := req.Definition
+	if len(definition) == 0 {
+		definition = json.RawMessage(`{}`)
+	}
+	definitionHash := domain.HashSHA256(definition)
+	configHash := definitionHash
+	if adapter.Kind == domain.AdapterKindPlugin {
+		if strings.TrimSpace(req.PackageSHA256) == "" || strings.TrimSpace(req.PackageSignature) == "" || strings.TrimSpace(req.SBOMSHA256) == "" {
+			return domain.AdapterVersion{}, fmt.Errorf("%w: plugin package_sha256, package_signature, and sbom_sha256 are required", app.ErrInvalidInput)
+		}
+		configHash = req.PackageSHA256
+	} else if adapter.Kind == domain.AdapterKindDeclarative && string(definition) == "{}" {
+		return domain.AdapterVersion{}, fmt.Errorf("%w: declarative adapter definition is required", app.ErrInvalidInput)
+	}
+
+	id := mustID("adv")
+	item, err := scanAdapterVersion(tx.QueryRow(ctx, `
+		INSERT INTO adapter_versions(id, tenant_id, adapter_id, name, version, kind, config_hash, definition_json, definition_sha256,
+			package_sha256, package_signature, sbom_sha256, provenance_url, risk_level, state, created_by)
+		VALUES($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9,$10,$11,$12,$13,$14,$15,$16)
+		RETURNING `+adapterVersionColumns(),
+		id, tenantID, adapter.ID, adapter.Name, req.Version, adapter.Kind, configHash, string(definition), definitionHash,
+		req.PackageSHA256, req.PackageSignature, req.SBOMSHA256, firstNonEmpty(req.ProvenanceURL, adapter.ProvenanceURL), req.RiskLevel, domain.AdapterStateDraft, actorID,
+	))
+	if err != nil {
+		return domain.AdapterVersion{}, err
+	}
+	if _, err := recordAuditEventTx(ctx, tx, auditEventInput{TenantID: tenantID, ActorID: actorID, Action: "adapter_version.created", Resource: "adapter_version", ResourceID: id, Reason: req.Reason}); err != nil {
+		return domain.AdapterVersion{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return domain.AdapterVersion{}, err
+	}
+	return normalizeAdapterVersion(item), nil
+}
+
+func (s *Store) ListAdapterVersions(ctx context.Context, tenantID, adapterID string, limit int) ([]domain.AdapterVersion, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT `+adapterVersionColumns()+`
+		FROM adapter_versions
+		WHERE adapter_id=$2 AND (tenant_id IS NULL OR tenant_id=$1)
+		ORDER BY created_at DESC
+		LIMIT $3`, tenantID, adapterID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []domain.AdapterVersion
+	for rows.Next() {
+		item, err := scanAdapterVersion(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, normalizeAdapterVersion(item))
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) CreateAdapterTestVector(ctx context.Context, tenantID, adapterID, versionID, actorID string, req app.CreateAdapterTestVectorRequest) (domain.AdapterTestVector, error) {
+	if err := s.ensureTenantAdapterVersion(ctx, tenantID, adapterID, versionID); err != nil {
+		return domain.AdapterTestVector{}, err
+	}
+	id := mustID("atv")
+	item, err := scanAdapterTestVector(s.pool.QueryRow(ctx, `
+		INSERT INTO adapter_test_vectors(id, tenant_id, adapter_version_id, name, purpose, request_json, expected_json, request_sha256, expected_sha256, created_by)
+		VALUES($1,$2,$3,$4,$5,$6::jsonb,$7::jsonb,$8,$9,$10)
+		RETURNING id, tenant_id, adapter_version_id, name, purpose, request_json, expected_json, request_sha256, expected_sha256, state, created_by, created_at, updated_at`,
+		id, tenantID, versionID, req.Name, req.Purpose, string(req.Request), string(req.Expected), domain.HashSHA256(req.Request), domain.HashSHA256(req.Expected), actorID,
+	))
+	if err != nil {
+		return domain.AdapterTestVector{}, err
+	}
+	_ = s.recordAuditEvent(ctx, auditEventInput{TenantID: tenantID, ActorID: actorID, Action: "adapter_test_vector.created", Resource: "adapter_version", ResourceID: versionID, Reason: req.Name})
+	return item, nil
+}
+
+func (s *Store) TransitionAdapterVersion(ctx context.Context, tenantID, adapterID, versionID, actorID string, req app.AdapterVersionTransitionRequest) (domain.AdapterVersion, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return domain.AdapterVersion{}, err
+	}
+	defer rollback(ctx, tx)
+	current, err := scanAdapterVersion(tx.QueryRow(ctx, `
+		SELECT `+adapterVersionColumns()+`
+		FROM adapter_versions
+		WHERE tenant_id=$1 AND adapter_id=$2 AND id=$3
+		FOR UPDATE`, tenantID, adapterID, versionID))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return domain.AdapterVersion{}, app.ErrNotFound
+	}
+	if err != nil {
+		return domain.AdapterVersion{}, err
+	}
+	nextState, err := adapterVersionNextState(current.State, req.Action)
+	if err != nil {
+		return domain.AdapterVersion{}, err
+	}
+	if req.Action == "activate" {
+		if _, err := tx.Exec(ctx, `UPDATE adapter_versions SET state='deprecated', deprecated_at=now() WHERE tenant_id=$1 AND adapter_id=$2 AND state='active' AND id<>$3`, tenantID, adapterID, versionID); err != nil {
+			return domain.AdapterVersion{}, err
+		}
+	}
+	item, err := scanAdapterVersion(tx.QueryRow(ctx, `
+		UPDATE adapter_versions
+		SET state=$1,
+		    test_results_json=CASE WHEN $2::jsonb IS NULL THEN test_results_json ELSE $2::jsonb END,
+		    review_notes=CASE WHEN $3='' THEN review_notes ELSE $3 END,
+		    reviewed_by=CASE WHEN $4 THEN $5 ELSE reviewed_by END,
+		    activated_by=CASE WHEN $6 THEN $5 ELSE activated_by END,
+		    reviewed_at=CASE WHEN $4 THEN now() ELSE reviewed_at END,
+		    activated_at=CASE WHEN $6 THEN now() ELSE activated_at END,
+		    deprecated_at=CASE WHEN $7 THEN now() ELSE deprecated_at END,
+		    retired_at=CASE WHEN $8 THEN now() ELSE retired_at END
+		WHERE tenant_id=$9 AND adapter_id=$10 AND id=$11
+		RETURNING `+adapterVersionColumns(),
+		nextState, nullableJSON(req.TestResults), strings.TrimSpace(req.ReviewNotes), req.Action == "approve_staging", actorID,
+		req.Action == "activate", req.Action == "deprecate", req.Action == "retire", tenantID, adapterID, versionID,
+	))
+	if err != nil {
+		return domain.AdapterVersion{}, err
+	}
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO adapter_version_reviews(id, tenant_id, adapter_version_id, action, from_state, to_state, actor_id, reason)
+		VALUES($1,$2,$3,$4,$5,$6,$7,$8)`,
+		mustID("avr"), tenantID, versionID, req.Action, current.State, nextState, actorID, strings.TrimSpace(req.Reason),
+	); err != nil {
+		return domain.AdapterVersion{}, err
+	}
+	if _, err := recordAuditEventTx(ctx, tx, auditEventInput{TenantID: tenantID, ActorID: actorID, Action: "adapter_version." + req.Action, Resource: "adapter_version", ResourceID: versionID, Reason: req.Reason}); err != nil {
+		return domain.AdapterVersion{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return domain.AdapterVersion{}, err
+	}
+	return normalizeAdapterVersion(item), nil
+}
+
 func (s *Store) CreateProviderConnection(ctx context.Context, tenantID, actorID string, req app.CreateProviderConnectionRequest) (domain.ProviderConnection, error) {
 	id := mustID("pcn")
 	encrypted, err := s.box.Encrypt([]byte(req.Credential))
@@ -7284,6 +7486,112 @@ func scanProviderConnection(row rowScanner) (domain.ProviderConnection, error) {
 	var item domain.ProviderConnection
 	err := row.Scan(&item.ID, &item.TenantID, &item.Name, &item.Provider, &item.State, &item.CredentialType, &item.CredentialHint, &item.Config, &item.VerifiedAt, &item.RevokedAt, &item.CreatedBy, &item.CreatedAt, &item.UpdatedAt)
 	return item, err
+}
+
+func scanProviderAdapter(row rowScanner) (domain.ProviderAdapter, error) {
+	var item domain.ProviderAdapter
+	err := row.Scan(&item.ID, &item.TenantID, &item.Name, &item.Kind, &item.Description, &item.RiskLevel, &item.State, &item.ProvenanceURL, &item.CreatedBy, &item.CreatedAt, &item.UpdatedAt, &item.RetiredAt)
+	return item, err
+}
+
+func normalizeProviderAdapter(item domain.ProviderAdapter) domain.ProviderAdapter {
+	if item.RetiredAt.Equal(time.Unix(0, 0).UTC()) {
+		item.RetiredAt = time.Time{}
+	}
+	return item
+}
+
+func adapterVersionColumns() string {
+	return `id, COALESCE(tenant_id,''), adapter_id, name, version, kind, config_hash, definition_json, definition_sha256,
+		package_sha256, package_signature, sbom_sha256, provenance_url, risk_level, test_results_json, review_notes, state,
+		created_by, reviewed_by, activated_by, created_at, COALESCE(reviewed_at, 'epoch'::timestamptz),
+		COALESCE(activated_at, 'epoch'::timestamptz), COALESCE(deprecated_at, 'epoch'::timestamptz), COALESCE(retired_at, 'epoch'::timestamptz)`
+}
+
+func scanAdapterVersion(row rowScanner) (domain.AdapterVersion, error) {
+	var item domain.AdapterVersion
+	err := row.Scan(&item.ID, &item.TenantID, &item.AdapterID, &item.Name, &item.Version, &item.Kind, &item.ConfigHash, &item.Definition,
+		&item.DefinitionSHA256, &item.PackageSHA256, &item.PackageSignature, &item.SBOMSHA256, &item.ProvenanceURL, &item.RiskLevel,
+		&item.TestResults, &item.ReviewNotes, &item.State, &item.CreatedBy, &item.ReviewedBy, &item.ActivatedBy, &item.CreatedAt,
+		&item.ReviewedAt, &item.ActivatedAt, &item.DeprecatedAt, &item.RetiredAt)
+	return item, err
+}
+
+func normalizeAdapterVersion(item domain.AdapterVersion) domain.AdapterVersion {
+	epoch := time.Unix(0, 0).UTC()
+	if item.ReviewedAt.Equal(epoch) {
+		item.ReviewedAt = time.Time{}
+	}
+	if item.ActivatedAt.Equal(epoch) {
+		item.ActivatedAt = time.Time{}
+	}
+	if item.DeprecatedAt.Equal(epoch) {
+		item.DeprecatedAt = time.Time{}
+	}
+	if item.RetiredAt.Equal(epoch) {
+		item.RetiredAt = time.Time{}
+	}
+	return item
+}
+
+func scanAdapterTestVector(row rowScanner) (domain.AdapterTestVector, error) {
+	var item domain.AdapterTestVector
+	err := row.Scan(&item.ID, &item.TenantID, &item.AdapterVersionID, &item.Name, &item.Purpose, &item.Request, &item.Expected,
+		&item.RequestSHA256, &item.ExpectedSHA256, &item.State, &item.CreatedBy, &item.CreatedAt, &item.UpdatedAt)
+	return item, err
+}
+
+func (s *Store) ensureTenantAdapterVersion(ctx context.Context, tenantID, adapterID, versionID string) error {
+	var id string
+	err := s.pool.QueryRow(ctx, `SELECT id FROM adapter_versions WHERE tenant_id=$1 AND adapter_id=$2 AND id=$3`, tenantID, adapterID, versionID).Scan(&id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return app.ErrNotFound
+	}
+	return err
+}
+
+func adapterVersionNextState(current, action string) (string, error) {
+	switch action {
+	case "submit_tests":
+		if current != domain.AdapterStateDraft {
+			return "", fmt.Errorf("%w: submit_tests requires draft state", app.ErrInvalidInput)
+		}
+		return domain.AdapterStateAutomatedTests, nil
+	case "request_review":
+		if current != domain.AdapterStateAutomatedTests {
+			return "", fmt.Errorf("%w: request_review requires automated_tests state", app.ErrInvalidInput)
+		}
+		return domain.AdapterStateSecurityReview, nil
+	case "approve_staging":
+		if current != domain.AdapterStateSecurityReview {
+			return "", fmt.Errorf("%w: approve_staging requires security_review state", app.ErrInvalidInput)
+		}
+		return domain.AdapterStateStagingApproved, nil
+	case "activate":
+		if current != domain.AdapterStateStagingApproved {
+			return "", fmt.Errorf("%w: activate requires staging_approved state", app.ErrInvalidInput)
+		}
+		return domain.AdapterStateActive, nil
+	case "deprecate":
+		if current != domain.AdapterStateActive && current != domain.AdapterStateStagingApproved {
+			return "", fmt.Errorf("%w: deprecate requires active or staging_approved state", app.ErrInvalidInput)
+		}
+		return domain.AdapterStateDeprecated, nil
+	case "retire":
+		if current == domain.AdapterStateActive {
+			return "", fmt.Errorf("%w: retire active adapter version only after deprecation", app.ErrInvalidInput)
+		}
+		return domain.AdapterStateRetired, nil
+	default:
+		return "", fmt.Errorf("%w: unsupported adapter version action", app.ErrInvalidInput)
+	}
+}
+
+func nullableJSON(raw json.RawMessage) any {
+	if len(raw) == 0 {
+		return nil
+	}
+	return string(raw)
 }
 
 func normalizeProviderConnection(item domain.ProviderConnection) domain.ProviderConnection {
