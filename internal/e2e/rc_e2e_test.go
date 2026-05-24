@@ -18,6 +18,7 @@ import (
 	"webhookery/internal/app"
 	"webhookery/internal/authz"
 	"webhookery/internal/domain"
+	"webhookery/internal/evidence"
 	"webhookery/internal/ssrf"
 	"webhookery/internal/worker"
 	"webhookery/pkg/verifier"
@@ -409,6 +410,123 @@ func TestRCE2ERetryExhaustionDLQReleaseAndReplayModes(t *testing.T) {
 	}
 	if !containsAuditAction(auditEvents, "replay.created") || !containsAuditAction(auditEvents, "dead_letter.released") {
 		t.Fatalf("expected replay and dead-letter audit evidence: %+v", auditEvents)
+	}
+}
+
+func TestRCE2EEvidenceLifecycleRetentionExportAndPermissionGates(t *testing.T) {
+	ctx, store, actor := openRCStore(t)
+	defer store.Close()
+
+	oldNow := time.Now().UTC().AddDate(0, 0, -2).Truncate(time.Second)
+	control := app.NewControlService(store, ssrf.Validator{Resolver: rcResolver})
+	source, _ := createRCRoute(t, ctx, control, actor, "stripe", "stripe", "payment_intent.succeeded")
+	body := []byte(`{"id":"evt_rc_evidence_` + testSuffix(t) + `","type":"payment_intent.succeeded","account":"acct_rc","data":{"object":{"id":"pi_rc"}}}`)
+
+	ingest := app.NewIngestService(store, fixedClock{now: oldNow})
+	result, err := ingest.Ingest(ctx, app.IngestRequest{
+		TenantID:    actor.TenantID,
+		SourceID:    source.ID,
+		Provider:    "stripe",
+		RawBody:     body,
+		Headers:     []domain.HeaderPair{{Name: "Stripe-Signature", Value: verifier.TimestampedHeader("v1", oldNow, []byte("whsec_rc"), body)}},
+		ContentType: "application/json",
+		RemoteIP:    "198.51.100.14",
+	})
+	if err != nil {
+		t.Fatalf("ingest evidence lifecycle event: %v", err)
+	}
+	runWorkerOnce(t, ctx, store, &recordingDeliveryClient{
+		t:   t,
+		now: oldNow.Add(time.Second),
+		result: worker.DeliveryResult{
+			StatusCode:   http.StatusAccepted,
+			ResponseBody: []byte("ok"),
+			FailureClass: "success",
+		},
+	}, "rc-evidence-"+testSuffix(t))
+
+	reader := authz.Actor{ID: "usr_reader_" + testSuffix(t), TenantID: actor.TenantID, Role: authz.RoleSupport}
+	if _, err := control.GetRawPayload(ctx, reader, result.EventID); !errors.Is(err, app.ErrForbidden) {
+		t.Fatalf("expected raw payload read without events:raw to be forbidden, got %v", err)
+	}
+	if _, err := control.GetNormalizedEvent(ctx, reader, result.EventID, true); !errors.Is(err, app.ErrForbidden) {
+		t.Fatalf("expected normalized data read without events:raw to be forbidden, got %v", err)
+	}
+	metadataOnly, err := control.GetNormalizedEvent(ctx, reader, result.EventID, false)
+	if err != nil {
+		t.Fatalf("metadata-only normalized event read should be allowed: %v", err)
+	}
+	if len(metadataOnly.Data) != 0 || metadataOnly.EnvelopeSHA256 == "" || metadataOnly.MetadataSHA256 == "" {
+		t.Fatalf("expected metadata-only normalized event with hashes and no data body: %+v", metadataOnly)
+	}
+	raw, err := control.GetRawPayload(ctx, actor, result.EventID)
+	if err != nil {
+		t.Fatalf("owner raw payload read before retention: %v", err)
+	}
+	if string(raw.Body) != string(body) || raw.SHA256 == "" {
+		t.Fatalf("expected raw body and hash before retention: %+v", raw)
+	}
+
+	auditOnly := authz.Actor{ID: "usr_audit_" + testSuffix(t), TenantID: actor.TenantID, Role: authz.RoleAuditor, Scopes: []string{"audit:read"}}
+	if _, err := control.CreateAuditExport(ctx, auditOnly, app.CreateAuditExportRequest{IncludePayloadBodies: true, Reason: "forbidden payload export"}); !errors.Is(err, app.ErrForbidden) {
+		t.Fatalf("expected payload-inclusive export without events:raw to be forbidden, got %v", err)
+	}
+
+	if _, err := control.CreateRetentionPolicy(ctx, actor, app.CreateRetentionPolicyRequest{ResourceType: domain.RetentionResourceRawPayload, RetentionDays: 1, State: domain.StateActive}); err != nil {
+		t.Fatalf("create raw retention policy: %v", err)
+	}
+	if _, err := control.CreateRetentionPolicy(ctx, actor, app.CreateRetentionPolicyRequest{ResourceType: domain.RetentionResourceNormalized, RetentionDays: 1, State: domain.StateActive}); err != nil {
+		t.Fatalf("create normalized retention policy: %v", err)
+	}
+	if err := store.ApplyRetentionPolicies(ctx, "rc-retention-"+testSuffix(t), 20); err != nil {
+		t.Fatalf("apply retention policies: %v", err)
+	}
+	if _, err := control.GetRawPayload(ctx, actor, result.EventID); !errors.Is(err, app.ErrGone) {
+		t.Fatalf("expected retained raw payload body to be gone, got %v", err)
+	}
+	retainedMetadata, err := control.GetNormalizedEvent(ctx, reader, result.EventID, false)
+	if err != nil {
+		t.Fatalf("metadata-only normalized event should survive retention: %v", err)
+	}
+	if retainedMetadata.StorageStatus != domain.StorageStatusDeleted || retainedMetadata.EnvelopeSHA256 == "" || retainedMetadata.DataSHA256 == "" {
+		t.Fatalf("expected retained normalized metadata and hashes: %+v", retainedMetadata)
+	}
+	if _, err := control.GetNormalizedEvent(ctx, actor, result.EventID, true); !errors.Is(err, app.ErrGone) {
+		t.Fatalf("expected retained normalized data body to be gone, got %v", err)
+	}
+
+	export, err := control.CreateAuditExport(ctx, actor, app.CreateAuditExportRequest{
+		IncludeRawPayloads:   true,
+		IncludeTimelines:     true,
+		IncludePayloadBodies: true,
+		Reason:               "RC evidence export drill",
+	})
+	if err != nil {
+		t.Fatalf("create body-inclusive audit export: %v", err)
+	}
+	if export.ID == "" || export.State != domain.EvidenceExportStateReady || export.SHA256 == "" || export.ManifestSHA256 == "" {
+		t.Fatalf("expected ready export with hashes: %+v", export)
+	}
+	if _, err := control.DownloadAuditExport(ctx, auditOnly, export.ID); !errors.Is(err, app.ErrForbidden) {
+		t.Fatalf("expected raw-restricted actor to be unable to download body-inclusive export, got %v", err)
+	}
+	download, err := control.DownloadAuditExport(ctx, actor, export.ID)
+	if err != nil {
+		t.Fatalf("download body-inclusive audit export: %v", err)
+	}
+	verification, err := evidence.VerifyTarGzipBundle(download.Body)
+	if err != nil {
+		t.Fatalf("verify downloaded audit export bundle: %v", err)
+	}
+	if !verification.Valid || verification.CheckedFiles == 0 || verification.CheckedChainEntries == 0 {
+		t.Fatalf("expected valid bundle with file hashes and chain proof: %+v", verification)
+	}
+	chain, err := control.VerifyAuditChain(ctx, actor, app.AuditChainVerifyRequest{})
+	if err != nil {
+		t.Fatalf("verify audit chain after retention/export: %v", err)
+	}
+	if !chain.Valid || chain.CheckedEntries == 0 {
+		t.Fatalf("expected valid audit chain after retention/export: %+v", chain)
 	}
 }
 
