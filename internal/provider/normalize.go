@@ -12,15 +12,16 @@ import (
 var ErrUnverifiedNormalization = errors.New("cannot normalize unverified provider payload")
 
 type NormalizeInput struct {
-	Adapter      string
-	Provider     string
-	TenantID     string
-	SourceID     string
-	RawBody      []byte
-	Headers      map[string][]string
-	Verified     bool
-	VerifyReason string
-	RawHash      string
+	Adapter           string
+	Provider          string
+	TenantID          string
+	SourceID          string
+	RawBody           []byte
+	Headers           map[string][]string
+	Verified          bool
+	VerifyReason      string
+	RawHash           string
+	AdapterDefinition json.RawMessage
 }
 
 type NormalizedEnvelope struct {
@@ -45,6 +46,11 @@ func Normalize(input NormalizeInput) (NormalizedEnvelope, error) {
 	}
 	if !input.Verified && input.VerifyReason != domain.VerificationReasonProviderAPIReconcile && adapter != "generic-unsafe" {
 		return NormalizedEnvelope{}, ErrUnverifiedNormalization
+	}
+	if len(input.AdapterDefinition) != 0 {
+		if env, ok, err := NormalizeDeclarative(input, input.AdapterDefinition); ok || err != nil {
+			return env, err
+		}
 	}
 	var raw map[string]any
 	_ = json.Unmarshal(input.RawBody, &raw)

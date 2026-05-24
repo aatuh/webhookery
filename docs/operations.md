@@ -367,13 +367,15 @@ without inventing payload data.
 Tenant custom adapter governance is available through `/v1/adapters` and
 `whcp adapters`. Custom adapter rows are tenant-scoped and have immutable
 versions that move through `draft`, `automated_tests`, `security_review`,
-`staging_approved`, `active`, `deprecated`, and `retired`. Declarative adapter
-definitions and plugin package metadata are stored with SHA-256 hashes,
-provenance fields, and test-vector hashes; definitions that contain
-secret-shaped fields are rejected. Code-plugin package metadata can be
-registered for review, but Webhookery does not execute custom plugin code in
-this slice. Adapter state transitions require `security:write`, a reason, and
-write audit events.
+`staging_approved`, `active`, `deprecated`, and `retired`. Active declarative
+HMAC-SHA256 adapters can verify inbound requests using exact raw bytes,
+configured signature/timestamp headers, and replay windows; normalization uses
+the stored declarative metadata and data selectors. Declarative definitions and
+plugin package metadata are stored with SHA-256 hashes, provenance fields, and
+test-vector hashes; definitions that contain secret-shaped fields are rejected.
+Code-plugin package metadata can be registered for review, but Webhookery does
+not execute custom plugin code in this slice. Adapter state transitions require
+`security:write`, a reason, and write audit events.
 
 Transformations are tenant-scoped configuration resources managed through
 `/v1/transformations` and `whcp transformations`. A transformation version is

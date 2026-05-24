@@ -5,6 +5,7 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"testing"
 	"time"
@@ -114,6 +115,50 @@ func TestIngestInternalProducerCreatesNormalizedEnvelope(t *testing.T) {
 	}
 }
 
+func TestIngestUsesActiveDeclarativeAdapterVersion(t *testing.T) {
+	definition := json.RawMessage(`{
+		"name":"acme-hmac",
+		"version":"2026-05-01",
+		"verification":{"type":"hmac_sha256","signature_header":"X-Acme-Signature","timestamp_header":"X-Acme-Timestamp","signed_payload":"{{timestamp}}.{{raw_body}}","encoding":"hex","replay_window_seconds":300},
+		"extractors":{"provider_event_id":"$.id","type":"$.event_type","account_id":"$.account.id"},
+		"normalization":{"source":"acme/{{account_id}}","subject":"$.resource.id","data":"$"}
+	}`)
+	store := &fakeStore{
+		source: domain.Source{
+			ID:                 "src_acme",
+			TenantID:           "ten_123",
+			Provider:           "acme",
+			Adapter:            "acme-hmac",
+			State:              domain.StateActive,
+			VerificationSecret: []byte("secret"),
+		},
+		activeAdapter: domain.AdapterVersion{ID: "adv_acme", TenantID: "ten_123", Name: "acme-hmac", Kind: domain.AdapterKindDeclarative, State: domain.AdapterStateActive, Definition: definition},
+	}
+	svc := NewIngestService(store, fixedClock(time.Unix(1_700_000_100, 0)))
+	body := []byte(`{"id":"evt_acme","event_type":"thing.created","account":{"id":"acct_1"},"resource":{"id":"res_1"}}`)
+	ts := "1700000000"
+	signature := hmacHex([]byte("secret"), []byte(ts+"."+string(body)))
+	res, err := svc.Ingest(context.Background(), IngestRequest{
+		TenantID: "ten_123",
+		SourceID: "src_acme",
+		Provider: "acme",
+		RawBody:  body,
+		Headers: []domain.HeaderPair{
+			{Name: "X-Acme-Signature", Value: signature},
+			{Name: "X-Acme-Timestamp", Value: ts},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !res.Accepted || store.last.Normalized.AdapterVersionID != "adv_acme" {
+		t.Fatalf("expected accepted custom adapter evidence, result=%+v normalized=%+v", res, store.last.Normalized)
+	}
+	if store.last.Event.ProviderID != "evt_acme" || store.last.Event.Type != "thing.created" {
+		t.Fatalf("custom adapter metadata not extracted: %+v", store.last.Event)
+	}
+}
+
 func TestIngestRejectsDisabledSourceBeforeCapture(t *testing.T) {
 	store := &fakeStore{source: domain.Source{
 		ID:                 "src_123",
@@ -188,10 +233,11 @@ func TestIngestCloudEventsStructuredMetadata(t *testing.T) {
 }
 
 type fakeStore struct {
-	source   domain.Source
-	captured bool
-	last     CaptureInboundInput
-	err      error
+	source        domain.Source
+	activeAdapter domain.AdapterVersion
+	captured      bool
+	last          CaptureInboundInput
+	err           error
 }
 
 func (f *fakeStore) FindSource(ctx context.Context, tenantID, sourceID string) (domain.Source, error) {
@@ -220,6 +266,13 @@ func (f *fakeStore) CaptureInbound(ctx context.Context, input CaptureInboundInpu
 		RawPayloadID: "raw_stored",
 		DedupeStatus: domain.DedupeUnique,
 	}, nil
+}
+
+func (f *fakeStore) ActiveDeclarativeAdapterVersion(ctx context.Context, tenantID, adapterName string) (domain.AdapterVersion, error) {
+	if f.activeAdapter.ID == "" || f.activeAdapter.TenantID != tenantID || f.activeAdapter.Name != adapterName {
+		return domain.AdapterVersion{}, ErrNotFound
+	}
+	return f.activeAdapter, nil
 }
 
 type fixedClock time.Time

@@ -32,6 +32,10 @@ type IngestStore interface {
 	CaptureInbound(ctx context.Context, input CaptureInboundInput) (CaptureInboundResult, error)
 }
 
+type AdapterDefinitionLookup interface {
+	ActiveDeclarativeAdapterVersion(ctx context.Context, tenantID, adapterName string) (domain.AdapterVersion, error)
+}
+
 type IngestService struct {
 	store    IngestStore
 	clock    Clock
@@ -107,8 +111,23 @@ func (s *IngestService) capture(ctx context.Context, source domain.Source, req I
 	}
 	now := s.clock.Now()
 	adapter, ok := s.registry.Adapter(source.Adapter)
+	var adapterDefinition json.RawMessage
+	var adapterVersionID string
 	if !ok {
 		adapter, ok = s.registry.Adapter(source.Provider)
+	}
+	if !ok {
+		if lookup, supports := s.store.(AdapterDefinitionLookup); supports {
+			version, err := lookup.ActiveDeclarativeAdapterVersion(ctx, source.TenantID, source.Adapter)
+			if err == nil && version.Kind == domain.AdapterKindDeclarative && version.State == domain.AdapterStateActive {
+				if custom, err := provider.NewDeclarativeAdapter(version.Definition); err == nil {
+					adapter = custom
+					adapterDefinition = version.Definition
+					adapterVersionID = version.ID
+					ok = true
+				}
+			}
+		}
 	}
 	if !ok {
 		adapter, _ = s.registry.Adapter("generic-unsafe")
@@ -135,24 +154,30 @@ func (s *IngestService) capture(ctx context.Context, source domain.Source, req I
 	}
 	rawHash := domain.HashSHA256(req.RawBody)
 	providerEventID, eventType := extractEventMetadataForProvider(source.Adapter, req.RawBody, headers)
+	if len(adapterDefinition) != 0 {
+		if id, typ := provider.DeclarativeMetadata(adapterDefinition, req.RawBody, headers); id != "" || typ != "" {
+			providerEventID, eventType = firstNonEmpty(id, providerEventID), firstNonEmpty(typ, eventType)
+		}
+	}
 	dedupeKey := dedupeKey(source, providerEventID, rawHash)
 	normalized := domain.NormalizedEnvelope{}
 	if verify.Verified {
 		env, err := provider.Normalize(provider.NormalizeInput{
-			Adapter:      source.Adapter,
-			Provider:     source.Provider,
-			TenantID:     source.TenantID,
-			SourceID:     source.ID,
-			RawBody:      req.RawBody,
-			Headers:      headers,
-			Verified:     verify.Verified,
-			VerifyReason: verify.Reason,
-			RawHash:      rawHash,
+			Adapter:           source.Adapter,
+			Provider:          source.Provider,
+			TenantID:          source.TenantID,
+			SourceID:          source.ID,
+			RawBody:           req.RawBody,
+			Headers:           headers,
+			Verified:          verify.Verified,
+			VerifyReason:      verify.Reason,
+			RawHash:           rawHash,
+			AdapterDefinition: adapterDefinition,
 		})
 		if err == nil {
 			normalized = domain.NormalizedEnvelope{
 				TenantID:         source.TenantID,
-				AdapterVersionID: "",
+				AdapterVersionID: adapterVersionID,
 				Provider:         source.Provider,
 				ProviderEventID:  env.ProviderEventID,
 				Type:             env.Type,
@@ -278,6 +303,15 @@ func firstHeader(headers map[string][]string, name string) string {
 		return ""
 	}
 	return values[0]
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if value != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func IsInvalidSignature(result IngestResult) bool {

@@ -4152,6 +4152,19 @@ func (s *Store) ListAdapterVersions(ctx context.Context, tenantID, adapterID str
 	return out, rows.Err()
 }
 
+func (s *Store) ActiveDeclarativeAdapterVersion(ctx context.Context, tenantID, adapterName string) (domain.AdapterVersion, error) {
+	item, err := scanAdapterVersion(s.pool.QueryRow(ctx, `
+		SELECT `+adapterVersionColumns()+`
+		FROM adapter_versions
+		WHERE tenant_id=$1 AND name=$2 AND kind='declarative' AND state='active'
+		ORDER BY activated_at DESC NULLS LAST, created_at DESC
+		LIMIT 1`, tenantID, strings.ToLower(strings.TrimSpace(adapterName))))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return domain.AdapterVersion{}, app.ErrNotFound
+	}
+	return normalizeAdapterVersion(item), err
+}
+
 func (s *Store) CreateAdapterTestVector(ctx context.Context, tenantID, adapterID, versionID, actorID string, req app.CreateAdapterTestVectorRequest) (domain.AdapterTestVector, error) {
 	if err := s.ensureTenantAdapterVersion(ctx, tenantID, adapterID, versionID); err != nil {
 		return domain.AdapterTestVector{}, err

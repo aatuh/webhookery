@@ -132,8 +132,10 @@ exports require `events:raw`.
 Private adapter registry governance is available through `/v1/adapters` and
 `whcp adapters`. Declarative adapter definitions and plugin package metadata
 are tenant-scoped, versioned, hashed, audited, and moved through the approval
-workflow before activation. Code-plugin packages are recorded for review only;
-Webhookery does not execute arbitrary plugin code.
+workflow before activation. Active declarative HMAC-SHA256 adapters can verify
+inbound requests using exact raw bytes and configured replay windows.
+Code-plugin packages are recorded for review only; Webhookery does not execute
+arbitrary plugin code.
 
 Provider reconciliation jobs compare provider-side API evidence to local
 Webhookery evidence when provider APIs permit it. Stripe event reconciliation
