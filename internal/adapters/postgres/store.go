@@ -378,6 +378,213 @@ func (s *Store) RevokeAPIKey(ctx context.Context, tenantID, apiKeyID, actorID, r
 	return item, nil
 }
 
+func (s *Store) CreateProducerClient(ctx context.Context, input app.ProducerClientCreateInput) (domain.ProducerClient, error) {
+	client := input.Client
+	secret := input.Secret
+	if client.ID == "" {
+		client.ID = mustID("pcl")
+	}
+	if client.State == "" {
+		client.State = domain.StateActive
+	}
+	if client.TokenTTLSeconds == 0 {
+		client.TokenTTLSeconds = 900
+	}
+	if len(client.Scopes) == 0 {
+		client.Scopes = []string{"events:write"}
+	}
+	if secret.ID == "" {
+		secret.ID = mustID("pcs")
+	}
+	if secret.State == "" {
+		secret.State = domain.StateActive
+	}
+	secret.TenantID = client.TenantID
+	secret.ClientID = client.ID
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return domain.ProducerClient{}, err
+	}
+	defer rollback(ctx, tx)
+	if _, err := tx.Exec(ctx, "INSERT INTO tenants(id, name) VALUES($1, $1) ON CONFLICT (id) DO NOTHING", client.TenantID); err != nil {
+		return domain.ProducerClient{}, err
+	}
+	if client.SourceID != "" {
+		var exists bool
+		if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM sources WHERE tenant_id=$1 AND id=$2)`, client.TenantID, client.SourceID).Scan(&exists); err != nil {
+			return domain.ProducerClient{}, err
+		}
+		if !exists {
+			return domain.ProducerClient{}, app.ErrNotFound
+		}
+	}
+	err = tx.QueryRow(ctx, `
+		INSERT INTO producer_clients(id, tenant_id, name, source_id, scopes, token_ttl_seconds, state, created_by)
+		VALUES($1,$2,$3,NULLIF($4,''),$5,$6,$7,$8)
+		RETURNING created_at, updated_at`,
+		client.ID, client.TenantID, client.Name, client.SourceID, client.Scopes, client.TokenTTLSeconds, client.State, input.ActorID,
+	).Scan(&client.CreatedAt, &client.UpdatedAt)
+	if err != nil {
+		return domain.ProducerClient{}, err
+	}
+	_, err = tx.Exec(ctx, `
+		INSERT INTO producer_client_secrets(id, tenant_id, client_id, secret_hash, secret_prefix, secret_last4, state)
+		VALUES($1,$2,$3,$4,$5,$6,$7)`,
+		secret.ID, secret.TenantID, secret.ClientID, secret.Hash, secret.Prefix, secret.Last4, secret.State,
+	)
+	if err != nil {
+		return domain.ProducerClient{}, err
+	}
+	if _, err := recordAuditEventTx(ctx, tx, auditEventInput{TenantID: client.TenantID, ActorID: input.ActorID, Action: "producer_client.created", Resource: "producer_client", ResourceID: client.ID, Reason: client.Name}); err != nil {
+		return domain.ProducerClient{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return domain.ProducerClient{}, err
+	}
+	return client, nil
+}
+
+func (s *Store) ListProducerClients(ctx context.Context, tenantID string, limit int) ([]domain.ProducerClient, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT pc.id, pc.tenant_id, pc.name, COALESCE(pc.source_id,''), pc.scopes, pc.token_ttl_seconds, pc.state, pc.created_by, pc.created_at, pc.updated_at, COALESCE(pc.disabled_at, 'epoch'::timestamptz)
+		FROM producer_clients pc
+		WHERE pc.tenant_id=$1
+		ORDER BY pc.created_at DESC
+		LIMIT $2`, tenantID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []domain.ProducerClient
+	for rows.Next() {
+		item, err := scanProducerClient(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, item)
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) GetProducerClient(ctx context.Context, tenantID, clientID string) (domain.ProducerClient, error) {
+	row := s.pool.QueryRow(ctx, `
+		SELECT pc.id, pc.tenant_id, pc.name, COALESCE(pc.source_id,''), pc.scopes, pc.token_ttl_seconds, pc.state, pc.created_by, pc.created_at, pc.updated_at, COALESCE(pc.disabled_at, 'epoch'::timestamptz)
+		FROM producer_clients pc
+		WHERE pc.tenant_id=$1 AND pc.id=$2`, tenantID, clientID)
+	item, err := scanProducerClient(row)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return domain.ProducerClient{}, app.ErrNotFound
+	}
+	return item, err
+}
+
+func (s *Store) RotateProducerClientSecret(ctx context.Context, tenantID, clientID string, input app.ProducerClientSecretRotateInput) (domain.ProducerClientSecret, error) {
+	secret := input.Secret
+	if secret.ID == "" {
+		secret.ID = mustID("pcs")
+	}
+	secret.TenantID = tenantID
+	secret.ClientID = clientID
+	secret.State = domain.StateActive
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return domain.ProducerClientSecret{}, err
+	}
+	defer rollback(ctx, tx)
+	tag, err := tx.Exec(ctx, `UPDATE producer_client_secrets SET state='revoked', revoked_at=now() WHERE tenant_id=$1 AND client_id=$2 AND state='active'`, tenantID, clientID)
+	if err != nil {
+		return domain.ProducerClientSecret{}, err
+	}
+	var exists bool
+	if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM producer_clients WHERE tenant_id=$1 AND id=$2)`, tenantID, clientID).Scan(&exists); err != nil {
+		return domain.ProducerClientSecret{}, err
+	}
+	if !exists || tag.RowsAffected() == 0 {
+		return domain.ProducerClientSecret{}, app.ErrNotFound
+	}
+	err = tx.QueryRow(ctx, `
+		INSERT INTO producer_client_secrets(id, tenant_id, client_id, secret_hash, secret_prefix, secret_last4, state)
+		VALUES($1,$2,$3,$4,$5,$6,'active')
+		RETURNING created_at`,
+		secret.ID, secret.TenantID, secret.ClientID, secret.Hash, secret.Prefix, secret.Last4,
+	).Scan(&secret.CreatedAt)
+	if err != nil {
+		return domain.ProducerClientSecret{}, err
+	}
+	if _, err := recordAuditEventTx(ctx, tx, auditEventInput{TenantID: tenantID, ActorID: input.ActorID, Action: "producer_client.secret_rotated", Resource: "producer_client", ResourceID: clientID, Reason: input.Reason}); err != nil {
+		return domain.ProducerClientSecret{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return domain.ProducerClientSecret{}, err
+	}
+	return secret, nil
+}
+
+func (s *Store) AuthenticateProducerClient(ctx context.Context, clientID, secretHash string) (domain.ProducerClient, error) {
+	row := s.pool.QueryRow(ctx, `
+		SELECT pc.id, pc.tenant_id, pc.name, COALESCE(pc.source_id,''), pc.scopes, pc.token_ttl_seconds, pc.state, pc.created_by, pc.created_at, pc.updated_at, COALESCE(pc.disabled_at, 'epoch'::timestamptz)
+		FROM producer_clients pc
+		JOIN producer_client_secrets pcs ON pcs.tenant_id=pc.tenant_id AND pcs.client_id=pc.id AND pcs.state='active'
+		WHERE pc.id=$1 AND pcs.secret_hash=$2 AND pc.state='active'`,
+		clientID, secretHash)
+	client, err := scanProducerClient(row)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return domain.ProducerClient{}, app.ErrUnauthorized
+	}
+	if err != nil {
+		return domain.ProducerClient{}, err
+	}
+	_, _ = s.pool.Exec(ctx, `UPDATE producer_client_secrets SET last_used_at=now() WHERE tenant_id=$1 AND client_id=$2 AND secret_hash=$3`, client.TenantID, client.ID, secretHash)
+	return client, nil
+}
+
+func (s *Store) CreateProducerAccessToken(ctx context.Context, input app.ProducerAccessTokenCreateInput) (domain.ProducerAccessToken, error) {
+	token := input.Token
+	if token.ID == "" {
+		token.ID = mustID("pat")
+	}
+	if token.State == "" {
+		token.State = domain.StateActive
+	}
+	if len(token.Scopes) == 0 {
+		token.Scopes = []string{"events:write"}
+	}
+	err := s.pool.QueryRow(ctx, `
+		INSERT INTO producer_access_tokens(id, tenant_id, client_id, token_hash, token_prefix, token_last4, scopes, state, expires_at)
+		VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)
+		RETURNING created_at`,
+		token.ID, token.TenantID, token.ClientID, token.Hash, token.Prefix, token.Last4, token.Scopes, token.State, token.ExpiresAt,
+	).Scan(&token.CreatedAt)
+	if err != nil {
+		return domain.ProducerAccessToken{}, err
+	}
+	return token, nil
+}
+
+func (s *Store) AuthenticateProducerAccessToken(ctx context.Context, tokenHash string) (authz.Actor, error) {
+	var actor authz.Actor
+	var clientID string
+	err := s.pool.QueryRow(ctx, `
+		SELECT pat.client_id, pat.tenant_id, COALESCE(pc.source_id,''), pat.scopes
+		FROM producer_access_tokens pat
+		JOIN producer_clients pc ON pc.tenant_id=pat.tenant_id AND pc.id=pat.client_id AND pc.state='active'
+		WHERE pat.token_hash=$1
+		  AND pat.state='active'
+		  AND pat.expires_at > now()`,
+		tokenHash,
+	).Scan(&clientID, &actor.TenantID, &actor.SourceID, &actor.Scopes)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return authz.Actor{}, app.ErrUnauthorized
+	}
+	if err != nil {
+		return authz.Actor{}, err
+	}
+	actor.ID = "producer_client:" + clientID
+	actor.Role = authz.RoleDeveloper
+	_, _ = s.pool.Exec(ctx, `UPDATE producer_access_tokens SET last_used_at=now() WHERE token_hash=$1`, tokenHash)
+	return actor, nil
+}
+
 func (s *Store) CreateSource(ctx context.Context, source domain.Source) (domain.Source, error) {
 	if source.ID == "" {
 		source.ID = mustID("src")
@@ -6637,6 +6844,15 @@ func scanAuditChainEntry(row rowScanner) (domain.AuditChainEntry, error) {
 func scanSource(row rowScanner) (domain.Source, error) {
 	var item domain.Source
 	err := row.Scan(&item.ID, &item.TenantID, &item.Name, &item.Provider, &item.Adapter, &item.State, &item.CreatedAt)
+	return item, err
+}
+
+func scanProducerClient(row rowScanner) (domain.ProducerClient, error) {
+	var item domain.ProducerClient
+	err := row.Scan(&item.ID, &item.TenantID, &item.Name, &item.SourceID, &item.Scopes, &item.TokenTTLSeconds, &item.State, &item.CreatedBy, &item.CreatedAt, &item.UpdatedAt, &item.DisabledAt)
+	if item.DisabledAt.Equal(time.Unix(0, 0).UTC()) {
+		item.DisabledAt = time.Time{}
+	}
 	return item, err
 }
 

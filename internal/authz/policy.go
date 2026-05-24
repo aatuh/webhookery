@@ -17,6 +17,7 @@ type Actor struct {
 	TenantID string
 	Role     Role
 	Scopes   []string
+	SourceID string
 }
 
 type Resource struct {
@@ -69,14 +70,14 @@ func roleAllows(role Role, scope string) bool {
 			"subscriptions:read", "subscriptions:write",
 			"routes:read", "routes:write",
 			"schemas:read", "schemas:write",
-			"events:read",
+			"events:read", "events:write",
 			"deliveries:read", "deliveries:retry",
 			"replay:read", "replay:write",
 		})
 	case RoleOperator:
 		return hasScope(scope, []string{
 			"sources:read", "endpoints:read", "subscriptions:read", "routes:read", "schemas:read",
-			"events:read", "deliveries:read", "deliveries:retry", "replay:read", "replay:write",
+			"events:read", "events:write", "deliveries:read", "deliveries:retry", "replay:read", "replay:write",
 			"ops:read", "ops:write",
 		})
 	case RoleSecurity:

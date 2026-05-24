@@ -214,6 +214,22 @@ type RevokeAPIKeyRequest struct {
 	Reason string `json:"reason"`
 }
 
+type ProducerClientCreateInput struct {
+	Client  domain.ProducerClient
+	Secret  domain.ProducerClientSecret
+	ActorID string
+}
+
+type ProducerClientSecretRotateInput struct {
+	Secret  domain.ProducerClientSecret
+	ActorID string
+	Reason  string
+}
+
+type ProducerAccessTokenCreateInput struct {
+	Token domain.ProducerAccessToken
+}
+
 type CreateEndpointRequest struct {
 	Name              string `json:"name"`
 	URL               string `json:"url"`

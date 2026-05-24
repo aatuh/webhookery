@@ -189,6 +189,48 @@ type APIKey struct {
 	RevokedAt time.Time `json:"revoked_at,omitempty"`
 }
 
+type ProducerClient struct {
+	ID              string    `json:"id"`
+	TenantID        string    `json:"tenant_id"`
+	Name            string    `json:"name"`
+	SourceID        string    `json:"source_id,omitempty"`
+	Scopes          []string  `json:"scopes"`
+	TokenTTLSeconds int       `json:"token_ttl_seconds"`
+	State           string    `json:"state"`
+	CreatedBy       string    `json:"created_by,omitempty"`
+	CreatedAt       time.Time `json:"created_at"`
+	UpdatedAt       time.Time `json:"updated_at"`
+	DisabledAt      time.Time `json:"disabled_at,omitempty"`
+}
+
+type ProducerClientSecret struct {
+	ID         string    `json:"id"`
+	TenantID   string    `json:"tenant_id"`
+	ClientID   string    `json:"client_id"`
+	Hash       string    `json:"-"`
+	Prefix     string    `json:"prefix"`
+	Last4      string    `json:"last4"`
+	State      string    `json:"state"`
+	CreatedAt  time.Time `json:"created_at"`
+	LastUsedAt time.Time `json:"last_used_at,omitempty"`
+	RevokedAt  time.Time `json:"revoked_at,omitempty"`
+}
+
+type ProducerAccessToken struct {
+	ID         string    `json:"id"`
+	TenantID   string    `json:"tenant_id"`
+	ClientID   string    `json:"client_id"`
+	Hash       string    `json:"-"`
+	Prefix     string    `json:"prefix"`
+	Last4      string    `json:"last4"`
+	Scopes     []string  `json:"scopes"`
+	State      string    `json:"state"`
+	CreatedAt  time.Time `json:"created_at"`
+	ExpiresAt  time.Time `json:"expires_at"`
+	LastUsedAt time.Time `json:"last_used_at,omitempty"`
+	RevokedAt  time.Time `json:"revoked_at,omitempty"`
+}
+
 type IdentityProvider struct {
 	ID                  string    `json:"id"`
 	TenantID            string    `json:"tenant_id"`
