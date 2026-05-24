@@ -46,7 +46,7 @@ func (s *Store) CreateIdentityProvider(ctx context.Context, tenantID, actorID st
 	if req.ProviderType == "" {
 		req.ProviderType = app.IdentityProviderOIDC
 	}
-	encryptedSecret, err := s.box.Encrypt([]byte(req.ClientSecret))
+	encryptedSecret, err := s.encryptSecret(ctx, tenantID, "identity_provider_client_secret", []byte(req.ClientSecret))
 	if err != nil {
 		return domain.IdentityProvider{}, err
 	}
@@ -146,7 +146,7 @@ func (s *Store) getIdentityProvider(ctx context.Context, tx pgx.Tx, tenantID, pr
 		return domain.IdentityProvider{}, nil, err
 	}
 	if decrypt {
-		plain, err := s.box.Decrypt(encrypted)
+		plain, err := s.decryptSecret(ctx, item.TenantID, "identity_provider_client_secret", encrypted)
 		if err != nil {
 			return domain.IdentityProvider{}, nil, err
 		}
@@ -193,7 +193,7 @@ func (s *Store) UpdateIdentityProvider(ctx context.Context, tenantID, providerID
 		item.State = strings.TrimSpace(*req.State)
 	}
 	if req.ClientSecret != nil {
-		encryptedSecret, err = s.box.Encrypt([]byte(*req.ClientSecret))
+		encryptedSecret, err = s.encryptSecret(ctx, tenantID, "identity_provider_client_secret", []byte(*req.ClientSecret))
 		if err != nil {
 			return domain.IdentityProvider{}, err
 		}
@@ -256,7 +256,7 @@ func (s *Store) CreateOIDCLoginState(ctx context.Context, state domain.OIDCLogin
 	if state.ID == "" {
 		state.ID = mustID("olst")
 	}
-	encryptedVerifier, err := s.box.Encrypt(state.PKCEVerifier)
+	encryptedVerifier, err := s.encryptSecret(ctx, state.TenantID, "oidc_pkce_verifier", state.PKCEVerifier)
 	if err != nil {
 		return err
 	}
@@ -289,7 +289,7 @@ func (s *Store) ConsumeOIDCLoginState(ctx context.Context, stateHash string) (do
 	if !state.ConsumedAt.IsZero() && !state.ConsumedAt.Equal(time.Unix(0, 0).UTC()) {
 		return domain.OIDCLoginState{}, domain.IdentityProvider{}, app.ErrUnauthorized
 	}
-	plain, err := s.box.Decrypt(encryptedVerifier)
+	plain, err := s.decryptSecret(ctx, state.TenantID, "oidc_pkce_verifier", encryptedVerifier)
 	if err != nil {
 		return domain.OIDCLoginState{}, domain.IdentityProvider{}, err
 	}

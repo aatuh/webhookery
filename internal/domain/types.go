@@ -775,6 +775,8 @@ type OpsConfig struct {
 	RawStorageMode          string `json:"raw_storage_mode"`
 	ObjectStorageConfigured bool   `json:"object_storage_configured"`
 	SecretBoxMode           string `json:"secret_box_mode"`
+	KeyCustodyConfigured    bool   `json:"key_custody_configured"`
+	KeyCustodyKeyRef        string `json:"key_custody_key_ref,omitempty"`
 	MaxIngressBodyBytes     int64  `json:"max_ingress_body_bytes"`
 	MaxHeaderBytes          int64  `json:"max_header_bytes"`
 	MaxHeaderPairs          int    `json:"max_header_pairs"`

@@ -1,6 +1,9 @@
 package main
 
 import (
+	"bytes"
+	"encoding/json"
+	"io"
 	"os"
 	"path/filepath"
 	"testing"
@@ -117,5 +120,50 @@ func TestSecretBoxFromConfigAcceptsVaultTransit(t *testing.T) {
 	}
 	if box == nil {
 		t.Fatal("expected vault transit secret box")
+	}
+}
+
+func TestKeyCustodyKeyRefRedactsAWSKMSKeyID(t *testing.T) {
+	cfg := config.Config{SecretBoxMode: "aws-kms", AWSKMSKeyID: "arn:aws:kms:us-east-1:123456789012:key/secret-key-id"}
+
+	ref := keyCustodyKeyRef(cfg)
+	if ref == "" {
+		t.Fatal("expected redacted key reference")
+	}
+	if bytes.Contains([]byte(ref), []byte("secret-key-id")) || bytes.Contains([]byte(ref), []byte("123456789012")) {
+		t.Fatalf("key reference leaked key id material: %q", ref)
+	}
+}
+
+func TestRunKeyCustodyTestDoesNotPrintCiphertextOrKeyIDInLocalMode(t *testing.T) {
+	t.Setenv("WEBHOOKERY_DATABASE_URL", "postgres://example")
+	t.Setenv("WEBHOOKERY_SECRET_BOX_MODE", "local")
+	t.Setenv("WEBHOOKERY_MASTER_KEY_BASE64", "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=")
+	oldStdout := os.Stdout
+	reader, writer, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Stdout = writer
+	defer func() { os.Stdout = oldStdout }()
+
+	err = runKeyCustody([]string{"test"})
+	_ = writer.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := io.ReadAll(reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out map[string]any
+	if err := json.Unmarshal(body, &out); err != nil {
+		t.Fatalf("invalid json output %q: %v", string(body), err)
+	}
+	if out["ok"] != true || out["mode"] != "local" {
+		t.Fatalf("unexpected output: %s", body)
+	}
+	if bytes.Contains(body, []byte("webhookery-key-custody-test")) {
+		t.Fatalf("key custody output leaked test plaintext: %s", body)
 	}
 }

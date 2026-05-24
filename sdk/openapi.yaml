@@ -6275,7 +6275,7 @@ components:
             type: integer
     OpsConfig:
       type: object
-      required: [environment, ui_enabled, raw_storage_mode, object_storage_configured, secret_box_mode, max_ingress_body_bytes, max_header_bytes, max_header_pairs, max_header_value_bytes]
+      required: [environment, ui_enabled, raw_storage_mode, object_storage_configured, secret_box_mode, key_custody_configured, max_ingress_body_bytes, max_header_bytes, max_header_pairs, max_header_value_bytes]
       properties:
         environment:
           type: string
@@ -6288,7 +6288,12 @@ components:
           type: boolean
         secret_box_mode:
           type: string
-          enum: [local, vault-transit]
+          enum: [local, vault-transit, aws-kms]
+        key_custody_configured:
+          type: boolean
+        key_custody_key_ref:
+          type: string
+          description: Redacted key reference, such as a short hash, when an external custody key is configured.
         max_ingress_body_bytes:
           type: integer
         max_header_bytes:

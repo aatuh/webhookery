@@ -3,9 +3,11 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -34,6 +36,10 @@ import (
 	"webhookery/internal/ssrf"
 	"webhookery/internal/transform"
 	"webhookery/internal/worker"
+
+	"github.com/aws/aws-sdk-go-v2/aws"
+	awsconfig "github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/service/kms"
 )
 
 func main() {
@@ -62,6 +68,8 @@ func run(args []string) error {
 		return runProducerClients(args[1:])
 	case "producer-mtls-identities":
 		return runProducerMTLSIdentities(args[1:])
+	case "key-custody":
+		return runKeyCustody(args[1:])
 	case "identity-providers":
 		return runIdentityProviders(args[1:])
 	case "scim-tokens":
@@ -126,7 +134,7 @@ func run(args []string) error {
 }
 
 func usage() error {
-	return fmt.Errorf("usage: whcp <api|worker|scheduler|migrate|admin|api-keys|producer-clients|producer-mtls-identities|identity-providers|scim-tokens|role-bindings|access-policies|authz|events|sources|provider-connections|adapters|endpoints|subscriptions|retry-policies|routes|transformations|deliveries|replay-jobs|reconciliation-jobs|ops|alerts|notification-channels|notification-deliveries|siem-sinks|siem-deliveries|audit|retention|schemas|dead-letter|quarantine|signatures>")
+	return fmt.Errorf("usage: whcp <api|worker|scheduler|migrate|admin|api-keys|producer-clients|producer-mtls-identities|key-custody|identity-providers|scim-tokens|role-bindings|access-policies|authz|events|sources|provider-connections|adapters|endpoints|subscriptions|retry-policies|routes|transformations|deliveries|replay-jobs|reconciliation-jobs|ops|alerts|notification-channels|notification-deliveries|siem-sinks|siem-deliveries|audit|retention|schemas|dead-letter|quarantine|signatures>")
 }
 
 func runAPI() error {
@@ -428,6 +436,38 @@ func runProducerMTLSIdentities(args []string) error {
 	default:
 		return fmt.Errorf("usage: whcp producer-mtls-identities <list|get|create|update|disable|verify>")
 	}
+}
+
+func runKeyCustody(args []string) error {
+	if len(args) == 0 || args[0] != "test" {
+		return fmt.Errorf("usage: whcp key-custody test")
+	}
+	cfg, err := config.Load()
+	if err != nil {
+		return err
+	}
+	box, err := secretBoxFromConfig(cfg)
+	if err != nil {
+		return err
+	}
+	const marker = "webhookery-key-custody-test"
+	ciphertext, err := box.Encrypt([]byte(marker))
+	if err != nil {
+		return fmt.Errorf("key custody encrypt test failed")
+	}
+	plaintext, err := box.Decrypt(ciphertext)
+	if err != nil {
+		return fmt.Errorf("key custody decrypt test failed")
+	}
+	if string(plaintext) != marker {
+		return fmt.Errorf("key custody decrypt test returned unexpected plaintext")
+	}
+	return json.NewEncoder(os.Stdout).Encode(map[string]any{
+		"mode":       cfg.SecretBoxMode,
+		"configured": true,
+		"ok":         true,
+		"key_ref":    keyCustodyKeyRef(cfg),
+	})
 }
 
 func runIdentityProviders(args []string) error {
@@ -2028,6 +2068,20 @@ func secretBoxFromConfig(cfg config.Config) (postgres.SecretBox, error) {
 			Token:   cfg.VaultToken,
 			KeyName: cfg.VaultTransitKey,
 		})
+	case "aws-kms":
+		awsCfg, err := awsconfig.LoadDefaultConfig(context.Background(), awsconfig.WithRegion(cfg.AWSRegion))
+		if err != nil {
+			return nil, fmt.Errorf("load aws config: %w", err)
+		}
+		client := kms.NewFromConfig(awsCfg, func(opts *kms.Options) {
+			if strings.TrimSpace(cfg.AWSKMSEndpoint) != "" {
+				opts.BaseEndpoint = aws.String(strings.TrimSpace(cfg.AWSKMSEndpoint))
+			}
+		})
+		return crypto.NewAWSKMSEnvelope(crypto.AWSKMSEnvelopeConfig{
+			KeyID:  cfg.AWSKMSKeyID,
+			Client: client,
+		})
 	default:
 		return nil, fmt.Errorf("unsupported secret box mode %q", cfg.SecretBoxMode)
 	}
@@ -2060,11 +2114,21 @@ func opsRuntimeConfig(cfg config.Config) domain.OpsConfig {
 		RawStorageMode:          cfg.RawStorageMode,
 		ObjectStorageConfigured: cfg.RawStorageMode == domain.RawStorageS3,
 		SecretBoxMode:           cfg.SecretBoxMode,
+		KeyCustodyConfigured:    cfg.SecretBoxMode != "",
+		KeyCustodyKeyRef:        keyCustodyKeyRef(cfg),
 		MaxIngressBodyBytes:     2 << 20,
 		MaxHeaderBytes:          64 << 10,
 		MaxHeaderPairs:          128,
 		MaxHeaderValueBytes:     8 << 10,
 	}
+}
+
+func keyCustodyKeyRef(cfg config.Config) string {
+	if cfg.SecretBoxMode != "aws-kms" || strings.TrimSpace(cfg.AWSKMSKeyID) == "" {
+		return ""
+	}
+	sum := sha256.Sum256([]byte(strings.TrimSpace(cfg.AWSKMSKeyID)))
+	return "sha256:" + hex.EncodeToString(sum[:])[:12]
 }
 
 func runtimeAuth(cfg config.Config, lookup apppkg.APIKeyLookup) apppkg.Authenticator {

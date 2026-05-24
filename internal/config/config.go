@@ -21,6 +21,9 @@ type Config struct {
 	VaultAddr                string
 	VaultToken               string
 	VaultTransitKey          string
+	AWSRegion                string
+	AWSKMSKeyID              string
+	AWSKMSEndpoint           string
 	RawStorageMode           string
 	ObjectStorageEndpoint    string
 	ObjectStorageBucket      string
@@ -47,6 +50,9 @@ func Load() (Config, error) {
 		VaultAddr:                os.Getenv("WEBHOOKERY_VAULT_ADDR"),
 		VaultToken:               os.Getenv("WEBHOOKERY_VAULT_TOKEN"),
 		VaultTransitKey:          os.Getenv("WEBHOOKERY_VAULT_TRANSIT_KEY"),
+		AWSRegion:                os.Getenv("WEBHOOKERY_AWS_REGION"),
+		AWSKMSKeyID:              os.Getenv("WEBHOOKERY_AWS_KMS_KEY_ID"),
+		AWSKMSEndpoint:           os.Getenv("WEBHOOKERY_AWS_KMS_ENDPOINT"),
 		RawStorageMode:           envDefault("WEBHOOKERY_RAW_STORAGE_MODE", "postgres"),
 		ObjectStorageEndpoint:    os.Getenv("WEBHOOKERY_OBJECT_STORAGE_ENDPOINT"),
 		ObjectStorageBucket:      os.Getenv("WEBHOOKERY_OBJECT_STORAGE_BUCKET"),
@@ -76,12 +82,17 @@ func Load() (Config, error) {
 	if cfg.ProducerMTLSClientCAFile != "" && (cfg.TLSCertFile == "" || cfg.TLSKeyFile == "") {
 		return Config{}, fmt.Errorf("WEBHOOKERY_PRODUCER_MTLS_CLIENT_CA_FILE requires WEBHOOKERY_TLS_CERT_FILE and WEBHOOKERY_TLS_KEY_FILE")
 	}
-	if cfg.SecretBoxMode != "local" && cfg.SecretBoxMode != "vault-transit" {
-		return Config{}, fmt.Errorf("WEBHOOKERY_SECRET_BOX_MODE must be local or vault-transit")
+	if cfg.SecretBoxMode != "local" && cfg.SecretBoxMode != "vault-transit" && cfg.SecretBoxMode != "aws-kms" {
+		return Config{}, fmt.Errorf("WEBHOOKERY_SECRET_BOX_MODE must be local, vault-transit, or aws-kms")
 	}
 	if cfg.SecretBoxMode == "vault-transit" {
 		if cfg.VaultAddr == "" || cfg.VaultToken == "" || cfg.VaultTransitKey == "" {
 			return Config{}, fmt.Errorf("vault-transit secret box requires WEBHOOKERY_VAULT_ADDR, WEBHOOKERY_VAULT_TOKEN, and WEBHOOKERY_VAULT_TRANSIT_KEY")
+		}
+	}
+	if cfg.SecretBoxMode == "aws-kms" {
+		if cfg.AWSRegion == "" || cfg.AWSKMSKeyID == "" {
+			return Config{}, fmt.Errorf("aws-kms secret box requires WEBHOOKERY_AWS_REGION and WEBHOOKERY_AWS_KMS_KEY_ID")
 		}
 	}
 	if cfg.RawStorageMode != "postgres" && cfg.RawStorageMode != "s3" {

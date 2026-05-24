@@ -34,12 +34,31 @@ type SecretBox interface {
 	Decrypt([]byte) ([]byte, error)
 }
 
+type ContextualSecretBox interface {
+	EncryptWithContext(ctx context.Context, tenantID, purpose string, plaintext []byte) ([]byte, error)
+	DecryptWithContext(ctx context.Context, tenantID, purpose string, ciphertext []byte) ([]byte, error)
+}
+
 type Store struct {
 	pool           *pgxpool.Pool
 	box            SecretBox
 	rawStorageMode string
 	objectStore    blobstore.Store
 	objectBucket   string
+}
+
+func (s *Store) encryptSecret(ctx context.Context, tenantID, purpose string, plaintext []byte) ([]byte, error) {
+	if box, ok := s.box.(ContextualSecretBox); ok {
+		return box.EncryptWithContext(ctx, tenantID, purpose, plaintext)
+	}
+	return s.box.Encrypt(plaintext)
+}
+
+func (s *Store) decryptSecret(ctx context.Context, tenantID, purpose string, ciphertext []byte) ([]byte, error) {
+	if box, ok := s.box.(ContextualSecretBox); ok {
+		return box.DecryptWithContext(ctx, tenantID, purpose, ciphertext)
+	}
+	return s.box.Decrypt(ciphertext)
 }
 
 type StoreOptions struct {
@@ -875,7 +894,7 @@ func (s *Store) CreateSource(ctx context.Context, source domain.Source) (domain.
 	if source.State == "" {
 		source.State = domain.StateActive
 	}
-	encrypted, err := s.box.Encrypt(source.VerificationSecret)
+	encrypted, err := s.encryptSecret(ctx, source.TenantID, "source_verification_secret", source.VerificationSecret)
 	if err != nil {
 		return domain.Source{}, err
 	}
@@ -1055,7 +1074,7 @@ func (s *Store) sourceVerificationSecrets(ctx context.Context, tenantID, sourceI
 		if err := rows.Scan(&encrypted); err != nil {
 			return nil, err
 		}
-		plain, err := s.box.Decrypt(encrypted)
+		plain, err := s.decryptSecret(ctx, tenantID, "source_verification_secret", encrypted)
 		if err != nil {
 			return nil, err
 		}
@@ -1065,7 +1084,7 @@ func (s *Store) sourceVerificationSecrets(ctx context.Context, tenantID, sourceI
 		return nil, err
 	}
 	if len(secrets) == 0 && len(fallbackEncrypted) > 0 {
-		plain, err := s.box.Decrypt(fallbackEncrypted)
+		plain, err := s.decryptSecret(ctx, tenantID, "source_verification_secret", fallbackEncrypted)
 		if err != nil {
 			return nil, err
 		}
@@ -1091,11 +1110,11 @@ func (s *Store) CreateEndpoint(ctx context.Context, endpoint domain.Endpoint) (d
 	}
 	var encryptedMTLSCert, encryptedMTLSKey []byte
 	if endpoint.MTLSEnabled {
-		encryptedMTLSCert, err = s.box.Encrypt(endpoint.MTLSClientCertPEM)
+		encryptedMTLSCert, err = s.encryptSecret(ctx, endpoint.TenantID, "endpoint_mtls_client_cert", endpoint.MTLSClientCertPEM)
 		if err != nil {
 			return domain.Endpoint{}, err
 		}
-		encryptedMTLSKey, err = s.box.Encrypt(endpoint.MTLSClientKeyPEM)
+		encryptedMTLSKey, err = s.encryptSecret(ctx, endpoint.TenantID, "endpoint_mtls_client_key", endpoint.MTLSClientKeyPEM)
 		if err != nil {
 			return domain.Endpoint{}, err
 		}
@@ -1113,7 +1132,7 @@ func (s *Store) CreateEndpoint(ctx context.Context, endpoint domain.Endpoint) (d
 	if err != nil {
 		return domain.Endpoint{}, err
 	}
-	encrypted, err := s.box.Encrypt([]byte(secret))
+	encrypted, err := s.encryptSecret(ctx, endpoint.TenantID, "endpoint_signing_secret", []byte(secret))
 	if err != nil {
 		return domain.Endpoint{}, err
 	}
@@ -1247,7 +1266,7 @@ func (s *Store) TestEndpoint(ctx context.Context, tenantID, endpointID, actorID,
 	if err != nil {
 		return domain.Delivery{}, err
 	}
-	encrypted, err := s.box.Encrypt(nil)
+	encrypted, err := s.encryptSecret(ctx, tenantID, "endpoint_test_source_secret", nil)
 	if err != nil {
 		return domain.Delivery{}, err
 	}
@@ -2212,7 +2231,7 @@ func (s *Store) updateEventSchema(ctx context.Context, tenantID, eventType, vers
 }
 
 func (s *Store) RotateSourceSecret(ctx context.Context, tenantID, sourceID, actorID string, req app.RotateSourceSecretRequest) (domain.SourceSecretVersion, error) {
-	encrypted, err := s.box.Encrypt([]byte(req.NewSecret))
+	encrypted, err := s.encryptSecret(ctx, tenantID, "source_verification_secret", []byte(req.NewSecret))
 	if err != nil {
 		return domain.SourceSecretVersion{}, err
 	}
@@ -2276,7 +2295,7 @@ func (s *Store) RotateEndpointSecret(ctx context.Context, tenantID, endpointID, 
 	if err != nil {
 		return domain.EndpointSecretVersion{}, err
 	}
-	encrypted, err := s.box.Encrypt([]byte(secret))
+	encrypted, err := s.encryptSecret(ctx, tenantID, "endpoint_signing_secret", []byte(secret))
 	if err != nil {
 		return domain.EndpointSecretVersion{}, err
 	}
@@ -3301,7 +3320,7 @@ func (s *Store) AcknowledgeAlertFiring(ctx context.Context, tenantID, firingID, 
 }
 
 func (s *Store) CreateNotificationChannel(ctx context.Context, tenantID, actorID string, req app.CreateNotificationChannelRequest) (domain.NotificationChannel, error) {
-	encrypted, err := s.box.Encrypt([]byte(req.SigningSecret))
+	encrypted, err := s.encryptSecret(ctx, tenantID, "notification_channel_signing_secret", []byte(req.SigningSecret))
 	if err != nil {
 		return domain.NotificationChannel{}, err
 	}
@@ -3367,7 +3386,7 @@ func (s *Store) UpdateNotificationChannel(ctx context.Context, tenantID, channel
 	var encrypted []byte
 	updateSecret := req.SigningSecret != nil
 	if updateSecret {
-		encrypted, err = s.box.Encrypt([]byte(*req.SigningSecret))
+		encrypted, err = s.encryptSecret(ctx, tenantID, "notification_channel_signing_secret", []byte(*req.SigningSecret))
 		if err != nil {
 			return domain.NotificationChannel{}, err
 		}
@@ -3510,7 +3529,7 @@ func (s *Store) RetryNotificationDelivery(ctx context.Context, tenantID, deliver
 }
 
 func (s *Store) CreateSIEMSink(ctx context.Context, tenantID, actorID string, req app.CreateSIEMSinkRequest) (domain.SIEMSink, error) {
-	encrypted, err := s.box.Encrypt([]byte(req.SigningSecret))
+	encrypted, err := s.encryptSecret(ctx, tenantID, "siem_sink_signing_secret", []byte(req.SigningSecret))
 	if err != nil {
 		return domain.SIEMSink{}, err
 	}
@@ -3576,7 +3595,7 @@ func (s *Store) UpdateSIEMSink(ctx context.Context, tenantID, sinkID, actorID st
 	var encrypted []byte
 	updateSecret := req.SigningSecret != nil
 	if updateSecret {
-		encrypted, err = s.box.Encrypt([]byte(*req.SigningSecret))
+		encrypted, err = s.encryptSecret(ctx, tenantID, "siem_sink_signing_secret", []byte(*req.SigningSecret))
 		if err != nil {
 			return domain.SIEMSink{}, err
 		}
@@ -4736,7 +4755,7 @@ func (s *Store) TransitionAdapterVersion(ctx context.Context, tenantID, adapterI
 
 func (s *Store) CreateProviderConnection(ctx context.Context, tenantID, actorID string, req app.CreateProviderConnectionRequest) (domain.ProviderConnection, error) {
 	id := mustID("pcn")
-	encrypted, err := s.box.Encrypt([]byte(req.Credential))
+	encrypted, err := s.encryptSecret(ctx, tenantID, "provider_connection_credential", []byte(req.Credential))
 	if err != nil {
 		return domain.ProviderConnection{}, err
 	}
@@ -6608,7 +6627,7 @@ func (s *Store) populateDeliveryItem(ctx context.Context, tx pgx.Tx, item *worke
 	if payloadID != "" && (payloadRowID == "" || payloadStatus == domain.StorageStatusDeleted) {
 		return app.ErrGone
 	}
-	secret, err := s.box.Decrypt(encrypted)
+	secret, err := s.decryptSecret(ctx, item.TenantID, "endpoint_signing_secret", encrypted)
 	if err != nil {
 		return err
 	}
@@ -6617,11 +6636,11 @@ func (s *Store) populateDeliveryItem(ctx context.Context, tx pgx.Tx, item *worke
 		if len(encryptedMTLSCert) == 0 || len(encryptedMTLSKey) == 0 {
 			return fmt.Errorf("endpoint mTLS is enabled without encrypted client material")
 		}
-		item.MTLSClientCertPEM, err = s.box.Decrypt(encryptedMTLSCert)
+		item.MTLSClientCertPEM, err = s.decryptSecret(ctx, item.TenantID, "endpoint_mtls_client_cert", encryptedMTLSCert)
 		if err != nil {
 			return err
 		}
-		item.MTLSClientKeyPEM, err = s.box.Decrypt(encryptedMTLSKey)
+		item.MTLSClientKeyPEM, err = s.decryptSecret(ctx, item.TenantID, "endpoint_mtls_client_key", encryptedMTLSKey)
 		if err != nil {
 			return err
 		}
@@ -6778,7 +6797,7 @@ func (s *Store) ClaimNotificationDeliveries(ctx context.Context, workerID string
 			WHERE tenant_id=$1 AND id=$2 AND state='active'`, out[i].TenantID, channelIDs[i]).Scan(&out[i].URL, &encrypted); err != nil {
 			return nil, err
 		}
-		secret, err := s.box.Decrypt(encrypted)
+		secret, err := s.decryptSecret(ctx, out[i].TenantID, "notification_channel_signing_secret", encrypted)
 		if err != nil {
 			return nil, err
 		}
@@ -7014,7 +7033,7 @@ func (s *Store) ClaimSIEMDeliveries(ctx context.Context, workerID string, limit 
 			WHERE tenant_id=$1 AND id=$2 AND state='active'`, out[i].TenantID, sinkIDs[i]).Scan(&out[i].URL, &encrypted); err != nil {
 			return nil, err
 		}
-		secret, err := s.box.Decrypt(encrypted)
+		secret, err := s.decryptSecret(ctx, out[i].TenantID, "siem_sink_signing_secret", encrypted)
 		if err != nil {
 			return nil, err
 		}
@@ -7996,7 +8015,7 @@ func (s *Store) getProviderConnectionSecret(ctx context.Context, tenantID, conne
 	if err != nil {
 		return domain.ProviderConnection{}, "", err
 	}
-	plain, err := s.box.Decrypt(encrypted)
+	plain, err := s.decryptSecret(ctx, item.TenantID, "provider_connection_credential", encrypted)
 	if err != nil {
 		return domain.ProviderConnection{}, "", err
 	}

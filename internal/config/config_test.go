@@ -42,6 +42,32 @@ func TestLoadRequiresVaultTransitSettings(t *testing.T) {
 	}
 }
 
+func TestLoadRequiresAWSKMSSettings(t *testing.T) {
+	t.Setenv("WEBHOOKERY_DATABASE_URL", "postgres://example")
+	t.Setenv("WEBHOOKERY_SECRET_BOX_MODE", "aws-kms")
+	t.Setenv("WEBHOOKERY_AWS_REGION", "us-east-1")
+
+	if _, err := Load(); err == nil {
+		t.Fatal("expected missing aws kms key configuration error")
+	}
+}
+
+func TestLoadAcceptsAWSKMSSettingsWithoutLocalMasterKey(t *testing.T) {
+	t.Setenv("WEBHOOKERY_DATABASE_URL", "postgres://example")
+	t.Setenv("WEBHOOKERY_SECRET_BOX_MODE", "aws-kms")
+	t.Setenv("WEBHOOKERY_AWS_REGION", "us-east-1")
+	t.Setenv("WEBHOOKERY_AWS_KMS_KEY_ID", "arn:aws:kms:us-east-1:123456789012:key/abcd")
+	t.Setenv("WEBHOOKERY_AWS_KMS_ENDPOINT", "http://localhost:4566")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.SecretBoxMode != "aws-kms" || cfg.AWSRegion != "us-east-1" || cfg.AWSKMSKeyID == "" || cfg.MasterKeyBase64 != "" {
+		t.Fatalf("unexpected aws kms config mode=%q region=%q key_set=%v master_key_set=%v", cfg.SecretBoxMode, cfg.AWSRegion, cfg.AWSKMSKeyID != "", cfg.MasterKeyBase64 != "")
+	}
+}
+
 func TestLoadAcceptsVaultTransitWithoutLocalMasterKey(t *testing.T) {
 	t.Setenv("WEBHOOKERY_DATABASE_URL", "postgres://example")
 	t.Setenv("WEBHOOKERY_SECRET_BOX_MODE", "vault-transit")
