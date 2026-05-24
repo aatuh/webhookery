@@ -5622,6 +5622,9 @@ func (s *Store) ClaimOutbox(ctx context.Context, workerID string, limit int) ([]
 	if err := upsertWorkerLease(ctx, tx, workerID); err != nil {
 		return nil, err
 	}
+	if _, err := tx.Exec(ctx, `UPDATE outbox SET state='pending', locked_by=NULL, lock_expires_at=NULL WHERE state='in_progress' AND lock_expires_at <= now()`); err != nil {
+		return nil, err
+	}
 	rows, err := tx.Query(ctx, `
 		WITH candidates AS (
 			SELECT id, tenant_id, available_at,
@@ -6554,6 +6557,9 @@ func (s *Store) ClaimDueDeliveries(ctx context.Context, workerID string, limit i
 	}
 	defer rollback(ctx, tx)
 	if err := upsertWorkerLease(ctx, tx, workerID); err != nil {
+		return nil, err
+	}
+	if _, err := tx.Exec(ctx, `UPDATE deliveries SET state='scheduled', locked_by=NULL, lock_expires_at=NULL WHERE state='in_progress' AND lock_expires_at <= now()`); err != nil {
 		return nil, err
 	}
 	rows, err := tx.Query(ctx, `
