@@ -86,6 +86,10 @@ func run(args []string) error {
 		return runNotificationChannels(args[1:])
 	case "notification-deliveries":
 		return runNotificationDeliveries(args[1:])
+	case "siem-sinks":
+		return runSIEMSinks(args[1:])
+	case "siem-deliveries":
+		return runSIEMDeliveries(args[1:])
 	case "audit":
 		return runAudit(args[1:])
 	case "retention":
@@ -104,7 +108,7 @@ func run(args []string) error {
 }
 
 func usage() error {
-	return fmt.Errorf("usage: whcp <api|worker|scheduler|migrate|admin|api-keys|events|sources|provider-connections|endpoints|subscriptions|retry-policies|routes|transformations|deliveries|replay-jobs|reconciliation-jobs|ops|alerts|notification-channels|notification-deliveries|audit|retention|schemas|dead-letter|quarantine|signatures>")
+	return fmt.Errorf("usage: whcp <api|worker|scheduler|migrate|admin|api-keys|events|sources|provider-connections|endpoints|subscriptions|retry-policies|routes|transformations|deliveries|replay-jobs|reconciliation-jobs|ops|alerts|notification-channels|notification-deliveries|siem-sinks|siem-deliveries|audit|retention|schemas|dead-letter|quarantine|signatures>")
 }
 
 func runAPI() error {
@@ -192,6 +196,8 @@ func runWorker(args []string) error {
 		DeliveryClient:            deliveryAdapter{client: deliveryhttp.Client{SSRF: ssrf.Validator{}}},
 		NotificationDeliveryStore: store,
 		NotificationClient:        signalAdapter{client: signalhttp.Client{SSRF: ssrf.Validator{}}},
+		SIEMDeliveryStore:         store,
+		SIEMClient:                signalAdapter{client: signalhttp.Client{SSRF: ssrf.Validator{}}},
 		RetentionStore:            store,
 		MetricsStore:              store,
 		AlertStore:                store,
@@ -1098,6 +1104,100 @@ func runNotificationDeliveries(args []string) error {
 		return postJSON(*baseURL, *apiKey, "/v1/notification-deliveries/"+url.PathEscape(*deliveryID)+":retry", map[string]any{"reason": *reason})
 	default:
 		return fmt.Errorf("usage: whcp notification-deliveries <list|attempts|retry>")
+	}
+}
+
+func runSIEMSinks(args []string) error {
+	if len(args) == 0 {
+		return fmt.Errorf("usage: whcp siem-sinks <list|create|update|disable|test>")
+	}
+	fs := flag.NewFlagSet("siem-sinks "+args[0], flag.ContinueOnError)
+	baseURL := fs.String("base-url", "http://localhost:8080", "API base URL")
+	apiKey := fs.String("api-key", os.Getenv("WEBHOOKERY_API_KEY"), "API key")
+	sinkID := fs.String("sink-id", "", "SIEM sink id")
+	name := fs.String("name", "", "sink name")
+	targetURL := fs.String("url", "", "HTTPS SIEM receiver URL")
+	secret := fs.String("signing-secret", "", "HMAC signing secret")
+	state := fs.String("state", "", "active or disabled")
+	reason := fs.String("reason", "", "operator reason")
+	if err := fs.Parse(args[1:]); err != nil {
+		return err
+	}
+	switch args[0] {
+	case "list":
+		return getJSON(*baseURL, *apiKey, "/v1/siem-sinks")
+	case "create":
+		return postJSON(*baseURL, *apiKey, "/v1/siem-sinks", map[string]any{
+			"name":           *name,
+			"sink_type":      domain.SIEMSinkWebhook,
+			"url":            *targetURL,
+			"signing_secret": *secret,
+		})
+	case "update":
+		if strings.TrimSpace(*sinkID) == "" {
+			return fmt.Errorf("sink-id is required")
+		}
+		body := map[string]any{"reason": *reason}
+		if strings.TrimSpace(*name) != "" {
+			body["name"] = *name
+		}
+		if strings.TrimSpace(*targetURL) != "" {
+			body["url"] = *targetURL
+		}
+		if strings.TrimSpace(*secret) != "" {
+			body["signing_secret"] = *secret
+		}
+		if strings.TrimSpace(*state) != "" {
+			body["state"] = *state
+		}
+		return patchJSON(*baseURL, *apiKey, "/v1/siem-sinks/"+url.PathEscape(*sinkID), body)
+	case "disable":
+		if strings.TrimSpace(*sinkID) == "" {
+			return fmt.Errorf("sink-id is required")
+		}
+		return deleteJSON(*baseURL, *apiKey, "/v1/siem-sinks/"+url.PathEscape(*sinkID), map[string]any{"reason": *reason})
+	case "test":
+		if strings.TrimSpace(*sinkID) == "" {
+			return fmt.Errorf("sink-id is required")
+		}
+		return postJSON(*baseURL, *apiKey, "/v1/siem-sinks/"+url.PathEscape(*sinkID)+":test", map[string]any{"reason": *reason})
+	default:
+		return fmt.Errorf("usage: whcp siem-sinks <list|create|update|disable|test>")
+	}
+}
+
+func runSIEMDeliveries(args []string) error {
+	if len(args) == 0 {
+		return fmt.Errorf("usage: whcp siem-deliveries <list|attempts|retry>")
+	}
+	fs := flag.NewFlagSet("siem-deliveries "+args[0], flag.ContinueOnError)
+	baseURL := fs.String("base-url", "http://localhost:8080", "API base URL")
+	apiKey := fs.String("api-key", os.Getenv("WEBHOOKERY_API_KEY"), "API key")
+	deliveryID := fs.String("delivery-id", "", "SIEM delivery id")
+	state := fs.String("state", "", "delivery state filter")
+	reason := fs.String("reason", "", "operator reason")
+	if err := fs.Parse(args[1:]); err != nil {
+		return err
+	}
+	switch args[0] {
+	case "list":
+		path := "/v1/siem-deliveries"
+		if strings.TrimSpace(*state) != "" {
+			path += "?state=" + url.QueryEscape(*state)
+		}
+		return getJSON(*baseURL, *apiKey, path)
+	case "attempts":
+		if strings.TrimSpace(*deliveryID) == "" {
+			return fmt.Errorf("delivery-id is required")
+		}
+		return getJSON(*baseURL, *apiKey, "/v1/siem-deliveries/"+url.PathEscape(*deliveryID)+"/attempts")
+	case "retry":
+		if strings.TrimSpace(*deliveryID) == "" {
+			return fmt.Errorf("delivery-id is required")
+		}
+		return postJSON(*baseURL, *apiKey, "/v1/siem-deliveries/"+url.PathEscape(*deliveryID)+":retry", map[string]any{"reason": *reason})
+	default:
+		return fmt.Errorf("usage: whcp siem-deliveries <list|attempts|retry>")
 	}
 }
 

@@ -91,6 +91,8 @@ const (
 	SignalDeliverySucceeded = "succeeded"
 	SignalDeliveryFailed    = "failed"
 
+	SIEMSinkWebhook = "webhook"
+
 	AuditChainEntryStateActive    = "active"
 	AuditChainEntryStateRetained  = "retained"
 	AuditChainEntrySourceLive     = "live"
@@ -747,6 +749,47 @@ type NotificationDelivery struct {
 }
 
 type NotificationDeliveryAttempt struct {
+	ID                string    `json:"id"`
+	TenantID          string    `json:"tenant_id"`
+	DeliveryID        string    `json:"delivery_id"`
+	StatusCode        int       `json:"status_code"`
+	FailureClass      string    `json:"failure_class"`
+	ResponseBody      string    `json:"response_body,omitempty"`
+	ResponseTruncated bool      `json:"response_truncated"`
+	Error             string    `json:"error,omitempty"`
+	CreatedAt         time.Time `json:"created_at"`
+}
+
+type SIEMSink struct {
+	ID             string    `json:"id"`
+	TenantID       string    `json:"tenant_id"`
+	Name           string    `json:"name"`
+	SinkType       string    `json:"sink_type"`
+	URL            string    `json:"url"`
+	State          string    `json:"state"`
+	SecretHint     string    `json:"secret_hint"`
+	CursorSequence int64     `json:"cursor_sequence"`
+	CreatedBy      string    `json:"created_by"`
+	CreatedAt      time.Time `json:"created_at"`
+	UpdatedAt      time.Time `json:"updated_at"`
+}
+
+type SIEMDelivery struct {
+	ID            string    `json:"id"`
+	TenantID      string    `json:"tenant_id"`
+	SinkID        string    `json:"sink_id"`
+	FromSequence  int64     `json:"from_sequence"`
+	ToSequence    int64     `json:"to_sequence"`
+	State         string    `json:"state"`
+	BodySHA256    string    `json:"body_sha256"`
+	AttemptCount  int       `json:"attempt_count"`
+	NextAttemptAt time.Time `json:"next_attempt_at,omitempty"`
+	LastAttemptAt time.Time `json:"last_attempt_at,omitempty"`
+	CreatedAt     time.Time `json:"created_at"`
+	UpdatedAt     time.Time `json:"updated_at"`
+}
+
+type SIEMDeliveryAttempt struct {
 	ID                string    `json:"id"`
 	TenantID          string    `json:"tenant_id"`
 	DeliveryID        string    `json:"delivery_id"`

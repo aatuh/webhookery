@@ -1086,6 +1086,70 @@ func TestControlServiceNotificationDeliveryAccessRequiresOpsScopes(t *testing.T)
 	}
 }
 
+func TestControlServiceSIEMSinksRequireSecurityWriteAndAuditRead(t *testing.T) {
+	store := &fakeControlStore{}
+	svc := NewControlService(store, ssrf.Validator{Resolver: ssrf.StaticResolver{
+		"siem.example": {netip.MustParseAddr("93.184.216.34")},
+	}})
+	auditor := authz.Actor{ID: "usr_1", TenantID: "ten_a", Role: authz.RoleAuditor, Scopes: []string{"audit:read"}}
+	security := authz.Actor{ID: "usr_2", TenantID: "ten_a", Role: authz.RoleSecurity, Scopes: []string{"security:write", "audit:read"}}
+
+	_, _, err := svc.CreateSIEMSink(context.Background(), auditor, CreateSIEMSinkRequest{Name: "siem", URL: "https://siem.example/ingest", SigningSecret: "0123456789abcdef"})
+	if err != ErrForbidden {
+		t.Fatalf("expected forbidden SIEM create, got %v", err)
+	}
+	_, result, err := svc.CreateSIEMSink(context.Background(), security, CreateSIEMSinkRequest{Name: "bad", URL: "http://169.254.169.254/latest", SigningSecret: "0123456789abcdef"})
+	if !errors.Is(err, ErrInvalidInput) || result.Allowed {
+		t.Fatalf("expected SIEM SSRF rejection, result=%+v err=%v", result, err)
+	}
+	sink, result, err := svc.CreateSIEMSink(context.Background(), security, CreateSIEMSinkRequest{Name: "siem", URL: "https://siem.example/ingest", SigningSecret: "0123456789abcdef"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := json.Marshal(sink)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.Allowed || sink.TenantID != "ten_a" || store.siemTenantID != "ten_a" || store.siemActorID != "usr_2" {
+		t.Fatalf("expected tenant-scoped SIEM create, sink=%+v tenant=%q actor=%q result=%+v", sink, store.siemTenantID, store.siemActorID, result)
+	}
+	if strings.Contains(string(raw), "0123456789abcdef") {
+		t.Fatalf("SIEM sink response exposed signing secret: %s", raw)
+	}
+	_, err = svc.ListSIEMSinks(context.Background(), auditor, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestControlServiceSIEMDeliveriesRequireAuditReadAndSecurityRetry(t *testing.T) {
+	store := &fakeControlStore{}
+	svc := NewControlService(store, ssrf.Validator{Resolver: ssrf.StaticResolver{}})
+	operator := authz.Actor{ID: "usr_1", TenantID: "ten_a", Role: authz.RoleOperator, Scopes: []string{"ops:read"}}
+	auditor := authz.Actor{ID: "usr_2", TenantID: "ten_a", Role: authz.RoleAuditor, Scopes: []string{"audit:read"}}
+	security := authz.Actor{ID: "usr_3", TenantID: "ten_a", Role: authz.RoleSecurity, Scopes: []string{"security:write", "audit:read"}}
+
+	_, err := svc.ListSIEMDeliveries(context.Background(), operator, "", 10)
+	if err != ErrForbidden {
+		t.Fatalf("expected forbidden SIEM delivery list, got %v", err)
+	}
+	deliveries, err := svc.ListSIEMDeliveries(context.Background(), auditor, domain.SignalDeliveryScheduled, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(deliveries) != 1 || deliveries[0].TenantID != "ten_a" || store.siemTenantID != "ten_a" {
+		t.Fatalf("expected tenant-scoped SIEM delivery list, deliveries=%+v tenant=%q", deliveries, store.siemTenantID)
+	}
+	_, err = svc.RetrySIEMDelivery(context.Background(), auditor, "sdel_1", StateChangeRequest{Reason: "retry"})
+	if err != ErrForbidden {
+		t.Fatalf("expected forbidden SIEM retry, got %v", err)
+	}
+	_, err = svc.RetrySIEMDelivery(context.Background(), security, "sdel_1", StateChangeRequest{})
+	if !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("expected SIEM retry reason validation, got %v", err)
+	}
+}
+
 func testClientCertificatePEM(t *testing.T, commonName string) (string, string) {
 	t.Helper()
 	key, err := rsa.GenerateKey(rand.Reader, 2048)
@@ -1153,6 +1217,8 @@ type fakeControlStore struct {
 	alertActorID               string
 	notificationTenantID       string
 	notificationActorID        string
+	siemTenantID               string
+	siemActorID                string
 	replayReq                  ReplayRequest
 	approveReplayTenantID      string
 	approveReplayActorID       string
@@ -1577,6 +1643,47 @@ func (f *fakeControlStore) RetryNotificationDelivery(_ context.Context, tenantID
 	f.notificationTenantID = tenantID
 	f.notificationActorID = actorID
 	return domain.NotificationDelivery{ID: deliveryID, TenantID: tenantID, State: domain.SignalDeliveryScheduled}, nil
+}
+func (f *fakeControlStore) CreateSIEMSink(_ context.Context, tenantID, actorID string, req CreateSIEMSinkRequest) (domain.SIEMSink, error) {
+	f.siemTenantID = tenantID
+	f.siemActorID = actorID
+	return domain.SIEMSink{ID: "snk_1", TenantID: tenantID, Name: req.Name, SinkType: req.SinkType, URL: req.URL, State: domain.StateActive, SecretHint: "configured", CreatedBy: actorID}, nil
+}
+func (f *fakeControlStore) ListSIEMSinks(_ context.Context, tenantID string, limit int) ([]domain.SIEMSink, error) {
+	f.siemTenantID = tenantID
+	return []domain.SIEMSink{{ID: "snk_1", TenantID: tenantID, SinkType: domain.SIEMSinkWebhook, State: domain.StateActive, SecretHint: "configured"}}, nil
+}
+func (f *fakeControlStore) GetSIEMSink(_ context.Context, tenantID, sinkID string) (domain.SIEMSink, error) {
+	f.siemTenantID = tenantID
+	return domain.SIEMSink{ID: sinkID, TenantID: tenantID, SinkType: domain.SIEMSinkWebhook, URL: "https://siem.example/ingest", State: domain.StateActive, SecretHint: "configured"}, nil
+}
+func (f *fakeControlStore) UpdateSIEMSink(_ context.Context, tenantID, sinkID, actorID string, req UpdateSIEMSinkRequest) (domain.SIEMSink, error) {
+	f.siemTenantID = tenantID
+	f.siemActorID = actorID
+	return domain.SIEMSink{ID: sinkID, TenantID: tenantID, State: domain.StateActive, SecretHint: "configured"}, nil
+}
+func (f *fakeControlStore) DeleteSIEMSink(_ context.Context, tenantID, sinkID, actorID, reason string) (domain.SIEMSink, error) {
+	f.siemTenantID = tenantID
+	f.siemActorID = actorID
+	return domain.SIEMSink{ID: sinkID, TenantID: tenantID, State: domain.StateDisabled, SecretHint: "configured"}, nil
+}
+func (f *fakeControlStore) TestSIEMSink(_ context.Context, tenantID, sinkID, actorID, reason string) (domain.SIEMDelivery, error) {
+	f.siemTenantID = tenantID
+	f.siemActorID = actorID
+	return domain.SIEMDelivery{ID: "sdel_1", TenantID: tenantID, SinkID: sinkID, State: domain.SignalDeliveryScheduled}, nil
+}
+func (f *fakeControlStore) ListSIEMDeliveries(_ context.Context, tenantID, state string, limit int) ([]domain.SIEMDelivery, error) {
+	f.siemTenantID = tenantID
+	return []domain.SIEMDelivery{{ID: "sdel_1", TenantID: tenantID, SinkID: "snk_1", State: state, FromSequence: 1, ToSequence: 2}}, nil
+}
+func (f *fakeControlStore) ListSIEMDeliveryAttempts(_ context.Context, tenantID, deliveryID string, limit int) ([]domain.SIEMDeliveryAttempt, error) {
+	f.siemTenantID = tenantID
+	return []domain.SIEMDeliveryAttempt{{ID: "satt_1", TenantID: tenantID, DeliveryID: deliveryID, FailureClass: "success"}}, nil
+}
+func (f *fakeControlStore) RetrySIEMDelivery(_ context.Context, tenantID, deliveryID, actorID, reason string) (domain.SIEMDelivery, error) {
+	f.siemTenantID = tenantID
+	f.siemActorID = actorID
+	return domain.SIEMDelivery{ID: deliveryID, TenantID: tenantID, State: domain.SignalDeliveryScheduled}, nil
 }
 func (f *fakeControlStore) ListAuditEvents(context.Context, string, int) ([]domain.AuditEvent, error) {
 	return nil, nil

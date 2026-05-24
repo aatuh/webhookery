@@ -82,7 +82,9 @@ var indexTemplate = template.Must(template.New("index").Parse(`<!doctype html>
       ["alerts", "/v1/alerts"],
       ["alert firings", "/v1/alert-firings"],
       ["notification channels", "/v1/notification-channels"],
-      ["notification deliveries", "/v1/notification-deliveries"]
+      ["notification deliveries", "/v1/notification-deliveries"],
+      ["siem sinks", "/v1/siem-sinks"],
+      ["siem deliveries", "/v1/siem-deliveries"]
     ];
     let current = resources[0];
     const token = document.querySelector("#token");

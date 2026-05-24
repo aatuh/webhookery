@@ -485,8 +485,8 @@ Audit-event retention marks chain entries as retained tombstones before
 deleting audit rows. Verification treats retained entries as hash-only evidence,
 while missing non-retained audit rows or mismatched hashes are reported as
 failures. This implementation does not integrate external timestamping
-services, SIEM streaming, KMS/HSM signing, or compliance-certified evidence
-packs. Generic signed HTTPS alert notification delivery is handled by the
+services, KMS/HSM signing, or compliance-certified evidence packs. Generic
+signed HTTPS alert notification delivery and SIEM streaming are handled by the
 operational signal egress worker described below.
 
 ## Metrics And Readiness
@@ -534,6 +534,24 @@ Webhookery-Signal-Signature: t=<timestamp>,v1=<hmac_sha256_hex(timestamp + "." +
 Failed notification sends retry from PostgreSQL state and eventually become
 terminal `failed` deliveries. Public `/metrics` remains aggregate-only and does
 not expose tenant labels.
+
+SIEM sinks are generic signed HTTPS receivers managed through `/v1/siem-sinks`
+and `whcp siem-sinks`. Sink reads require `audit:read`; create, update,
+disable, test, and delivery retry require `security:write`. Sink secrets are
+encrypted at rest and returned only as non-sensitive metadata.
+
+The SIEM scheduler builds bounded JSONL batches from `audit_chain_entries`
+joined with non-sensitive `audit_events` metadata when rows are still retained.
+Each line includes sequence, audit event id, event hash, previous hash, chain
+hash, canonicalization version, chain entry state/source, actor id, action,
+resource, resource id, reason, and timestamp. Raw payload bodies, provider
+headers, API keys, bearer tokens, and egress secrets are not included.
+
+Each sink stores a `cursor_sequence`. The worker may create a scheduled
+delivery for entries after that cursor, but it advances the cursor only after
+the signed HTTPS delivery succeeds. Failed deliveries retry from PostgreSQL
+state and leave the cursor unchanged, making the stream resumable without
+skipping audit-chain entries.
 
 ## SSRF Protection
 

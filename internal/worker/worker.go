@@ -81,6 +81,12 @@ type NotificationDeliveryStore interface {
 	RecordNotificationDeliveryAttempt(ctx context.Context, item SignalDeliveryItem, result SignalDeliveryResult, deliverErr error) error
 }
 
+type SIEMDeliveryStore interface {
+	EnqueueSIEMDeliveries(ctx context.Context, workerID string, limit int) error
+	ClaimSIEMDeliveries(ctx context.Context, workerID string, limit int) ([]SignalDeliveryItem, error)
+	RecordSIEMDeliveryAttempt(ctx context.Context, item SignalDeliveryItem, result SignalDeliveryResult, deliverErr error) error
+}
+
 type RetentionStore interface {
 	ApplyRetentionPolicies(ctx context.Context, workerID string, limit int) error
 }
@@ -100,6 +106,8 @@ type Worker struct {
 	DeliveryClient            DeliveryClient
 	NotificationDeliveryStore NotificationDeliveryStore
 	NotificationClient        SignalClient
+	SIEMDeliveryStore         SIEMDeliveryStore
+	SIEMClient                SignalClient
 	RetentionStore            RetentionStore
 	MetricsStore              MetricsStore
 	AlertStore                AlertStore
@@ -164,6 +172,21 @@ func (w Worker) RunOnce(ctx context.Context) error {
 		for _, item := range deliveries {
 			result, deliverErr := w.NotificationClient.Deliver(ctx, item.URL, item.Body, item.Secret)
 			if err := w.NotificationDeliveryStore.RecordNotificationDeliveryAttempt(ctx, item, result, deliverErr); err != nil {
+				return err
+			}
+		}
+	}
+	if w.SIEMDeliveryStore != nil && w.SIEMClient != nil {
+		if err := w.SIEMDeliveryStore.EnqueueSIEMDeliveries(ctx, w.WorkerID, limit); err != nil {
+			return err
+		}
+		deliveries, err := w.SIEMDeliveryStore.ClaimSIEMDeliveries(ctx, w.WorkerID, limit)
+		if err != nil {
+			return err
+		}
+		for _, item := range deliveries {
+			result, deliverErr := w.SIEMClient.Deliver(ctx, item.URL, item.Body, item.Secret)
+			if err := w.SIEMDeliveryStore.RecordSIEMDeliveryAttempt(ctx, item, result, deliverErr); err != nil {
 				return err
 			}
 		}

@@ -185,6 +185,15 @@ func (s *Server) Routes() http.Handler {
 			r.Get("/notification-deliveries", s.listNotificationDeliveries)
 			r.Get("/notification-deliveries/{delivery_id}/attempts", s.listNotificationDeliveryAttempts)
 			r.Post("/notification-deliveries/{delivery_id}:retry", s.retryNotificationDelivery)
+			r.Get("/siem-sinks", s.listSIEMSinks)
+			r.Post("/siem-sinks", s.createSIEMSink)
+			r.Get("/siem-sinks/{sink_id}", s.getSIEMSink)
+			r.Patch("/siem-sinks/{sink_id}", s.updateSIEMSink)
+			r.Delete("/siem-sinks/{sink_id}", s.deleteSIEMSink)
+			r.Post("/siem-sinks/{sink_id}:test", s.testSIEMSink)
+			r.Get("/siem-deliveries", s.listSIEMDeliveries)
+			r.Get("/siem-deliveries/{delivery_id}/attempts", s.listSIEMDeliveryAttempts)
+			r.Post("/siem-deliveries/{delivery_id}:retry", s.retrySIEMDelivery)
 		})
 	})
 
@@ -1731,6 +1740,115 @@ func (s *Server) retryNotificationDelivery(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	item, err := s.cfg.Control.RetryNotificationDelivery(r.Context(), actorFrom(r), chi.URLParam(r, "delivery_id"), req)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, item)
+}
+
+func (s *Server) createSIEMSink(w http.ResponseWriter, r *http.Request) {
+	var req app.CreateSIEMSinkRequest
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	item, result, err := s.cfg.Control.CreateSIEMSink(r.Context(), actorFrom(r), req)
+	if err != nil {
+		if errors.Is(err, app.ErrInvalidInput) && len(result.BlockedReasons) > 0 {
+			writeProblem(w, problem.BadRequest(requestID(r), "siem_sink_url_blocked", strings.Join(result.BlockedReasons, ",")))
+			return
+		}
+		s.writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, item)
+}
+
+func (s *Server) listSIEMSinks(w http.ResponseWriter, r *http.Request) {
+	items, err := s.cfg.Control.ListSIEMSinks(r.Context(), actorFrom(r), queryLimit(r))
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, page(items))
+}
+
+func (s *Server) getSIEMSink(w http.ResponseWriter, r *http.Request) {
+	item, err := s.cfg.Control.GetSIEMSink(r.Context(), actorFrom(r), chi.URLParam(r, "sink_id"))
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, item)
+}
+
+func (s *Server) updateSIEMSink(w http.ResponseWriter, r *http.Request) {
+	var req app.UpdateSIEMSinkRequest
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	item, result, err := s.cfg.Control.UpdateSIEMSink(r.Context(), actorFrom(r), chi.URLParam(r, "sink_id"), req)
+	if err != nil {
+		if errors.Is(err, app.ErrInvalidInput) && len(result.BlockedReasons) > 0 {
+			writeProblem(w, problem.BadRequest(requestID(r), "siem_sink_url_blocked", strings.Join(result.BlockedReasons, ",")))
+			return
+		}
+		s.writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, item)
+}
+
+func (s *Server) deleteSIEMSink(w http.ResponseWriter, r *http.Request) {
+	var req app.StateChangeRequest
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	item, err := s.cfg.Control.DeleteSIEMSink(r.Context(), actorFrom(r), chi.URLParam(r, "sink_id"), req)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, item)
+}
+
+func (s *Server) testSIEMSink(w http.ResponseWriter, r *http.Request) {
+	var req app.StateChangeRequest
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	item, err := s.cfg.Control.TestSIEMSink(r.Context(), actorFrom(r), chi.URLParam(r, "sink_id"), req)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusAccepted, item)
+}
+
+func (s *Server) listSIEMDeliveries(w http.ResponseWriter, r *http.Request) {
+	items, err := s.cfg.Control.ListSIEMDeliveries(r.Context(), actorFrom(r), r.URL.Query().Get("state"), queryLimit(r))
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, page(items))
+}
+
+func (s *Server) listSIEMDeliveryAttempts(w http.ResponseWriter, r *http.Request) {
+	items, err := s.cfg.Control.ListSIEMDeliveryAttempts(r.Context(), actorFrom(r), chi.URLParam(r, "delivery_id"), queryLimit(r))
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, page(items))
+}
+
+func (s *Server) retrySIEMDelivery(w http.ResponseWriter, r *http.Request) {
+	var req app.StateChangeRequest
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	item, err := s.cfg.Control.RetrySIEMDelivery(r.Context(), actorFrom(r), chi.URLParam(r, "delivery_id"), req)
 	if err != nil {
 		s.writeError(w, r, err)
 		return

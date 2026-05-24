@@ -3019,6 +3019,214 @@ func (s *Store) RetryNotificationDelivery(ctx context.Context, tenantID, deliver
 	return normalizeNotificationDelivery(item), nil
 }
 
+func (s *Store) CreateSIEMSink(ctx context.Context, tenantID, actorID string, req app.CreateSIEMSinkRequest) (domain.SIEMSink, error) {
+	encrypted, err := s.box.Encrypt([]byte(req.SigningSecret))
+	if err != nil {
+		return domain.SIEMSink{}, err
+	}
+	item, err := scanSIEMSink(s.pool.QueryRow(ctx, `
+		INSERT INTO siem_sinks(id, tenant_id, name, sink_type, url, state, encrypted_secret, secret_hint, created_by)
+		VALUES($1,$2,$3,$4,$5,'active',$6,'configured',$7)
+		RETURNING id, tenant_id, name, sink_type, url, state, secret_hint, cursor_sequence, created_by, created_at, updated_at`,
+		mustID("snk"), tenantID, req.Name, req.SinkType, req.URL, encrypted, actorID))
+	if err != nil {
+		return domain.SIEMSink{}, err
+	}
+	_ = s.recordAuditEvent(ctx, auditEventInput{TenantID: tenantID, ActorID: actorID, Action: "siem_sink.created", Resource: "siem_sink", ResourceID: item.ID, Reason: item.Name})
+	return item, nil
+}
+
+func (s *Store) ListSIEMSinks(ctx context.Context, tenantID string, limit int) ([]domain.SIEMSink, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT id, tenant_id, name, sink_type, url, state, secret_hint, cursor_sequence, created_by, created_at, updated_at
+		FROM siem_sinks
+		WHERE tenant_id=$1
+		ORDER BY created_at DESC
+		LIMIT $2`, tenantID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []domain.SIEMSink
+	for rows.Next() {
+		item, err := scanSIEMSink(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, item)
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) GetSIEMSink(ctx context.Context, tenantID, sinkID string) (domain.SIEMSink, error) {
+	item, err := scanSIEMSink(s.pool.QueryRow(ctx, `
+		SELECT id, tenant_id, name, sink_type, url, state, secret_hint, cursor_sequence, created_by, created_at, updated_at
+		FROM siem_sinks
+		WHERE tenant_id=$1 AND id=$2`, tenantID, sinkID))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return domain.SIEMSink{}, app.ErrNotFound
+	}
+	return item, err
+}
+
+func (s *Store) UpdateSIEMSink(ctx context.Context, tenantID, sinkID, actorID string, req app.UpdateSIEMSinkRequest) (domain.SIEMSink, error) {
+	current, err := s.GetSIEMSink(ctx, tenantID, sinkID)
+	if err != nil {
+		return domain.SIEMSink{}, err
+	}
+	if req.Name != nil {
+		current.Name = *req.Name
+	}
+	if req.URL != nil {
+		current.URL = *req.URL
+	}
+	if req.State != nil {
+		current.State = *req.State
+	}
+	var encrypted []byte
+	updateSecret := req.SigningSecret != nil
+	if updateSecret {
+		encrypted, err = s.box.Encrypt([]byte(*req.SigningSecret))
+		if err != nil {
+			return domain.SIEMSink{}, err
+		}
+	}
+	query := `
+		UPDATE siem_sinks
+		SET name=$3, url=$4, state=$5, updated_at=now()
+		WHERE tenant_id=$1 AND id=$2
+		RETURNING id, tenant_id, name, sink_type, url, state, secret_hint, cursor_sequence, created_by, created_at, updated_at`
+	args := []any{tenantID, sinkID, current.Name, current.URL, current.State}
+	if updateSecret {
+		query = `
+			UPDATE siem_sinks
+			SET name=$3, url=$4, state=$5, encrypted_secret=$6, secret_hint='configured', updated_at=now()
+			WHERE tenant_id=$1 AND id=$2
+			RETURNING id, tenant_id, name, sink_type, url, state, secret_hint, cursor_sequence, created_by, created_at, updated_at`
+		args = append(args, encrypted)
+	}
+	item, err := scanSIEMSink(s.pool.QueryRow(ctx, query, args...))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return domain.SIEMSink{}, app.ErrNotFound
+	}
+	if err != nil {
+		return domain.SIEMSink{}, err
+	}
+	_ = s.recordAuditEvent(ctx, auditEventInput{TenantID: tenantID, ActorID: actorID, Action: "siem_sink.updated", Resource: "siem_sink", ResourceID: sinkID, Reason: req.Reason})
+	return item, nil
+}
+
+func (s *Store) DeleteSIEMSink(ctx context.Context, tenantID, sinkID, actorID, reason string) (domain.SIEMSink, error) {
+	item, err := scanSIEMSink(s.pool.QueryRow(ctx, `
+		UPDATE siem_sinks
+		SET state='disabled', updated_at=now()
+		WHERE tenant_id=$1 AND id=$2
+		RETURNING id, tenant_id, name, sink_type, url, state, secret_hint, cursor_sequence, created_by, created_at, updated_at`, tenantID, sinkID))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return domain.SIEMSink{}, app.ErrNotFound
+	}
+	if err != nil {
+		return domain.SIEMSink{}, err
+	}
+	_ = s.recordAuditEvent(ctx, auditEventInput{TenantID: tenantID, ActorID: actorID, Action: "siem_sink.disabled", Resource: "siem_sink", ResourceID: sinkID, Reason: reason})
+	return item, nil
+}
+
+func (s *Store) TestSIEMSink(ctx context.Context, tenantID, sinkID, actorID, reason string) (domain.SIEMDelivery, error) {
+	sink, err := s.GetSIEMSink(ctx, tenantID, sinkID)
+	if err != nil {
+		return domain.SIEMDelivery{}, err
+	}
+	if sink.State != domain.StateActive {
+		return domain.SIEMDelivery{}, fmt.Errorf("%w: SIEM sink disabled", app.ErrInvalidInput)
+	}
+	body, err := json.Marshal(map[string]any{
+		"type":       "siem_sink.test",
+		"tenant_id":  tenantID,
+		"sink_id":    sinkID,
+		"reason":     reason,
+		"created_at": time.Now().UTC(),
+	})
+	if err != nil {
+		return domain.SIEMDelivery{}, err
+	}
+	item, err := s.insertSIEMDelivery(ctx, tenantID, sinkID, 0, 0, body)
+	if err != nil {
+		return domain.SIEMDelivery{}, err
+	}
+	_ = s.recordAuditEvent(ctx, auditEventInput{TenantID: tenantID, ActorID: actorID, Action: "siem_sink.test_requested", Resource: "siem_sink", ResourceID: sinkID, Reason: reason})
+	return item, nil
+}
+
+func (s *Store) ListSIEMDeliveries(ctx context.Context, tenantID, state string, limit int) ([]domain.SIEMDelivery, error) {
+	query := `
+		SELECT id, tenant_id, sink_id, from_sequence, to_sequence, state, body_sha256, attempt_count,
+		       next_attempt_at, COALESCE(last_attempt_at, 'epoch'::timestamptz), created_at, updated_at
+		FROM siem_deliveries
+		WHERE tenant_id=$1`
+	args := []any{tenantID}
+	if strings.TrimSpace(state) != "" {
+		query += " AND state=$2"
+		args = append(args, strings.TrimSpace(state))
+	}
+	query += " ORDER BY created_at DESC LIMIT $" + strconv.Itoa(len(args)+1)
+	args = append(args, limit)
+	rows, err := s.pool.Query(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []domain.SIEMDelivery
+	for rows.Next() {
+		item, err := scanSIEMDelivery(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, normalizeSIEMDelivery(item))
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) ListSIEMDeliveryAttempts(ctx context.Context, tenantID, deliveryID string, limit int) ([]domain.SIEMDeliveryAttempt, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT id, tenant_id, delivery_id, status_code, failure_class, response_body, response_truncated, error, created_at
+		FROM siem_delivery_attempts
+		WHERE tenant_id=$1 AND delivery_id=$2
+		ORDER BY created_at DESC
+		LIMIT $3`, tenantID, deliveryID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []domain.SIEMDeliveryAttempt
+	for rows.Next() {
+		item, err := scanSIEMDeliveryAttempt(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, item)
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) RetrySIEMDelivery(ctx context.Context, tenantID, deliveryID, actorID, reason string) (domain.SIEMDelivery, error) {
+	item, err := scanSIEMDelivery(s.pool.QueryRow(ctx, `
+		UPDATE siem_deliveries
+		SET state='scheduled', next_attempt_at=now(), worker_id='', updated_at=now()
+		WHERE tenant_id=$1 AND id=$2 AND state <> 'succeeded'
+		RETURNING id, tenant_id, sink_id, from_sequence, to_sequence, state, body_sha256, attempt_count,
+		          next_attempt_at, COALESCE(last_attempt_at, 'epoch'::timestamptz), created_at, updated_at`,
+		tenantID, deliveryID))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return domain.SIEMDelivery{}, app.ErrNotFound
+	}
+	if err != nil {
+		return domain.SIEMDelivery{}, err
+	}
+	_ = s.recordAuditEvent(ctx, auditEventInput{TenantID: tenantID, ActorID: actorID, Action: "siem_delivery.retry_requested", Resource: "siem_delivery", ResourceID: deliveryID, Reason: reason})
+	return normalizeSIEMDelivery(item), nil
+}
+
 func (s *Store) EvaluateAlertRules(ctx context.Context, workerID string, limit int) error {
 	if limit <= 0 {
 		limit = 10
@@ -3327,6 +3535,21 @@ func (s *Store) insertNotificationDelivery(ctx context.Context, tenantID, channe
 		return domain.NotificationDelivery{}, err
 	}
 	return normalizeNotificationDelivery(item), nil
+}
+
+func (s *Store) insertSIEMDelivery(ctx context.Context, tenantID, sinkID string, fromSequence, toSequence int64, body []byte) (domain.SIEMDelivery, error) {
+	item, err := scanSIEMDelivery(s.pool.QueryRow(ctx, `
+		INSERT INTO siem_deliveries(id, tenant_id, sink_id, from_sequence, to_sequence, state, body, body_sha256)
+		VALUES($1,$2,$3,$4,$5,'scheduled',$6,$7)
+		ON CONFLICT (tenant_id, sink_id, from_sequence, to_sequence) WHERE (from_sequence > 0 OR to_sequence > 0)
+		DO UPDATE SET updated_at=siem_deliveries.updated_at
+		RETURNING id, tenant_id, sink_id, from_sequence, to_sequence, state, body_sha256, attempt_count,
+		          next_attempt_at, COALESCE(last_attempt_at, 'epoch'::timestamptz), created_at, updated_at`,
+		mustID("sdel"), tenantID, sinkID, fromSequence, toSequence, body, domain.HashSHA256(body)))
+	if err != nil {
+		return domain.SIEMDelivery{}, err
+	}
+	return normalizeSIEMDelivery(item), nil
 }
 
 func (s *Store) RefreshMetricsRollups(ctx context.Context, workerID string, limit int) error {
@@ -5917,6 +6140,255 @@ func (s *Store) RecordNotificationDeliveryAttempt(ctx context.Context, item work
 	return tx.Commit(ctx)
 }
 
+func (s *Store) EnqueueSIEMDeliveries(ctx context.Context, workerID string, limit int) error {
+	if limit <= 0 {
+		limit = 10
+	}
+	rows, err := s.pool.Query(ctx, `
+		SELECT s.id, s.tenant_id, s.cursor_sequence
+		FROM siem_sinks s
+		WHERE s.state='active'
+		  AND NOT EXISTS (
+		      SELECT 1 FROM siem_deliveries d
+		      WHERE d.tenant_id=s.tenant_id AND d.sink_id=s.id AND d.state IN ('scheduled', 'in_progress')
+		  )
+		ORDER BY s.updated_at ASC
+		LIMIT $1`, limit)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	type sinkCursor struct {
+		id       string
+		tenantID string
+		cursor   int64
+	}
+	var sinks []sinkCursor
+	for rows.Next() {
+		var item sinkCursor
+		if err := rows.Scan(&item.id, &item.tenantID, &item.cursor); err != nil {
+			return err
+		}
+		sinks = append(sinks, item)
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	for _, sink := range sinks {
+		body, from, to, err := s.buildSIEMBatch(ctx, sink.tenantID, sink.cursor, 100)
+		if err != nil {
+			return err
+		}
+		if len(body) == 0 {
+			continue
+		}
+		if _, err := s.insertSIEMDelivery(ctx, sink.tenantID, sink.id, from, to, body); err != nil {
+			return err
+		}
+		_ = workerID
+	}
+	return nil
+}
+
+func (s *Store) buildSIEMBatch(ctx context.Context, tenantID string, cursor int64, limit int) ([]byte, int64, int64, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT c.sequence, c.audit_event_id, c.event_hash, c.previous_chain_hash, c.chain_hash,
+		       c.canonicalization_version, c.source, c.state, c.created_at,
+		       COALESCE(a.actor_id,''), COALESCE(a.action,''), COALESCE(a.resource,''),
+		       COALESCE(a.resource_id,''), COALESCE(a.reason,''), COALESCE(a.occurred_at, 'epoch'::timestamptz)
+		FROM audit_chain_entries c
+		LEFT JOIN audit_events a ON a.tenant_id=c.tenant_id AND a.id=c.audit_event_id
+		WHERE c.tenant_id=$1 AND c.sequence > $2
+		ORDER BY c.sequence ASC
+		LIMIT $3`, tenantID, cursor, limit)
+	if err != nil {
+		return nil, 0, 0, err
+	}
+	defer rows.Close()
+	var b strings.Builder
+	var from, to int64
+	for rows.Next() {
+		var sequence int64
+		var auditEventID, eventHash, previousHash, chainHash, version, source, state string
+		var entryCreatedAt, occurredAt time.Time
+		var actorID, action, resource, resourceID, reason string
+		if err := rows.Scan(&sequence, &auditEventID, &eventHash, &previousHash, &chainHash, &version, &source, &state, &entryCreatedAt,
+			&actorID, &action, &resource, &resourceID, &reason, &occurredAt); err != nil {
+			return nil, 0, 0, err
+		}
+		if from == 0 {
+			from = sequence
+		}
+		to = sequence
+		row := map[string]any{
+			"tenant_id":                tenantID,
+			"sequence":                 sequence,
+			"audit_event_id":           auditEventID,
+			"event_hash":               eventHash,
+			"previous_chain_hash":      previousHash,
+			"chain_hash":               chainHash,
+			"canonicalization_version": version,
+			"chain_entry_source":       source,
+			"chain_entry_state":        state,
+			"chain_entry_created_at":   entryCreatedAt,
+			"actor_id":                 actorID,
+			"action":                   action,
+			"resource":                 resource,
+			"resource_id":              resourceID,
+			"reason":                   reason,
+			"occurred_at":              occurredAt,
+		}
+		raw, err := json.Marshal(row)
+		if err != nil {
+			return nil, 0, 0, err
+		}
+		b.Write(raw)
+		b.WriteByte('\n')
+	}
+	if err := rows.Err(); err != nil {
+		return nil, 0, 0, err
+	}
+	if to == 0 {
+		return nil, 0, 0, nil
+	}
+	return []byte(b.String()), from, to, nil
+}
+
+func (s *Store) ClaimSIEMDeliveries(ctx context.Context, workerID string, limit int) ([]worker.SignalDeliveryItem, error) {
+	if limit <= 0 {
+		limit = 10
+	}
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer rollback(ctx, tx)
+	if err := upsertWorkerLease(ctx, tx, workerID); err != nil {
+		return nil, err
+	}
+	rows, err := tx.Query(ctx, `
+		WITH claimed AS (
+			SELECT d.id
+			FROM siem_deliveries d
+			JOIN siem_sinks s ON s.tenant_id=d.tenant_id AND s.id=d.sink_id
+			WHERE d.state='scheduled'
+			  AND d.next_attempt_at <= now()
+			  AND s.state='active'
+			ORDER BY d.next_attempt_at ASC, d.created_at ASC, d.id ASC
+			LIMIT $2
+			FOR UPDATE OF d SKIP LOCKED
+		)
+		UPDATE siem_deliveries d
+		SET state='in_progress', worker_id=$1, updated_at=now()
+		FROM claimed
+		WHERE d.id=claimed.id
+		RETURNING d.id, d.tenant_id, d.attempt_count, d.body, d.sink_id`, workerID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []worker.SignalDeliveryItem
+	var sinkIDs []string
+	for rows.Next() {
+		var item worker.SignalDeliveryItem
+		var sinkID string
+		if err := rows.Scan(&item.ID, &item.TenantID, &item.AttemptCount, &item.Body, &sinkID); err != nil {
+			return nil, err
+		}
+		out = append(out, item)
+		sinkIDs = append(sinkIDs, sinkID)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	for i := range out {
+		var encrypted []byte
+		if err := tx.QueryRow(ctx, `
+			SELECT url, encrypted_secret
+			FROM siem_sinks
+			WHERE tenant_id=$1 AND id=$2 AND state='active'`, out[i].TenantID, sinkIDs[i]).Scan(&out[i].URL, &encrypted); err != nil {
+			return nil, err
+		}
+		secret, err := s.box.Decrypt(encrypted)
+		if err != nil {
+			return nil, err
+		}
+		out[i].Secret = secret
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (s *Store) RecordSIEMDeliveryAttempt(ctx context.Context, item worker.SignalDeliveryItem, result worker.SignalDeliveryResult, deliverErr error) error {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer rollback(ctx, tx)
+	var sinkID string
+	var toSequence int64
+	if err := tx.QueryRow(ctx, `SELECT sink_id, to_sequence FROM siem_deliveries WHERE tenant_id=$1 AND id=$2`, item.TenantID, item.ID).Scan(&sinkID, &toSequence); err != nil {
+		return err
+	}
+	attemptCount := item.AttemptCount + 1
+	state := domain.SignalDeliverySucceeded
+	if deliverErr != nil || result.StatusCode < 200 || result.StatusCode > 299 {
+		state = domain.SignalDeliveryFailed
+	}
+	failureClass := result.FailureClass
+	if failureClass == "" && deliverErr != nil {
+		failureClass = "network_error"
+	}
+	response := result.ResponseBody
+	if len(response) > 16<<10 {
+		response = response[:16<<10]
+	}
+	errText := ""
+	if deliverErr != nil {
+		errText = truncateText(deliverErr.Error(), 512)
+	}
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO siem_delivery_attempts(id, tenant_id, delivery_id, status_code, failure_class, response_body, response_truncated, error)
+		VALUES($1,$2,$3,$4,$5,$6,$7,$8)`,
+		mustID("satt"), item.TenantID, item.ID, result.StatusCode, failureClass, response, result.ResponseTruncated, errText); err != nil {
+		return err
+	}
+	if state == domain.SignalDeliverySucceeded {
+		if _, err := tx.Exec(ctx, `
+			UPDATE siem_deliveries
+			SET state='succeeded', attempt_count=$3, last_attempt_at=now(), worker_id='', updated_at=now()
+			WHERE tenant_id=$1 AND id=$2`, item.TenantID, item.ID, attemptCount); err != nil {
+			return err
+		}
+		if toSequence > 0 {
+			if _, err := tx.Exec(ctx, `
+				UPDATE siem_sinks
+				SET cursor_sequence=GREATEST(cursor_sequence, $3), updated_at=now()
+				WHERE tenant_id=$1 AND id=$2`, item.TenantID, sinkID, toSequence); err != nil {
+				return err
+			}
+		}
+	} else if attemptCount < 5 {
+		nextAttempt := time.Now().UTC().Add(time.Duration(attemptCount*attemptCount) * time.Minute)
+		if _, err := tx.Exec(ctx, `
+			UPDATE siem_deliveries
+			SET state='scheduled', attempt_count=$3, next_attempt_at=$4, last_attempt_at=now(), worker_id='', updated_at=now()
+			WHERE tenant_id=$1 AND id=$2`, item.TenantID, item.ID, attemptCount, nextAttempt); err != nil {
+			return err
+		}
+	} else {
+		if _, err := tx.Exec(ctx, `
+			UPDATE siem_deliveries
+			SET state='failed', attempt_count=$3, last_attempt_at=now(), worker_id='', updated_at=now()
+			WHERE tenant_id=$1 AND id=$2`, item.TenantID, item.ID, attemptCount); err != nil {
+			return err
+		}
+	}
+	return tx.Commit(ctx)
+}
+
 func truncateText(value string, max int) string {
 	if len(value) <= max {
 		return value
@@ -7134,6 +7606,34 @@ func normalizeNotificationDelivery(item domain.NotificationDelivery) domain.Noti
 
 func scanNotificationDeliveryAttempt(row rowScanner) (domain.NotificationDeliveryAttempt, error) {
 	var item domain.NotificationDeliveryAttempt
+	var response []byte
+	err := row.Scan(&item.ID, &item.TenantID, &item.DeliveryID, &item.StatusCode, &item.FailureClass, &response, &item.ResponseTruncated, &item.Error, &item.CreatedAt)
+	item.ResponseBody = string(response)
+	return item, err
+}
+
+func scanSIEMSink(row rowScanner) (domain.SIEMSink, error) {
+	var item domain.SIEMSink
+	err := row.Scan(&item.ID, &item.TenantID, &item.Name, &item.SinkType, &item.URL, &item.State, &item.SecretHint, &item.CursorSequence, &item.CreatedBy, &item.CreatedAt, &item.UpdatedAt)
+	return item, err
+}
+
+func scanSIEMDelivery(row rowScanner) (domain.SIEMDelivery, error) {
+	var item domain.SIEMDelivery
+	err := row.Scan(&item.ID, &item.TenantID, &item.SinkID, &item.FromSequence, &item.ToSequence, &item.State, &item.BodySHA256, &item.AttemptCount, &item.NextAttemptAt, &item.LastAttemptAt, &item.CreatedAt, &item.UpdatedAt)
+	return item, err
+}
+
+func normalizeSIEMDelivery(item domain.SIEMDelivery) domain.SIEMDelivery {
+	epoch := time.Unix(0, 0).UTC()
+	if item.LastAttemptAt.Equal(epoch) {
+		item.LastAttemptAt = time.Time{}
+	}
+	return item
+}
+
+func scanSIEMDeliveryAttempt(row rowScanner) (domain.SIEMDeliveryAttempt, error) {
+	var item domain.SIEMDeliveryAttempt
 	var response []byte
 	err := row.Scan(&item.ID, &item.TenantID, &item.DeliveryID, &item.StatusCode, &item.FailureClass, &response, &item.ResponseTruncated, &item.Error, &item.CreatedAt)
 	item.ResponseBody = string(response)

@@ -2455,6 +2455,189 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/NotificationDelivery"
+  /v1/siem-sinks:
+    get:
+      summary: List SIEM sinks
+      description: Lists tenant-scoped generic HTTPS audit-chain stream sinks. Signing secrets are never returned.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: Paginated SIEM sinks.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SIEMSinkPage"
+    post:
+      summary: Create SIEM sink
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateSIEMSinkRequest"
+      responses:
+        "201":
+          description: SIEM sink created.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SIEMSink"
+  /v1/siem-sinks/{sink_id}:
+    get:
+      summary: Get SIEM sink
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: sink_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: SIEM sink metadata.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SIEMSink"
+    patch:
+      summary: Update SIEM sink
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: sink_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateSIEMSinkRequest"
+      responses:
+        "200":
+          description: SIEM sink updated.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SIEMSink"
+    delete:
+      summary: Disable SIEM sink
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: sink_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/StateChangeRequest"
+      responses:
+        "200":
+          description: SIEM sink disabled.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SIEMSink"
+  /v1/siem-sinks/{sink_id}:test:
+    post:
+      summary: Queue a test SIEM delivery
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: sink_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/StateChangeRequest"
+      responses:
+        "202":
+          description: Test SIEM delivery queued.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SIEMDelivery"
+  /v1/siem-deliveries:
+    get:
+      summary: List SIEM deliveries
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/Limit"
+        - name: state
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [scheduled, in_progress, succeeded, failed]
+      responses:
+        "200":
+          description: Paginated SIEM deliveries.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SIEMDeliveryPage"
+  /v1/siem-deliveries/{delivery_id}/attempts:
+    get:
+      summary: List SIEM delivery attempts
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: delivery_id
+          in: path
+          required: true
+          schema:
+            type: string
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: Paginated SIEM delivery attempts.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SIEMDeliveryAttemptPage"
+  /v1/siem-deliveries/{delivery_id}:retry:
+    post:
+      summary: Retry SIEM delivery
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: delivery_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/StateChangeRequest"
+      responses:
+        "200":
+          description: SIEM delivery rescheduled.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SIEMDelivery"
 components:
   securitySchemes:
     bearerAuth:
@@ -4507,6 +4690,167 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/NotificationDeliveryAttempt"
+        next_cursor:
+          type: string
+          nullable: true
+        has_more:
+          type: boolean
+    SIEMSink:
+      type: object
+      required: [id, tenant_id, name, sink_type, url, state, secret_hint, cursor_sequence, created_by, created_at, updated_at]
+      properties:
+        id:
+          type: string
+        tenant_id:
+          type: string
+        name:
+          type: string
+        sink_type:
+          type: string
+          enum: [webhook]
+        url:
+          type: string
+          format: uri
+        state:
+          type: string
+          enum: [active, disabled]
+        secret_hint:
+          type: string
+          description: Non-sensitive metadata only; the signing secret is never returned.
+        cursor_sequence:
+          type: integer
+          format: int64
+        created_by:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+    CreateSIEMSinkRequest:
+      type: object
+      required: [name, url, signing_secret]
+      properties:
+        name:
+          type: string
+        sink_type:
+          type: string
+          enum: [webhook]
+        url:
+          type: string
+          format: uri
+        signing_secret:
+          type: string
+          writeOnly: true
+          minLength: 16
+    UpdateSIEMSinkRequest:
+      type: object
+      required: [reason]
+      properties:
+        name:
+          type: string
+        url:
+          type: string
+          format: uri
+        signing_secret:
+          type: string
+          writeOnly: true
+          minLength: 16
+        state:
+          type: string
+          enum: [active, disabled]
+        reason:
+          type: string
+    SIEMSinkPage:
+      type: object
+      properties:
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/SIEMSink"
+        next_cursor:
+          type: string
+          nullable: true
+        has_more:
+          type: boolean
+    SIEMDelivery:
+      type: object
+      required: [id, tenant_id, sink_id, from_sequence, to_sequence, state, body_sha256, attempt_count, created_at, updated_at]
+      properties:
+        id:
+          type: string
+        tenant_id:
+          type: string
+        sink_id:
+          type: string
+        from_sequence:
+          type: integer
+          format: int64
+        to_sequence:
+          type: integer
+          format: int64
+        state:
+          type: string
+          enum: [scheduled, in_progress, succeeded, failed]
+        body_sha256:
+          type: string
+        attempt_count:
+          type: integer
+        next_attempt_at:
+          type: string
+          format: date-time
+        last_attempt_at:
+          type: string
+          format: date-time
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+    SIEMDeliveryPage:
+      type: object
+      properties:
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/SIEMDelivery"
+        next_cursor:
+          type: string
+          nullable: true
+        has_more:
+          type: boolean
+    SIEMDeliveryAttempt:
+      type: object
+      required: [id, tenant_id, delivery_id, status_code, failure_class, response_truncated, created_at]
+      properties:
+        id:
+          type: string
+        tenant_id:
+          type: string
+        delivery_id:
+          type: string
+        status_code:
+          type: integer
+        failure_class:
+          type: string
+        response_body:
+          type: string
+        response_truncated:
+          type: boolean
+        error:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+    SIEMDeliveryAttemptPage:
+      type: object
+      properties:
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/SIEMDeliveryAttempt"
         next_cursor:
           type: string
           nullable: true

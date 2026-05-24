@@ -694,6 +694,33 @@ func (noopControlStore) ListNotificationDeliveryAttempts(_ context.Context, tena
 func (noopControlStore) RetryNotificationDelivery(_ context.Context, tenantID, deliveryID, actorID, reason string) (domain.NotificationDelivery, error) {
 	return domain.NotificationDelivery{ID: deliveryID, TenantID: tenantID, State: domain.SignalDeliveryScheduled}, nil
 }
+func (noopControlStore) CreateSIEMSink(_ context.Context, tenantID, actorID string, req app.CreateSIEMSinkRequest) (domain.SIEMSink, error) {
+	return domain.SIEMSink{ID: "snk_1", TenantID: tenantID, Name: req.Name, SinkType: req.SinkType, URL: req.URL, State: domain.StateActive, SecretHint: "configured", CreatedBy: actorID}, nil
+}
+func (noopControlStore) ListSIEMSinks(context.Context, string, int) ([]domain.SIEMSink, error) {
+	return nil, nil
+}
+func (noopControlStore) GetSIEMSink(_ context.Context, tenantID, sinkID string) (domain.SIEMSink, error) {
+	return domain.SIEMSink{ID: sinkID, TenantID: tenantID, SinkType: domain.SIEMSinkWebhook, URL: "https://siem.example/ingest", State: domain.StateActive, SecretHint: "configured"}, nil
+}
+func (noopControlStore) UpdateSIEMSink(_ context.Context, tenantID, sinkID, actorID string, req app.UpdateSIEMSinkRequest) (domain.SIEMSink, error) {
+	return domain.SIEMSink{ID: sinkID, TenantID: tenantID, State: domain.StateActive, SecretHint: "configured"}, nil
+}
+func (noopControlStore) DeleteSIEMSink(_ context.Context, tenantID, sinkID, actorID, reason string) (domain.SIEMSink, error) {
+	return domain.SIEMSink{ID: sinkID, TenantID: tenantID, State: domain.StateDisabled, SecretHint: "configured"}, nil
+}
+func (noopControlStore) TestSIEMSink(_ context.Context, tenantID, sinkID, actorID, reason string) (domain.SIEMDelivery, error) {
+	return domain.SIEMDelivery{ID: "sdel_1", TenantID: tenantID, SinkID: sinkID, State: domain.SignalDeliveryScheduled}, nil
+}
+func (noopControlStore) ListSIEMDeliveries(_ context.Context, tenantID, state string, limit int) ([]domain.SIEMDelivery, error) {
+	return []domain.SIEMDelivery{{ID: "sdel_1", TenantID: tenantID, State: domain.SignalDeliveryScheduled}}, nil
+}
+func (noopControlStore) ListSIEMDeliveryAttempts(_ context.Context, tenantID, deliveryID string, limit int) ([]domain.SIEMDeliveryAttempt, error) {
+	return []domain.SIEMDeliveryAttempt{{ID: "satt_1", TenantID: tenantID, DeliveryID: deliveryID}}, nil
+}
+func (noopControlStore) RetrySIEMDelivery(_ context.Context, tenantID, deliveryID, actorID, reason string) (domain.SIEMDelivery, error) {
+	return domain.SIEMDelivery{ID: deliveryID, TenantID: tenantID, State: domain.SignalDeliveryScheduled}, nil
+}
 func (noopControlStore) ListAuditEvents(context.Context, string, int) ([]domain.AuditEvent, error) {
 	return nil, nil
 }

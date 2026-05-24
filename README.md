@@ -87,6 +87,8 @@ go run ./cmd/whcp alerts update --alert-id alr_... --channel-ids nch_... --reaso
 go run ./cmd/whcp alerts firings --state open --api-key "$WEBHOOKERY_API_KEY"
 go run ./cmd/whcp alerts ack --firing-id alf_... --reason "operator investigating" --api-key "$WEBHOOKERY_API_KEY"
 go run ./cmd/whcp notification-deliveries list --state failed --api-key "$WEBHOOKERY_API_KEY"
+go run ./cmd/whcp siem-sinks create --name audit-stream --url https://siem.example/ingest --signing-secret "$SIEM_SIGNAL_SECRET" --api-key "$WEBHOOKERY_API_KEY"
+go run ./cmd/whcp siem-deliveries list --state failed --api-key "$WEBHOOKERY_API_KEY"
 scripts/backup_postgres.sh backups
 WEBHOOKERY_RESTORE_CONFIRM=restore scripts/restore_postgres.sh backups/webhookery-20260525T000000Z.dump
 helm lint deploy/helm/webhookery
@@ -139,6 +141,11 @@ open, acknowledged, and resolved transitions. Channel signing secrets are
 encrypted at rest and never returned by API, CLI, or UI responses. Signal
 payloads contain alert metadata only and are signed with
 `Webhookery-Signal-Timestamp` plus `Webhookery-Signal-Signature`.
+
+SIEM sinks stream chained audit-event metadata as signed HTTPS JSONL batches.
+Each sink cursor advances only after a successful delivery, so failed SIEM
+egress retries without skipping audit-chain entries. SIEM payloads exclude raw
+webhook bodies, provider headers, API keys, bearer tokens, and egress secrets.
 
 Retry scheduling records reproducibility evidence: deliveries carry a stored
 `retry_seed`, and retryable attempts record the deterministic jitter delay and

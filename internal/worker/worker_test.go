@@ -93,6 +93,21 @@ func TestRunOnceDeliversClaimedNotificationSignal(t *testing.T) {
 	}
 }
 
+func TestRunOnceEnqueuesAndDeliversClaimedSIEMSignal(t *testing.T) {
+	store := &fakeWorkerStore{siemDeliveries: []SignalDeliveryItem{{ID: "sdel_1", URL: "https://siem.example/ingest", Body: []byte(`{"sequence":1}`), Secret: []byte("secret")}}}
+	client := &fakeSignalClient{}
+	w := Worker{Store: store, SIEMDeliveryStore: store, SIEMClient: client, WorkerID: "worker_1", Limit: 3}
+	if err := w.RunOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if store.siemEnqueueWorkerID != "worker_1" || store.siemRecorded != "sdel_1" {
+		t.Fatalf("expected SIEM enqueue and record, enqueue=%q recorded=%q", store.siemEnqueueWorkerID, store.siemRecorded)
+	}
+	if string(client.body) != `{"sequence":1}` || string(client.secret) != "secret" {
+		t.Fatalf("expected exact SIEM body and secret to reach client, body=%q secret=%q", client.body, client.secret)
+	}
+}
+
 type fakeWorkerStore struct {
 	items                  []OutboxItem
 	processed              string
@@ -108,6 +123,9 @@ type fakeWorkerStore struct {
 	alertLimit             int
 	notificationDeliveries []SignalDeliveryItem
 	notificationRecorded   string
+	siemDeliveries         []SignalDeliveryItem
+	siemRecorded           string
+	siemEnqueueWorkerID    string
 }
 
 func (f *fakeWorkerStore) ClaimOutbox(context.Context, string, int) ([]OutboxItem, error) {
@@ -148,6 +166,17 @@ func (f *fakeWorkerStore) ClaimNotificationDeliveries(context.Context, string, i
 }
 func (f *fakeWorkerStore) RecordNotificationDeliveryAttempt(_ context.Context, item SignalDeliveryItem, _ SignalDeliveryResult, _ error) error {
 	f.notificationRecorded = item.ID
+	return nil
+}
+func (f *fakeWorkerStore) EnqueueSIEMDeliveries(_ context.Context, workerID string, limit int) error {
+	f.siemEnqueueWorkerID = workerID
+	return nil
+}
+func (f *fakeWorkerStore) ClaimSIEMDeliveries(context.Context, string, int) ([]SignalDeliveryItem, error) {
+	return f.siemDeliveries, nil
+}
+func (f *fakeWorkerStore) RecordSIEMDeliveryAttempt(_ context.Context, item SignalDeliveryItem, _ SignalDeliveryResult, _ error) error {
+	f.siemRecorded = item.ID
 	return nil
 }
 

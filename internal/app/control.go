@@ -102,6 +102,15 @@ type ControlStore interface {
 	ListNotificationDeliveries(ctx context.Context, tenantID, state string, limit int) ([]domain.NotificationDelivery, error)
 	ListNotificationDeliveryAttempts(ctx context.Context, tenantID, deliveryID string, limit int) ([]domain.NotificationDeliveryAttempt, error)
 	RetryNotificationDelivery(ctx context.Context, tenantID, deliveryID, actorID, reason string) (domain.NotificationDelivery, error)
+	CreateSIEMSink(ctx context.Context, tenantID, actorID string, req CreateSIEMSinkRequest) (domain.SIEMSink, error)
+	ListSIEMSinks(ctx context.Context, tenantID string, limit int) ([]domain.SIEMSink, error)
+	GetSIEMSink(ctx context.Context, tenantID, sinkID string) (domain.SIEMSink, error)
+	UpdateSIEMSink(ctx context.Context, tenantID, sinkID, actorID string, req UpdateSIEMSinkRequest) (domain.SIEMSink, error)
+	DeleteSIEMSink(ctx context.Context, tenantID, sinkID, actorID, reason string) (domain.SIEMSink, error)
+	TestSIEMSink(ctx context.Context, tenantID, sinkID, actorID, reason string) (domain.SIEMDelivery, error)
+	ListSIEMDeliveries(ctx context.Context, tenantID, state string, limit int) ([]domain.SIEMDelivery, error)
+	ListSIEMDeliveryAttempts(ctx context.Context, tenantID, deliveryID string, limit int) ([]domain.SIEMDeliveryAttempt, error)
+	RetrySIEMDelivery(ctx context.Context, tenantID, deliveryID, actorID, reason string) (domain.SIEMDelivery, error)
 	ListAuditEvents(ctx context.Context, tenantID string, limit int) ([]domain.AuditEvent, error)
 	GetAuditChainHead(ctx context.Context, tenantID string) (domain.AuditChainHead, error)
 	VerifyAuditChain(ctx context.Context, tenantID string, req AuditChainVerifyRequest) (domain.AuditChainVerification, error)
@@ -497,6 +506,21 @@ type CreateNotificationChannelRequest struct {
 }
 
 type UpdateNotificationChannelRequest struct {
+	Name          *string `json:"name,omitempty"`
+	URL           *string `json:"url,omitempty"`
+	SigningSecret *string `json:"signing_secret,omitempty"`
+	State         *string `json:"state,omitempty"`
+	Reason        string  `json:"reason"`
+}
+
+type CreateSIEMSinkRequest struct {
+	Name          string `json:"name"`
+	SinkType      string `json:"sink_type,omitempty"`
+	URL           string `json:"url"`
+	SigningSecret string `json:"signing_secret"`
+}
+
+type UpdateSIEMSinkRequest struct {
 	Name          *string `json:"name,omitempty"`
 	URL           *string `json:"url,omitempty"`
 	SigningSecret *string `json:"signing_secret,omitempty"`
@@ -1633,6 +1657,120 @@ func (s *ControlService) RetryNotificationDelivery(ctx context.Context, actor au
 	return s.store.RetryNotificationDelivery(ctx, actor.TenantID, deliveryID, actor.ID, req.Reason)
 }
 
+func (s *ControlService) CreateSIEMSink(ctx context.Context, actor authz.Actor, req CreateSIEMSinkRequest) (domain.SIEMSink, ssrf.Result, error) {
+	if !authz.Can(actor, "security:write", actor.TenantID) {
+		return domain.SIEMSink{}, ssrf.Result{}, ErrForbidden
+	}
+	if err := normalizeCreateSIEMSink(&req); err != nil {
+		return domain.SIEMSink{}, ssrf.Result{}, err
+	}
+	result := s.ssrfValidator.Validate(ctx, req.URL, ssrf.DefaultPolicy())
+	if !result.Allowed {
+		return domain.SIEMSink{}, result, fmt.Errorf("%w: siem_sink_url_blocked", ErrInvalidInput)
+	}
+	req.URL = result.NormalizedURL
+	item, err := s.store.CreateSIEMSink(ctx, actor.TenantID, actor.ID, req)
+	return item, result, err
+}
+
+func (s *ControlService) ListSIEMSinks(ctx context.Context, actor authz.Actor, limit int) ([]domain.SIEMSink, error) {
+	if !authz.Can(actor, "audit:read", actor.TenantID) {
+		return nil, ErrForbidden
+	}
+	return s.store.ListSIEMSinks(ctx, actor.TenantID, normalizeLimit(limit))
+}
+
+func (s *ControlService) GetSIEMSink(ctx context.Context, actor authz.Actor, sinkID string) (domain.SIEMSink, error) {
+	if !authz.Can(actor, "audit:read", actor.TenantID) {
+		return domain.SIEMSink{}, ErrForbidden
+	}
+	if strings.TrimSpace(sinkID) == "" {
+		return domain.SIEMSink{}, fmt.Errorf("%w: sink_id is required", ErrInvalidInput)
+	}
+	return s.store.GetSIEMSink(ctx, actor.TenantID, sinkID)
+}
+
+func (s *ControlService) UpdateSIEMSink(ctx context.Context, actor authz.Actor, sinkID string, req UpdateSIEMSinkRequest) (domain.SIEMSink, ssrf.Result, error) {
+	if !authz.Can(actor, "security:write", actor.TenantID) {
+		return domain.SIEMSink{}, ssrf.Result{}, ErrForbidden
+	}
+	if strings.TrimSpace(sinkID) == "" || strings.TrimSpace(req.Reason) == "" {
+		return domain.SIEMSink{}, ssrf.Result{}, fmt.Errorf("%w: sink_id and reason are required", ErrInvalidInput)
+	}
+	if err := normalizeUpdateSIEMSink(&req); err != nil {
+		return domain.SIEMSink{}, ssrf.Result{}, err
+	}
+	var result ssrf.Result
+	if req.URL != nil {
+		result = s.ssrfValidator.Validate(ctx, *req.URL, ssrf.DefaultPolicy())
+		if !result.Allowed {
+			return domain.SIEMSink{}, result, fmt.Errorf("%w: siem_sink_url_blocked", ErrInvalidInput)
+		}
+		req.URL = &result.NormalizedURL
+	}
+	item, err := s.store.UpdateSIEMSink(ctx, actor.TenantID, sinkID, actor.ID, req)
+	return item, result, err
+}
+
+func (s *ControlService) DeleteSIEMSink(ctx context.Context, actor authz.Actor, sinkID string, req StateChangeRequest) (domain.SIEMSink, error) {
+	if !authz.Can(actor, "security:write", actor.TenantID) {
+		return domain.SIEMSink{}, ErrForbidden
+	}
+	if strings.TrimSpace(sinkID) == "" || strings.TrimSpace(req.Reason) == "" {
+		return domain.SIEMSink{}, fmt.Errorf("%w: sink_id and reason are required", ErrInvalidInput)
+	}
+	return s.store.DeleteSIEMSink(ctx, actor.TenantID, sinkID, actor.ID, req.Reason)
+}
+
+func (s *ControlService) TestSIEMSink(ctx context.Context, actor authz.Actor, sinkID string, req StateChangeRequest) (domain.SIEMDelivery, error) {
+	if !authz.Can(actor, "security:write", actor.TenantID) {
+		return domain.SIEMDelivery{}, ErrForbidden
+	}
+	if strings.TrimSpace(sinkID) == "" || strings.TrimSpace(req.Reason) == "" {
+		return domain.SIEMDelivery{}, fmt.Errorf("%w: sink_id and reason are required", ErrInvalidInput)
+	}
+	sink, err := s.store.GetSIEMSink(ctx, actor.TenantID, sinkID)
+	if err != nil {
+		return domain.SIEMDelivery{}, err
+	}
+	result := s.ssrfValidator.Validate(ctx, sink.URL, ssrf.DefaultPolicy())
+	if !result.Allowed {
+		return domain.SIEMDelivery{}, fmt.Errorf("%w: siem_sink_url_blocked", ErrInvalidInput)
+	}
+	return s.store.TestSIEMSink(ctx, actor.TenantID, sinkID, actor.ID, req.Reason)
+}
+
+func (s *ControlService) ListSIEMDeliveries(ctx context.Context, actor authz.Actor, state string, limit int) ([]domain.SIEMDelivery, error) {
+	if !authz.Can(actor, "audit:read", actor.TenantID) {
+		return nil, ErrForbidden
+	}
+	state = strings.TrimSpace(state)
+	if state != "" && !validSignalDeliveryState(state) {
+		return nil, fmt.Errorf("%w: siem delivery state is invalid", ErrInvalidInput)
+	}
+	return s.store.ListSIEMDeliveries(ctx, actor.TenantID, state, normalizeLimit(limit))
+}
+
+func (s *ControlService) ListSIEMDeliveryAttempts(ctx context.Context, actor authz.Actor, deliveryID string, limit int) ([]domain.SIEMDeliveryAttempt, error) {
+	if !authz.Can(actor, "audit:read", actor.TenantID) {
+		return nil, ErrForbidden
+	}
+	if strings.TrimSpace(deliveryID) == "" {
+		return nil, fmt.Errorf("%w: delivery_id is required", ErrInvalidInput)
+	}
+	return s.store.ListSIEMDeliveryAttempts(ctx, actor.TenantID, deliveryID, normalizeLimit(limit))
+}
+
+func (s *ControlService) RetrySIEMDelivery(ctx context.Context, actor authz.Actor, deliveryID string, req StateChangeRequest) (domain.SIEMDelivery, error) {
+	if !authz.Can(actor, "security:write", actor.TenantID) {
+		return domain.SIEMDelivery{}, ErrForbidden
+	}
+	if strings.TrimSpace(deliveryID) == "" || strings.TrimSpace(req.Reason) == "" {
+		return domain.SIEMDelivery{}, fmt.Errorf("%w: delivery_id and reason are required", ErrInvalidInput)
+	}
+	return s.store.RetrySIEMDelivery(ctx, actor.TenantID, deliveryID, actor.ID, req.Reason)
+}
+
 func (s *ControlService) DryRunReplay(ctx context.Context, actor authz.Actor, req ReplayRequest) (ReplayDryRun, error) {
 	if !authz.Can(actor, "replay:read", actor.TenantID) {
 		return ReplayDryRun{}, ErrForbidden
@@ -2248,6 +2386,64 @@ func normalizeUpdateNotificationChannel(req *UpdateNotificationChannelRequest) e
 		state := strings.TrimSpace(*req.State)
 		if state != domain.StateActive && state != domain.StateDisabled {
 			return fmt.Errorf("%w: channel state must be active or disabled", ErrInvalidInput)
+		}
+		req.State = &state
+	}
+	return nil
+}
+
+func normalizeCreateSIEMSink(req *CreateSIEMSinkRequest) error {
+	req.Name = strings.TrimSpace(req.Name)
+	req.SinkType = strings.TrimSpace(req.SinkType)
+	req.URL = strings.TrimSpace(req.URL)
+	req.SigningSecret = strings.TrimSpace(req.SigningSecret)
+	if req.Name == "" {
+		return fmt.Errorf("%w: name is required", ErrInvalidInput)
+	}
+	if req.SinkType == "" {
+		req.SinkType = domain.SIEMSinkWebhook
+	}
+	if req.SinkType != domain.SIEMSinkWebhook {
+		return fmt.Errorf("%w: sink_type must be webhook", ErrInvalidInput)
+	}
+	if req.URL == "" {
+		return fmt.Errorf("%w: url is required", ErrInvalidInput)
+	}
+	if len(req.SigningSecret) < 16 {
+		return fmt.Errorf("%w: signing_secret must be at least 16 bytes", ErrInvalidInput)
+	}
+	return nil
+}
+
+func normalizeUpdateSIEMSink(req *UpdateSIEMSinkRequest) error {
+	if req.Name == nil && req.URL == nil && req.SigningSecret == nil && req.State == nil {
+		return fmt.Errorf("%w: at least one sink field is required", ErrInvalidInput)
+	}
+	if req.Name != nil {
+		name := strings.TrimSpace(*req.Name)
+		if name == "" {
+			return fmt.Errorf("%w: name cannot be empty", ErrInvalidInput)
+		}
+		req.Name = &name
+	}
+	if req.URL != nil {
+		rawURL := strings.TrimSpace(*req.URL)
+		if rawURL == "" {
+			return fmt.Errorf("%w: url cannot be empty", ErrInvalidInput)
+		}
+		req.URL = &rawURL
+	}
+	if req.SigningSecret != nil {
+		secret := strings.TrimSpace(*req.SigningSecret)
+		if len(secret) < 16 {
+			return fmt.Errorf("%w: signing_secret must be at least 16 bytes", ErrInvalidInput)
+		}
+		req.SigningSecret = &secret
+	}
+	if req.State != nil {
+		state := strings.TrimSpace(*req.State)
+		if state != domain.StateActive && state != domain.StateDisabled {
+			return fmt.Errorf("%w: sink state must be active or disabled", ErrInvalidInput)
 		}
 		req.State = &state
 	}
