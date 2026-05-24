@@ -258,6 +258,160 @@ func TestRCE2EInvalidProviderSignatureQuarantinesWithoutRouting(t *testing.T) {
 	}
 }
 
+func TestRCE2ERetryExhaustionDLQReleaseAndReplayModes(t *testing.T) {
+	ctx, store, actor := openRCStore(t)
+	defer store.Close()
+
+	now := time.Date(2026, 5, 26, 14, 0, 0, 0, time.UTC)
+	control := app.NewControlService(store, ssrf.Validator{Resolver: rcResolver})
+	retryPolicy, err := control.CreateRetryPolicy(ctx, actor, app.CreateRetryPolicyRequest{
+		Name:                "RC single attempt",
+		MaxAttempts:         1,
+		MaxDurationSeconds:  60,
+		InitialDelaySeconds: 1,
+		MaxDelaySeconds:     1,
+		State:               domain.StateActive,
+	})
+	if err != nil {
+		t.Fatalf("create single-attempt retry policy: %v", err)
+	}
+	source, _ := createRCRouteWithOptions(t, ctx, control, actor, "stripe", "stripe", "charge.failed", rcRouteOptions{RetryPolicyID: retryPolicy.ID})
+	body := []byte(`{"id":"evt_rc_dlq_` + testSuffix(t) + `","type":"charge.failed","account":"acct_rc"}`)
+
+	ingest := app.NewIngestService(store, fixedClock{now: now})
+	result, err := ingest.Ingest(ctx, app.IngestRequest{
+		TenantID:    actor.TenantID,
+		SourceID:    source.ID,
+		Provider:    "stripe",
+		RawBody:     body,
+		Headers:     []domain.HeaderPair{{Name: "Stripe-Signature", Value: verifier.TimestampedHeader("v1", now, []byte("whsec_rc"), body)}},
+		ContentType: "application/json",
+		RemoteIP:    "198.51.100.12",
+	})
+	if err != nil {
+		t.Fatalf("ingest event for DLQ: %v", err)
+	}
+	if !result.Accepted {
+		t.Fatalf("expected DLQ test event to be accepted before delivery failure: %+v", result)
+	}
+
+	failingDelivery := &recordingDeliveryClient{
+		t:   t,
+		now: now.Add(time.Second),
+		result: worker.DeliveryResult{
+			StatusCode:   http.StatusInternalServerError,
+			ResponseBody: []byte("temporary receiver failure"),
+			FailureClass: "temporary_http",
+		},
+	}
+	runWorkerOnce(t, ctx, store, failingDelivery, "rc-dlq-"+testSuffix(t))
+	if len(failingDelivery.calls) != 1 {
+		t.Fatalf("expected one failed delivery attempt, got %d", len(failingDelivery.calls))
+	}
+
+	deadLetters, err := control.ListDeadLetter(ctx, actor, 20)
+	if err != nil {
+		t.Fatalf("list dead letters: %v", err)
+	}
+	dlqEntryID := findMapID(deadLetters, "event_id", result.EventID)
+	if dlqEntryID == "" {
+		t.Fatalf("expected open dead-letter entry for event %s: %+v", result.EventID, deadLetters)
+	}
+	deliveries, err := control.ListDeliveries(ctx, actor, 20)
+	if err != nil {
+		t.Fatalf("list DLQ deliveries: %v", err)
+	}
+	if !containsDeliveryState(deliveries, result.EventID, "dead_lettered") {
+		t.Fatalf("expected dead-lettered delivery for event %s: %+v", result.EventID, deliveries)
+	}
+
+	released, err := control.ReleaseDeadLetter(ctx, actor, dlqEntryID, app.DeadLetterReleaseRequest{Reason: "RC release drill"})
+	if err != nil {
+		t.Fatalf("release dead letter: %v", err)
+	}
+	if released.ID == "" || released.ConfigMode != app.ReplayConfigCurrent {
+		t.Fatalf("expected DLQ release to create current-config replay job: %+v", released)
+	}
+	runWorkerOnce(t, ctx, store, &recordingDeliveryClient{
+		t:   t,
+		now: now.Add(2 * time.Second),
+		result: worker.DeliveryResult{
+			StatusCode:   http.StatusAccepted,
+			ResponseBody: []byte("ok"),
+			FailureClass: "success",
+		},
+	}, "rc-dlq-release-"+testSuffix(t))
+	deadLetters, err = control.ListDeadLetter(ctx, actor, 20)
+	if err != nil {
+		t.Fatalf("list released dead letters: %v", err)
+	}
+	if !containsMapState(deadLetters, dlqEntryID, "released") {
+		t.Fatalf("expected released dead-letter state for %s: %+v", dlqEntryID, deadLetters)
+	}
+
+	replaySource, _ := createRCRoute(t, ctx, control, actor, "stripe", "stripe", "customer.updated")
+	replayBody := []byte(`{"id":"evt_rc_replay_` + testSuffix(t) + `","type":"customer.updated","account":"acct_rc"}`)
+	replayIngest, err := ingest.Ingest(ctx, app.IngestRequest{
+		TenantID:    actor.TenantID,
+		SourceID:    replaySource.ID,
+		Provider:    "stripe",
+		RawBody:     replayBody,
+		Headers:     []domain.HeaderPair{{Name: "Stripe-Signature", Value: verifier.TimestampedHeader("v1", now, []byte("whsec_rc"), replayBody)}},
+		ContentType: "application/json",
+		RemoteIP:    "198.51.100.13",
+	})
+	if err != nil {
+		t.Fatalf("ingest replay source event: %v", err)
+	}
+	successClient := &recordingDeliveryClient{
+		t:   t,
+		now: now.Add(3 * time.Second),
+		result: worker.DeliveryResult{
+			StatusCode:   http.StatusAccepted,
+			ResponseBody: []byte("ok"),
+			FailureClass: "success",
+		},
+	}
+	runWorkerOnce(t, ctx, store, successClient, "rc-replay-original-"+testSuffix(t))
+	if len(successClient.calls) != 1 {
+		t.Fatalf("expected initial replay source delivery, got %d", len(successClient.calls))
+	}
+
+	currentReplay, err := control.CreateReplay(ctx, actor, app.ReplayRequest{EventID: replayIngest.EventID, Reason: "RC current replay", ConfigMode: app.ReplayConfigCurrent})
+	if err != nil {
+		t.Fatalf("create current-config replay: %v", err)
+	}
+	originalReplay, err := control.CreateReplay(ctx, actor, app.ReplayRequest{EventID: replayIngest.EventID, Reason: "RC original replay", ConfigMode: app.ReplayConfigOriginal})
+	if err != nil {
+		t.Fatalf("create original-config replay: %v", err)
+	}
+	runWorkerOnce(t, ctx, store, successClient, "rc-replay-jobs-"+testSuffix(t))
+	if len(successClient.calls) != 3 {
+		t.Fatalf("expected initial plus two replay deliveries, got %d", len(successClient.calls))
+	}
+	jobs, err := control.ListReplayJobs(ctx, actor, 20)
+	if err != nil {
+		t.Fatalf("list replay jobs: %v", err)
+	}
+	if !containsReplayJob(jobs, currentReplay.ID, app.ReplayConfigCurrent, "completed") || !containsReplayJob(jobs, originalReplay.ID, app.ReplayConfigOriginal, "completed") {
+		t.Fatalf("expected completed current and original replay jobs: %+v", jobs)
+	}
+	deliveries, err = control.ListDeliveries(ctx, actor, 50)
+	if err != nil {
+		t.Fatalf("list replay deliveries: %v", err)
+	}
+	if countReplayDeliveries(deliveries, replayIngest.EventID) < 2 {
+		t.Fatalf("expected replay deliveries linked to original event %s: %+v", replayIngest.EventID, deliveries)
+	}
+	auditEvents, err := control.ListAuditEvents(ctx, actor, 100)
+	if err != nil {
+		t.Fatalf("list replay audit events: %v", err)
+	}
+	if !containsAuditAction(auditEvents, "replay.created") || !containsAuditAction(auditEvents, "dead_letter.released") {
+		t.Fatalf("expected replay and dead-letter audit evidence: %+v", auditEvents)
+	}
+}
+
 func openRCStore(t *testing.T) (context.Context, *postgres.Store, authz.Actor) {
 	t.Helper()
 	databaseURL := os.Getenv("RANDONNEE_TEST_DATABASE_URL")
@@ -291,6 +445,15 @@ func openRCStore(t *testing.T) (context.Context, *postgres.Store, authz.Actor) {
 
 func createRCRoute(t *testing.T, ctx context.Context, control *app.ControlService, actor authz.Actor, providerName, adapterName, eventType string) (domain.Source, domain.Endpoint) {
 	t.Helper()
+	return createRCRouteWithOptions(t, ctx, control, actor, providerName, adapterName, eventType, rcRouteOptions{})
+}
+
+type rcRouteOptions struct {
+	RetryPolicyID string
+}
+
+func createRCRouteWithOptions(t *testing.T, ctx context.Context, control *app.ControlService, actor authz.Actor, providerName, adapterName, eventType string, opts rcRouteOptions) (domain.Source, domain.Endpoint) {
+	t.Helper()
 	source, err := control.CreateSource(ctx, actor, app.CreateSourceRequest{
 		Name:               "RC " + providerName + " source",
 		Provider:           providerName,
@@ -308,12 +471,13 @@ func createRCRoute(t *testing.T, ctx context.Context, control *app.ControlServic
 		t.Fatalf("create endpoint: %v", err)
 	}
 	route, err := control.CreateRoute(ctx, actor, app.CreateRouteRequest{
-		SourceID:   source.ID,
-		Name:       "RC route",
-		Priority:   10,
-		EventTypes: []string{eventType},
-		EndpointID: endpoint.ID,
-		State:      domain.StateActive,
+		SourceID:      source.ID,
+		Name:          "RC route",
+		Priority:      10,
+		EventTypes:    []string{eventType},
+		EndpointID:    endpoint.ID,
+		RetryPolicyID: opts.RetryPolicyID,
+		State:         domain.StateActive,
 	})
 	if err != nil {
 		t.Fatalf("create route: %v", err)
@@ -373,6 +537,57 @@ func containsAuditAction(items []domain.AuditEvent, action string) bool {
 		}
 	}
 	return false
+}
+
+func findMapID(items []map[string]any, key, value string) string {
+	for _, item := range items {
+		if item[key] == value {
+			return stringValue(item["id"])
+		}
+	}
+	return ""
+}
+
+func containsMapState(items []map[string]any, id, state string) bool {
+	for _, item := range items {
+		if item["id"] == id && item["state"] == state {
+			return true
+		}
+	}
+	return false
+}
+
+func stringValue(value any) string {
+	out, _ := value.(string)
+	return out
+}
+
+func containsDeliveryState(items []domain.Delivery, eventID, state string) bool {
+	for _, item := range items {
+		if item.EventID == eventID && item.State == state {
+			return true
+		}
+	}
+	return false
+}
+
+func containsReplayJob(items []app.ReplayJob, id, configMode, state string) bool {
+	for _, item := range items {
+		if item.ID == id && item.ConfigMode == configMode && item.State == state {
+			return true
+		}
+	}
+	return false
+}
+
+func countReplayDeliveries(items []domain.Delivery, eventID string) int {
+	count := 0
+	for _, item := range items {
+		if item.EventID == eventID && item.ReplayJobID != "" {
+			count++
+		}
+	}
+	return count
 }
 
 func testSuffix(t *testing.T) string {
