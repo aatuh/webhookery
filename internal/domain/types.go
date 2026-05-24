@@ -173,6 +173,142 @@ type APIKey struct {
 	RevokedAt time.Time `json:"revoked_at,omitempty"`
 }
 
+type IdentityProvider struct {
+	ID                  string    `json:"id"`
+	TenantID            string    `json:"tenant_id"`
+	Name                string    `json:"name"`
+	ProviderType        string    `json:"provider_type"`
+	IssuerURL           string    `json:"issuer_url"`
+	AuthorizationURL    string    `json:"authorization_endpoint,omitempty"`
+	TokenURL            string    `json:"token_endpoint,omitempty"`
+	JWKSURL             string    `json:"jwks_uri,omitempty"`
+	ClientID            string    `json:"client_id"`
+	ClientSecret        []byte    `json:"-"`
+	RedirectURI         string    `json:"redirect_uri,omitempty"`
+	AllowedEmailDomains []string  `json:"allowed_email_domains,omitempty"`
+	State               string    `json:"state"`
+	CreatedBy           string    `json:"created_by,omitempty"`
+	CreatedAt           time.Time `json:"created_at"`
+	UpdatedAt           time.Time `json:"updated_at"`
+	DisabledAt          time.Time `json:"disabled_at,omitempty"`
+}
+
+type ExternalIdentity struct {
+	ID                 string    `json:"id"`
+	TenantID           string    `json:"tenant_id"`
+	UserID             string    `json:"user_id"`
+	IdentityProviderID string    `json:"identity_provider_id"`
+	ExternalSubject    string    `json:"external_subject"`
+	Email              string    `json:"email,omitempty"`
+	EmailVerified      bool      `json:"email_verified"`
+	DisplayName        string    `json:"display_name,omitempty"`
+	State              string    `json:"state"`
+	FirstSeenAt        time.Time `json:"first_seen_at"`
+	LastSeenAt         time.Time `json:"last_seen_at"`
+	DisabledAt         time.Time `json:"disabled_at,omitempty"`
+}
+
+type OIDCLoginState struct {
+	ID                 string    `json:"id"`
+	TenantID           string    `json:"tenant_id"`
+	IdentityProviderID string    `json:"identity_provider_id"`
+	StateHash          string    `json:"-"`
+	NonceHash          string    `json:"-"`
+	PKCEVerifier       []byte    `json:"-"`
+	RedirectAfter      string    `json:"redirect_after,omitempty"`
+	ExpiresAt          time.Time `json:"expires_at"`
+	ConsumedAt         time.Time `json:"consumed_at,omitempty"`
+	CreatedAt          time.Time `json:"created_at"`
+}
+
+type AuthSession struct {
+	ID                 string    `json:"id"`
+	TenantID           string    `json:"tenant_id"`
+	UserID             string    `json:"user_id"`
+	ExternalIdentityID string    `json:"external_identity_id,omitempty"`
+	SessionHash        string    `json:"-"`
+	State              string    `json:"state"`
+	UserAgentHash      string    `json:"-"`
+	IPHash             string    `json:"-"`
+	CreatedAt          time.Time `json:"created_at"`
+	LastSeenAt         time.Time `json:"last_seen_at"`
+	ExpiresAt          time.Time `json:"expires_at"`
+	RevokedAt          time.Time `json:"revoked_at,omitempty"`
+}
+
+type SCIMToken struct {
+	ID         string    `json:"id"`
+	TenantID   string    `json:"tenant_id"`
+	Name       string    `json:"name"`
+	Prefix     string    `json:"prefix"`
+	Last4      string    `json:"last4"`
+	Hash       string    `json:"-"`
+	State      string    `json:"state"`
+	CreatedBy  string    `json:"created_by,omitempty"`
+	CreatedAt  time.Time `json:"created_at"`
+	LastUsedAt time.Time `json:"last_used_at,omitempty"`
+	RevokedAt  time.Time `json:"revoked_at,omitempty"`
+}
+
+type SCIMGroup struct {
+	ID          string    `json:"id"`
+	TenantID    string    `json:"tenant_id"`
+	ExternalID  string    `json:"external_id"`
+	DisplayName string    `json:"display_name"`
+	Role        string    `json:"role"`
+	State       string    `json:"state"`
+	CreatedAt   time.Time `json:"created_at"`
+	UpdatedAt   time.Time `json:"updated_at"`
+}
+
+type RoleBinding struct {
+	ID             string    `json:"id"`
+	TenantID       string    `json:"tenant_id"`
+	PrincipalType  string    `json:"principal_type"`
+	PrincipalID    string    `json:"principal_id"`
+	Role           string    `json:"role"`
+	ResourceFamily string    `json:"resource_family"`
+	ResourceID     string    `json:"resource_id"`
+	Environment    string    `json:"environment"`
+	State          string    `json:"state"`
+	Reason         string    `json:"reason,omitempty"`
+	CreatedBy      string    `json:"created_by,omitempty"`
+	CreatedAt      time.Time `json:"created_at"`
+	UpdatedAt      time.Time `json:"updated_at"`
+}
+
+type AccessPolicyRule struct {
+	ID             string          `json:"id"`
+	TenantID       string          `json:"tenant_id"`
+	Name           string          `json:"name"`
+	Action         string          `json:"action"`
+	Effect         string          `json:"effect"`
+	ResourceFamily string          `json:"resource_family"`
+	Environment    string          `json:"environment"`
+	Conditions     json.RawMessage `json:"conditions,omitempty"`
+	State          string          `json:"state"`
+	Reason         string          `json:"reason,omitempty"`
+	CreatedBy      string          `json:"created_by,omitempty"`
+	CreatedAt      time.Time       `json:"created_at"`
+	UpdatedAt      time.Time       `json:"updated_at"`
+}
+
+type AuthzDecisionLog struct {
+	ID                   string    `json:"id"`
+	TenantID             string    `json:"tenant_id"`
+	ActorID              string    `json:"actor_id"`
+	Action               string    `json:"action"`
+	ResourceFamily       string    `json:"resource_family"`
+	ResourceID           string    `json:"resource_id,omitempty"`
+	Environment          string    `json:"environment,omitempty"`
+	Allowed              bool      `json:"allowed"`
+	MatchedRoleBindingID string    `json:"matched_role_binding_id,omitempty"`
+	MatchedPolicyRuleID  string    `json:"matched_policy_rule_id,omitempty"`
+	Reason               string    `json:"reason"`
+	Sampled              bool      `json:"sampled"`
+	OccurredAt           time.Time `json:"occurred_at"`
+}
+
 type Subscription struct {
 	ID                      string    `json:"id"`
 	TenantID                string    `json:"tenant_id"`

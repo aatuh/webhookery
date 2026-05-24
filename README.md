@@ -89,6 +89,11 @@ go run ./cmd/whcp alerts ack --firing-id alf_... --reason "operator investigatin
 go run ./cmd/whcp notification-deliveries list --state failed --api-key "$WEBHOOKERY_API_KEY"
 go run ./cmd/whcp siem-sinks create --name audit-stream --url https://siem.example/ingest --signing-secret "$SIEM_SIGNAL_SECRET" --api-key "$WEBHOOKERY_API_KEY"
 go run ./cmd/whcp siem-deliveries list --state failed --api-key "$WEBHOOKERY_API_KEY"
+go run ./cmd/whcp identity-providers create --name okta --issuer-url https://idp.example.com --client-id "$OIDC_CLIENT_ID" --client-secret "$OIDC_CLIENT_SECRET" --redirect-uri https://webhookery.example/v1/auth/oidc/callback --allowed-email-domains example.com --api-key "$WEBHOOKERY_API_KEY"
+go run ./cmd/whcp scim-tokens create --name okta-scim --api-key "$WEBHOOKERY_API_KEY"
+go run ./cmd/whcp role-bindings create --principal-type user --principal-id usr_... --role auditor --resource-family audit --environment production --reason "audit team access" --api-key "$WEBHOOKERY_API_KEY"
+go run ./cmd/whcp access-policies create --name deny-prod-raw --action events:raw --effect deny --resource-family event --environment production --reason "limit raw payload exposure" --api-key "$WEBHOOKERY_API_KEY"
+go run ./cmd/whcp authz explain --actor-id usr_... --action events:raw --resource-family event --resource-id evt_... --environment production --api-key "$WEBHOOKERY_API_KEY"
 scripts/backup_postgres.sh backups
 WEBHOOKERY_RESTORE_CONFIRM=restore scripts/restore_postgres.sh backups/webhookery-20260525T000000Z.dump
 helm lint deploy/helm/webhookery

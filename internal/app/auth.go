@@ -19,6 +19,10 @@ type APIKeyLookup interface {
 	AuthenticateAPIKey(ctx context.Context, keyHash string) (authz.Actor, error)
 }
 
+type SessionLookup interface {
+	AuthenticateSession(ctx context.Context, sessionHash string) (authz.Actor, error)
+}
+
 type APIKeyAuthenticator struct {
 	Lookup APIKeyLookup
 }
@@ -28,6 +32,17 @@ func (a APIKeyAuthenticator) Authenticate(ctx context.Context, bearerToken strin
 		return authz.Actor{}, ErrUnauthorized
 	}
 	return a.Lookup.AuthenticateAPIKey(ctx, HashToken(bearerToken))
+}
+
+type SessionAuthenticator struct {
+	Lookup SessionLookup
+}
+
+func (a SessionAuthenticator) Authenticate(ctx context.Context, rawSessionToken string) (authz.Actor, error) {
+	if rawSessionToken == "" || a.Lookup == nil {
+		return authz.Actor{}, ErrUnauthorized
+	}
+	return a.Lookup.AuthenticateSession(ctx, HashToken(rawSessionToken))
 }
 
 type MultiAuthenticator struct {

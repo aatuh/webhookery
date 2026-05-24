@@ -93,6 +93,573 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/APIKey"
+  /v1/auth/oidc/login:
+    get:
+      summary: Start OIDC management login
+      description: Starts Authorization Code + PKCE login for a tenant identity provider and redirects to the provider authorization endpoint.
+      parameters:
+        - name: tenant_id
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: provider_id
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: redirect_after
+          in: query
+          required: false
+          schema:
+            type: string
+      responses:
+        "302":
+          description: Redirect to identity provider.
+  /v1/auth/oidc/callback:
+    get:
+      summary: Complete OIDC management login
+      description: Validates state, nonce, issuer, audience, expiry, and signed ID token before creating a hashed management session cookie.
+      parameters:
+        - name: state
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: code
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Session created.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthSessionCreated"
+  /v1/auth/logout:
+    post:
+      summary: Revoke current management session
+      security:
+        - bearerAuth: []
+      responses:
+        "204":
+          description: Session revoked.
+  /v1/auth/session:
+    get:
+      summary: Get current management session
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Current session metadata.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthSession"
+  /v1/identity-providers:
+    get:
+      summary: List identity providers
+      description: Lists tenant-scoped OIDC identity provider metadata. Client secrets are never returned.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: Paginated identity providers.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IdentityProviderPage"
+    post:
+      summary: Create OIDC identity provider
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateIdentityProviderRequest"
+      responses:
+        "201":
+          description: Identity provider created with encrypted client secret.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IdentityProvider"
+  /v1/identity-providers/{provider_id}:
+    get:
+      summary: Get identity provider
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: provider_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Identity provider metadata.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IdentityProvider"
+    patch:
+      summary: Update identity provider
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: provider_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateIdentityProviderRequest"
+      responses:
+        "200":
+          description: Identity provider updated.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IdentityProvider"
+    delete:
+      summary: Disable identity provider
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: provider_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ReasonRequest"
+      responses:
+        "200":
+          description: Identity provider disabled and active sessions invalidated.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IdentityProvider"
+  /v1/identity-providers/{provider_id}:test:
+    post:
+      summary: Test identity provider configuration
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: provider_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ReasonRequest"
+      responses:
+        "200":
+          description: Identity provider test was recorded.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IdentityProvider"
+  /v1/scim-tokens:
+    get:
+      summary: List SCIM tokens
+      description: Lists SCIM token metadata only. Raw tokens and hashes are never returned.
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Paginated SCIM token metadata.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SCIMTokenPage"
+    post:
+      summary: Create SCIM token
+      description: Returns the SCIM bearer token exactly once.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateSCIMTokenRequest"
+      responses:
+        "201":
+          description: SCIM token created.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SCIMTokenCreated"
+  /v1/scim-tokens/{token_id}:
+    delete:
+      summary: Revoke SCIM token
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: token_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ReasonRequest"
+      responses:
+        "200":
+          description: SCIM token revoked.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SCIMToken"
+  /v1/scim/v2/Users:
+    get:
+      summary: List SCIM users
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: SCIM ListResponse.
+    post:
+      summary: Provision SCIM user
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SCIMUserRequest"
+      responses:
+        "201":
+          description: User provisioned.
+  /v1/scim/v2/Users/{user_id}:
+    get:
+      summary: Get SCIM user
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: user_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: SCIM user.
+    put:
+      summary: Replace SCIM user
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: user_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SCIMUserRequest"
+      responses:
+        "200":
+          description: User replaced.
+    patch:
+      summary: Patch SCIM user
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: user_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SCIMPatchRequest"
+      responses:
+        "200":
+          description: User patched.
+    delete:
+      summary: Deactivate SCIM user
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: user_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: User deactivated.
+  /v1/scim/v2/Groups:
+    get:
+      summary: List SCIM groups
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: SCIM ListResponse.
+    post:
+      summary: Provision SCIM group
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SCIMGroupRequest"
+      responses:
+        "201":
+          description: Group provisioned.
+  /v1/scim/v2/Groups/{group_id}:
+    get:
+      summary: Get SCIM group
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: group_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: SCIM group.
+    put:
+      summary: Replace SCIM group
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: group_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SCIMGroupRequest"
+      responses:
+        "200":
+          description: Group replaced.
+    patch:
+      summary: Patch SCIM group
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: group_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SCIMPatchRequest"
+      responses:
+        "200":
+          description: Group patched.
+    delete:
+      summary: Deactivate SCIM group
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: group_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Group deactivated.
+  /v1/role-bindings:
+    get:
+      summary: List resource-aware role bindings
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Paginated role bindings.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RoleBindingPage"
+    post:
+      summary: Create resource-aware role binding
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateRoleBindingRequest"
+      responses:
+        "201":
+          description: Role binding created.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RoleBinding"
+  /v1/role-bindings/{binding_id}:
+    patch:
+      summary: Update role binding
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: binding_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateRoleBindingRequest"
+      responses:
+        "200":
+          description: Role binding updated.
+    delete:
+      summary: Disable role binding
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: binding_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ReasonRequest"
+      responses:
+        "200":
+          description: Role binding disabled.
+  /v1/access-policies:
+    get:
+      summary: List access policy rules
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Paginated access policy rules.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AccessPolicyRulePage"
+    post:
+      summary: Create access policy rule
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateAccessPolicyRuleRequest"
+      responses:
+        "201":
+          description: Access policy rule created.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AccessPolicyRule"
+  /v1/access-policies/{policy_id}:
+    patch:
+      summary: Update access policy rule
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: policy_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateAccessPolicyRuleRequest"
+      responses:
+        "200":
+          description: Access policy rule updated.
+    delete:
+      summary: Disable access policy rule
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: policy_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ReasonRequest"
+      responses:
+        "200":
+          description: Access policy rule disabled.
+  /v1/authz:explain:
+    post:
+      summary: Explain authorization decision
+      description: Returns a redacted allow/deny explanation for security operators.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AuthzExplainRequest"
+      responses:
+        "200":
+          description: Authorization explanation.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthzDecision"
   /v1/sources:
     get:
       summary: List inbound sources
@@ -2761,6 +3328,416 @@ components:
           nullable: true
         has_more:
           type: boolean
+    IdentityProvider:
+      type: object
+      required: [id, tenant_id, name, provider_type, issuer_url, client_id, state, created_at]
+      properties:
+        id:
+          type: string
+        tenant_id:
+          type: string
+        name:
+          type: string
+        provider_type:
+          type: string
+          enum: [oidc]
+        issuer_url:
+          type: string
+          format: uri
+        authorization_endpoint:
+          type: string
+          format: uri
+        token_endpoint:
+          type: string
+          format: uri
+        jwks_uri:
+          type: string
+          format: uri
+        client_id:
+          type: string
+        redirect_uri:
+          type: string
+          format: uri
+        allowed_email_domains:
+          type: array
+          items:
+            type: string
+        state:
+          type: string
+          enum: [active, disabled]
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+    CreateIdentityProviderRequest:
+      type: object
+      required: [name, issuer_url, client_id, client_secret]
+      additionalProperties: false
+      properties:
+        name:
+          type: string
+        provider_type:
+          type: string
+          enum: [oidc]
+        issuer_url:
+          type: string
+          format: uri
+        authorization_endpoint:
+          type: string
+          format: uri
+        token_endpoint:
+          type: string
+          format: uri
+        jwks_uri:
+          type: string
+          format: uri
+        client_id:
+          type: string
+        client_secret:
+          type: string
+          writeOnly: true
+        redirect_uri:
+          type: string
+          format: uri
+        allowed_email_domains:
+          type: array
+          items:
+            type: string
+    UpdateIdentityProviderRequest:
+      allOf:
+        - $ref: "#/components/schemas/CreateIdentityProviderRequest"
+        - type: object
+          required: [reason]
+          properties:
+            state:
+              type: string
+              enum: [active, disabled]
+            reason:
+              type: string
+    IdentityProviderPage:
+      type: object
+      required: [data, has_more]
+      properties:
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/IdentityProvider"
+        next_cursor:
+          type: string
+          nullable: true
+        has_more:
+          type: boolean
+    AuthSession:
+      type: object
+      required: [id, tenant_id, user_id, state, created_at, expires_at]
+      properties:
+        id:
+          type: string
+        tenant_id:
+          type: string
+        user_id:
+          type: string
+        external_identity_id:
+          type: string
+        state:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        last_seen_at:
+          type: string
+          format: date-time
+        expires_at:
+          type: string
+          format: date-time
+    AuthSessionCreated:
+      type: object
+      properties:
+        session:
+          $ref: "#/components/schemas/AuthSession"
+        actor:
+          type: object
+          additionalProperties: true
+    CreateSCIMTokenRequest:
+      type: object
+      required: [name]
+      additionalProperties: false
+      properties:
+        name:
+          type: string
+    SCIMToken:
+      type: object
+      required: [id, tenant_id, name, prefix, last4, state, created_at]
+      properties:
+        id:
+          type: string
+        tenant_id:
+          type: string
+        name:
+          type: string
+        prefix:
+          type: string
+        last4:
+          type: string
+        state:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        last_used_at:
+          type: string
+          format: date-time
+        revoked_at:
+          type: string
+          format: date-time
+    SCIMTokenCreated:
+      type: object
+      required: [token, value]
+      properties:
+        token:
+          $ref: "#/components/schemas/SCIMToken"
+        value:
+          type: string
+          description: One-time SCIM bearer token value.
+    SCIMTokenPage:
+      type: object
+      properties:
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/SCIMToken"
+        next_cursor:
+          type: string
+          nullable: true
+        has_more:
+          type: boolean
+    SCIMUserRequest:
+      type: object
+      required: [userName]
+      properties:
+        id:
+          type: string
+        externalId:
+          type: string
+        userName:
+          type: string
+        displayName:
+          type: string
+        active:
+          type: boolean
+    SCIMGroupRequest:
+      type: object
+      required: [displayName]
+      properties:
+        id:
+          type: string
+        externalId:
+          type: string
+        displayName:
+          type: string
+        members:
+          type: array
+          items:
+            type: object
+            properties:
+              value:
+                type: string
+              display:
+                type: string
+    SCIMPatchRequest:
+      type: object
+      required: [Operations]
+      properties:
+        Operations:
+          type: array
+          items:
+            type: object
+            required: [op]
+            properties:
+              op:
+                type: string
+              path:
+                type: string
+              value: {}
+    RoleBinding:
+      type: object
+      properties:
+        id:
+          type: string
+        tenant_id:
+          type: string
+        principal_type:
+          type: string
+          enum: [user, group]
+        principal_id:
+          type: string
+        role:
+          type: string
+          enum: [owner, admin, developer, operator, security, auditor, support]
+        resource_family:
+          type: string
+        resource_id:
+          type: string
+        environment:
+          type: string
+        state:
+          type: string
+    CreateRoleBindingRequest:
+      type: object
+      required: [principal_type, principal_id, role, resource_family, environment, reason]
+      properties:
+        principal_type:
+          type: string
+          enum: [user, group]
+        principal_id:
+          type: string
+        role:
+          type: string
+        resource_family:
+          type: string
+        resource_id:
+          type: string
+        environment:
+          type: string
+        reason:
+          type: string
+    UpdateRoleBindingRequest:
+      type: object
+      required: [reason]
+      properties:
+        role:
+          type: string
+        resource_family:
+          type: string
+        resource_id:
+          type: string
+        environment:
+          type: string
+        state:
+          type: string
+        reason:
+          type: string
+    RoleBindingPage:
+      type: object
+      properties:
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/RoleBinding"
+        next_cursor:
+          type: string
+          nullable: true
+        has_more:
+          type: boolean
+    AccessPolicyRule:
+      type: object
+      properties:
+        id:
+          type: string
+        tenant_id:
+          type: string
+        name:
+          type: string
+        action:
+          type: string
+        effect:
+          type: string
+          enum: [allow, deny]
+        resource_family:
+          type: string
+        environment:
+          type: string
+        conditions:
+          type: object
+        state:
+          type: string
+    CreateAccessPolicyRuleRequest:
+      type: object
+      required: [name, action, effect, resource_family, environment, reason]
+      properties:
+        name:
+          type: string
+        action:
+          type: string
+        effect:
+          type: string
+          enum: [allow, deny]
+        resource_family:
+          type: string
+        environment:
+          type: string
+        conditions:
+          type: object
+        reason:
+          type: string
+    UpdateAccessPolicyRuleRequest:
+      type: object
+      required: [reason]
+      properties:
+        name:
+          type: string
+        action:
+          type: string
+        effect:
+          type: string
+          enum: [allow, deny]
+        resource_family:
+          type: string
+        environment:
+          type: string
+        conditions:
+          type: object
+        state:
+          type: string
+        reason:
+          type: string
+    AccessPolicyRulePage:
+      type: object
+      properties:
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/AccessPolicyRule"
+        next_cursor:
+          type: string
+          nullable: true
+        has_more:
+          type: boolean
+    AuthzExplainRequest:
+      type: object
+      required: [action, resource_family]
+      properties:
+        actor_id:
+          type: string
+        action:
+          type: string
+        resource_family:
+          type: string
+        resource_id:
+          type: string
+        environment:
+          type: string
+        attributes:
+          type: object
+          additionalProperties:
+            type: string
+    AuthzDecision:
+      type: object
+      properties:
+        allowed:
+          type: boolean
+        action:
+          type: string
+        reason:
+          type: string
+        matched_role:
+          type: string
+        matched_role_binding_id:
+          type: string
+        matched_policy_rule_id:
+          type: string
     Source:
       type: object
       required: [id, tenant_id, name, provider, adapter, state]

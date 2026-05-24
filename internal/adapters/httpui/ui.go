@@ -72,6 +72,10 @@ var indexTemplate = template.Must(template.New("index").Parse(`<!doctype html>
       ["audit anchors", "/v1/audit-chain/anchors"],
       ["audit exports", "/v1/audit-exports"],
       ["retention", "/v1/admin/retention-policies"],
+      ["identity providers", "/v1/identity-providers"],
+      ["scim tokens", "/v1/scim-tokens"],
+      ["role bindings", "/v1/role-bindings"],
+      ["access policies", "/v1/access-policies"],
       ["endpoint health", "/v1/endpoint-health"],
       ["ops", "/v1/ops/metrics"],
       ["ops rollups", "/v1/ops/metrics/rollups"],
@@ -161,6 +165,18 @@ var indexTemplate = template.Must(template.New("index").Parse(`<!doctype html>
       }
       if (name === "alerts") {
         keys = ["id", "name", "rule_type", "metric_name", "threshold", "comparator", "window_seconds", "state"];
+      }
+      if (name === "identity providers") {
+        keys = ["id", "name", "provider_type", "issuer_url", "client_id", "state", "created_at", "updated_at"];
+      }
+      if (name === "scim tokens") {
+        keys = ["id", "name", "prefix", "last4", "state", "created_at", "last_used_at", "revoked_at"];
+      }
+      if (name === "role bindings") {
+        keys = ["id", "principal_type", "principal_id", "role", "resource_family", "resource_id", "environment", "state"];
+      }
+      if (name === "access policies") {
+        keys = ["id", "name", "action", "effect", "resource_family", "environment", "state", "updated_at"];
       }
       if (name === "alert firings") {
         keys = ["id", "rule_id", "state", "observed_value", "threshold", "started_at", "acknowledged_at", "resolved_at"];

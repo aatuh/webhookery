@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"context"
+	"crypto/subtle"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -26,15 +27,18 @@ const (
 	maxHeaderBytes      = 64 << 10
 	maxHeaderPairs      = 128
 	maxHeaderValueBytes = 8 << 10
+	sessionCookieName   = "webhookery_session"
 )
 
 type ServerConfig struct {
-	Control  *app.ControlService
-	Ingest   *app.IngestService
-	Auth     app.Authenticator
-	OpenAPI  []byte
-	EnableUI bool
-	Health   func(context.Context) error
+	Control             *app.ControlService
+	Ingest              *app.IngestService
+	Auth                app.Authenticator
+	SessionAuth         app.Authenticator
+	OpenAPI             []byte
+	EnableUI            bool
+	SessionCookieSecure bool
+	Health              func(context.Context) error
 }
 
 type Server struct {
@@ -56,9 +60,46 @@ func (s *Server) Routes() http.Handler {
 	r.Route("/v1", func(r chi.Router) {
 		r.Post("/ingest/{tenant_id}/{source_id}", s.ingestGeneric)
 		r.Post("/ingest/{provider}/{source_id}", s.ingestProvider)
+		r.Get("/auth/oidc/login", s.oidcLogin)
+		r.Get("/auth/oidc/callback", s.oidcCallback)
+		r.Route("/scim/v2", func(r chi.Router) {
+			r.Use(s.requireSCIMAuth)
+			r.Get("/Users", s.scimListUsers)
+			r.Post("/Users", s.scimCreateUser)
+			r.Get("/Users/{user_id}", s.scimGetUser)
+			r.Put("/Users/{user_id}", s.scimReplaceUser)
+			r.Patch("/Users/{user_id}", s.scimPatchUser)
+			r.Delete("/Users/{user_id}", s.scimDeleteUser)
+			r.Get("/Groups", s.scimListGroups)
+			r.Post("/Groups", s.scimCreateGroup)
+			r.Get("/Groups/{group_id}", s.scimGetGroup)
+			r.Put("/Groups/{group_id}", s.scimReplaceGroup)
+			r.Patch("/Groups/{group_id}", s.scimPatchGroup)
+			r.Delete("/Groups/{group_id}", s.scimDeleteGroup)
+		})
 
 		r.Group(func(r chi.Router) {
 			r.Use(s.requireAuth)
+			r.Post("/auth/logout", s.logout)
+			r.Get("/auth/session", s.currentSession)
+			r.Get("/identity-providers", s.listIdentityProviders)
+			r.Post("/identity-providers", s.createIdentityProvider)
+			r.Get("/identity-providers/{provider_id}", s.getIdentityProvider)
+			r.Patch("/identity-providers/{provider_id}", s.updateIdentityProvider)
+			r.Delete("/identity-providers/{provider_id}", s.disableIdentityProvider)
+			r.Post("/identity-providers/{provider_id}:test", s.testIdentityProvider)
+			r.Get("/scim-tokens", s.listSCIMTokens)
+			r.Post("/scim-tokens", s.createSCIMToken)
+			r.Delete("/scim-tokens/{token_id}", s.revokeSCIMToken)
+			r.Get("/role-bindings", s.listRoleBindings)
+			r.Post("/role-bindings", s.createRoleBinding)
+			r.Patch("/role-bindings/{binding_id}", s.updateRoleBinding)
+			r.Delete("/role-bindings/{binding_id}", s.disableRoleBinding)
+			r.Get("/access-policies", s.listAccessPolicyRules)
+			r.Post("/access-policies", s.createAccessPolicyRule)
+			r.Patch("/access-policies/{policy_id}", s.updateAccessPolicyRule)
+			r.Delete("/access-policies/{policy_id}", s.disableAccessPolicyRule)
+			r.Post("/authz:explain", s.authzExplain)
 			r.Get("/api-keys", s.listAPIKeys)
 			r.Post("/api-keys", s.createAPIKey)
 			r.Post("/api-keys/{api_key_id}:revoke", s.revokeAPIKey)
@@ -236,9 +277,35 @@ func (s *Server) requireAuth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requestID := requestID(r)
 		token := app.BearerToken(r.Header.Get("Authorization"))
-		actor, err := s.cfg.Auth.Authenticate(r.Context(), token)
+		authenticator := s.cfg.Auth
+		if token == "" && s.cfg.SessionAuth != nil {
+			if cookie, err := r.Cookie(sessionCookieName); err == nil {
+				token = cookie.Value
+				authenticator = s.cfg.SessionAuth
+			}
+		}
+		if authenticator == nil {
+			writeProblem(w, problem.Unauthorized(requestID))
+			return
+		}
+		actor, err := authenticator.Authenticate(r.Context(), token)
 		if err != nil {
 			writeProblem(w, problem.Unauthorized(requestID))
+			return
+		}
+		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), actorContextKey{}, actor)))
+	})
+}
+
+func (s *Server) requireSCIMAuth(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if s.cfg.Control == nil {
+			writeProblem(w, problem.Unauthorized(requestID(r)))
+			return
+		}
+		actor, err := s.cfg.Control.AuthenticateSCIMToken(r.Context(), app.BearerToken(r.Header.Get("Authorization")))
+		if err != nil {
+			writeProblem(w, problem.Unauthorized(requestID(r)))
 			return
 		}
 		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), actorContextKey{}, actor)))
@@ -1550,6 +1617,418 @@ func (s *Server) opsConfig(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, item)
 }
 
+func (s *Server) oidcLogin(w http.ResponseWriter, r *http.Request) {
+	result, err := s.cfg.Control.BeginOIDCLogin(r.Context(), r.URL.Query().Get("tenant_id"), r.URL.Query().Get("provider_id"), r.URL.Query().Get("redirect_after"))
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	s.setCookie(w, &http.Cookie{Name: "webhookery_oidc_state", Value: result.State, Path: "/v1/auth/oidc", MaxAge: 600, HttpOnly: true, Secure: true, SameSite: http.SameSiteLaxMode})
+	http.Redirect(w, r, result.AuthURL, http.StatusFound)
+}
+
+func (s *Server) oidcCallback(w http.ResponseWriter, r *http.Request) {
+	state := r.URL.Query().Get("state")
+	cookie, err := r.Cookie("webhookery_oidc_state")
+	if err != nil || state == "" || subtle.ConstantTimeCompare([]byte(state), []byte(cookie.Value)) != 1 {
+		writeProblem(w, problem.Unauthorized(requestID(r)))
+		return
+	}
+	result, err := s.cfg.Control.CompleteOIDCCallback(r.Context(), state, r.URL.Query().Get("code"), r.UserAgent(), remoteAddr(r))
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	s.setCookie(w, &http.Cookie{Name: sessionCookieName, Value: result.SessionToken, Path: "/", Expires: result.Session.ExpiresAt, HttpOnly: true, Secure: true, SameSite: http.SameSiteLaxMode})
+	s.setCookie(w, &http.Cookie{Name: "webhookery_oidc_state", Value: "", Path: "/v1/auth/oidc", MaxAge: -1, HttpOnly: true, Secure: true, SameSite: http.SameSiteLaxMode})
+	writeJSON(w, http.StatusOK, map[string]any{"session": result.Session, "actor": result.Actor})
+}
+
+func (s *Server) logout(w http.ResponseWriter, r *http.Request) {
+	cookie, err := r.Cookie(sessionCookieName)
+	if err != nil {
+		writeProblem(w, problem.Unauthorized(requestID(r)))
+		return
+	}
+	if err := s.cfg.Control.LogoutSession(r.Context(), actorFrom(r), cookie.Value); err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	s.setCookie(w, &http.Cookie{Name: sessionCookieName, Value: "", Path: "/", MaxAge: -1, HttpOnly: true, Secure: true, SameSite: http.SameSiteLaxMode})
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) currentSession(w http.ResponseWriter, r *http.Request) {
+	cookie, err := r.Cookie(sessionCookieName)
+	if err != nil {
+		writeProblem(w, problem.Unauthorized(requestID(r)))
+		return
+	}
+	item, err := s.cfg.Control.CurrentAuthSession(r.Context(), actorFrom(r), cookie.Value)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, item)
+}
+
+func (s *Server) setCookie(w http.ResponseWriter, cookie *http.Cookie) {
+	cookie.Secure = true
+	cookie.HttpOnly = true
+	if cookie.SameSite == http.SameSiteDefaultMode {
+		cookie.SameSite = http.SameSiteLaxMode
+	}
+	http.SetCookie(w, cookie)
+}
+
+func (s *Server) createIdentityProvider(w http.ResponseWriter, r *http.Request) {
+	var req app.CreateIdentityProviderRequest
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	item, err := s.cfg.Control.CreateIdentityProvider(r.Context(), actorFrom(r), req)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, item)
+}
+
+func (s *Server) listIdentityProviders(w http.ResponseWriter, r *http.Request) {
+	items, err := s.cfg.Control.ListIdentityProviders(r.Context(), actorFrom(r), queryLimit(r))
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, page(items))
+}
+
+func (s *Server) getIdentityProvider(w http.ResponseWriter, r *http.Request) {
+	item, err := s.cfg.Control.GetIdentityProvider(r.Context(), actorFrom(r), chi.URLParam(r, "provider_id"))
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, item)
+}
+
+func (s *Server) updateIdentityProvider(w http.ResponseWriter, r *http.Request) {
+	var req app.UpdateIdentityProviderRequest
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	item, err := s.cfg.Control.UpdateIdentityProvider(r.Context(), actorFrom(r), chi.URLParam(r, "provider_id"), req)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, item)
+}
+
+func (s *Server) disableIdentityProvider(w http.ResponseWriter, r *http.Request) {
+	var req app.StateChangeRequest
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	item, err := s.cfg.Control.DisableIdentityProvider(r.Context(), actorFrom(r), chi.URLParam(r, "provider_id"), req)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, item)
+}
+
+func (s *Server) testIdentityProvider(w http.ResponseWriter, r *http.Request) {
+	var req app.StateChangeRequest
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	item, err := s.cfg.Control.TestIdentityProvider(r.Context(), actorFrom(r), chi.URLParam(r, "provider_id"), req)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, item)
+}
+
+func (s *Server) createSCIMToken(w http.ResponseWriter, r *http.Request) {
+	var req app.CreateSCIMTokenRequest
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	item, err := s.cfg.Control.CreateSCIMToken(r.Context(), actorFrom(r), req)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, item)
+}
+
+func (s *Server) listSCIMTokens(w http.ResponseWriter, r *http.Request) {
+	items, err := s.cfg.Control.ListSCIMTokens(r.Context(), actorFrom(r), queryLimit(r))
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, page(items))
+}
+
+func (s *Server) revokeSCIMToken(w http.ResponseWriter, r *http.Request) {
+	var req app.StateChangeRequest
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	item, err := s.cfg.Control.RevokeSCIMToken(r.Context(), actorFrom(r), chi.URLParam(r, "token_id"), req)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, item)
+}
+
+func (s *Server) scimListUsers(w http.ResponseWriter, r *http.Request) {
+	items, err := s.cfg.Control.SCIMListUsers(r.Context(), actorFrom(r), queryLimit(r))
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, scimListResponse(items))
+}
+
+func (s *Server) scimCreateUser(w http.ResponseWriter, r *http.Request) {
+	var req app.SCIMUserRequest
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	item, err := s.cfg.Control.SCIMCreateUser(r.Context(), actorFrom(r), req)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, item)
+}
+
+func (s *Server) scimGetUser(w http.ResponseWriter, r *http.Request) {
+	item, err := s.cfg.Control.SCIMGetUser(r.Context(), actorFrom(r), chi.URLParam(r, "user_id"))
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, item)
+}
+
+func (s *Server) scimReplaceUser(w http.ResponseWriter, r *http.Request) {
+	var req app.SCIMUserRequest
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	req.ID = chi.URLParam(r, "user_id")
+	item, err := s.cfg.Control.SCIMReplaceUser(r.Context(), actorFrom(r), req)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, item)
+}
+
+func (s *Server) scimPatchUser(w http.ResponseWriter, r *http.Request) {
+	var req app.SCIMPatchRequest
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	item, err := s.cfg.Control.SCIMPatchUser(r.Context(), actorFrom(r), chi.URLParam(r, "user_id"), req)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, item)
+}
+
+func (s *Server) scimDeleteUser(w http.ResponseWriter, r *http.Request) {
+	item, err := s.cfg.Control.SCIMDeactivateUser(r.Context(), actorFrom(r), chi.URLParam(r, "user_id"))
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, item)
+}
+
+func (s *Server) scimListGroups(w http.ResponseWriter, r *http.Request) {
+	items, err := s.cfg.Control.SCIMListGroups(r.Context(), actorFrom(r), queryLimit(r))
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, scimListResponse(items))
+}
+
+func (s *Server) scimCreateGroup(w http.ResponseWriter, r *http.Request) {
+	var req app.SCIMGroupRequest
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	item, err := s.cfg.Control.SCIMCreateGroup(r.Context(), actorFrom(r), req)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, item)
+}
+
+func (s *Server) scimGetGroup(w http.ResponseWriter, r *http.Request) {
+	item, err := s.cfg.Control.SCIMGetGroup(r.Context(), actorFrom(r), chi.URLParam(r, "group_id"))
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, item)
+}
+
+func (s *Server) scimReplaceGroup(w http.ResponseWriter, r *http.Request) {
+	var req app.SCIMGroupRequest
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	req.ID = chi.URLParam(r, "group_id")
+	item, err := s.cfg.Control.SCIMReplaceGroup(r.Context(), actorFrom(r), req)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, item)
+}
+
+func (s *Server) scimPatchGroup(w http.ResponseWriter, r *http.Request) {
+	var req app.SCIMPatchRequest
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	item, err := s.cfg.Control.SCIMPatchGroup(r.Context(), actorFrom(r), chi.URLParam(r, "group_id"), req)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, item)
+}
+
+func (s *Server) scimDeleteGroup(w http.ResponseWriter, r *http.Request) {
+	item, err := s.cfg.Control.SCIMDeactivateGroup(r.Context(), actorFrom(r), chi.URLParam(r, "group_id"))
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, item)
+}
+
+func (s *Server) createRoleBinding(w http.ResponseWriter, r *http.Request) {
+	var req app.CreateRoleBindingRequest
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	item, err := s.cfg.Control.CreateRoleBinding(r.Context(), actorFrom(r), req)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, item)
+}
+
+func (s *Server) listRoleBindings(w http.ResponseWriter, r *http.Request) {
+	items, err := s.cfg.Control.ListRoleBindings(r.Context(), actorFrom(r), queryLimit(r))
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, page(items))
+}
+
+func (s *Server) updateRoleBinding(w http.ResponseWriter, r *http.Request) {
+	var req app.UpdateRoleBindingRequest
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	item, err := s.cfg.Control.UpdateRoleBinding(r.Context(), actorFrom(r), chi.URLParam(r, "binding_id"), req)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, item)
+}
+
+func (s *Server) disableRoleBinding(w http.ResponseWriter, r *http.Request) {
+	var req app.StateChangeRequest
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	item, err := s.cfg.Control.DisableRoleBinding(r.Context(), actorFrom(r), chi.URLParam(r, "binding_id"), req)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, item)
+}
+
+func (s *Server) createAccessPolicyRule(w http.ResponseWriter, r *http.Request) {
+	var req app.CreateAccessPolicyRuleRequest
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	item, err := s.cfg.Control.CreateAccessPolicyRule(r.Context(), actorFrom(r), req)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, item)
+}
+
+func (s *Server) listAccessPolicyRules(w http.ResponseWriter, r *http.Request) {
+	items, err := s.cfg.Control.ListAccessPolicyRules(r.Context(), actorFrom(r), queryLimit(r))
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, page(items))
+}
+
+func (s *Server) updateAccessPolicyRule(w http.ResponseWriter, r *http.Request) {
+	var req app.UpdateAccessPolicyRuleRequest
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	item, err := s.cfg.Control.UpdateAccessPolicyRule(r.Context(), actorFrom(r), chi.URLParam(r, "policy_id"), req)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, item)
+}
+
+func (s *Server) disableAccessPolicyRule(w http.ResponseWriter, r *http.Request) {
+	var req app.StateChangeRequest
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	item, err := s.cfg.Control.DisableAccessPolicyRule(r.Context(), actorFrom(r), chi.URLParam(r, "policy_id"), req)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, item)
+}
+
+func (s *Server) authzExplain(w http.ResponseWriter, r *http.Request) {
+	var req app.AuthzExplainRequest
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	item, err := s.cfg.Control.ExplainAuthorization(r.Context(), actorFrom(r), req)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, item)
+}
+
 func (s *Server) createAlertRule(w http.ResponseWriter, r *http.Request) {
 	var req app.CreateAlertRuleRequest
 	if !decodeJSON(w, r, &req) {
@@ -1967,6 +2446,27 @@ func page[T any](items []T) map[string]any {
 		items = []T{}
 	}
 	return map[string]any{"data": items, "next_cursor": nil, "has_more": false}
+}
+
+func scimListResponse[T any](items []T) map[string]any {
+	if items == nil {
+		items = []T{}
+	}
+	return map[string]any{
+		"schemas":      []string{"urn:ietf:params:scim:api:messages:2.0:ListResponse"},
+		"totalResults": len(items),
+		"Resources":    items,
+		"startIndex":   1,
+		"itemsPerPage": len(items),
+	}
+}
+
+func remoteAddr(r *http.Request) string {
+	if forwarded := strings.TrimSpace(r.Header.Get("X-Forwarded-For")); forwarded != "" {
+		first, _, _ := strings.Cut(forwarded, ",")
+		return strings.TrimSpace(first)
+	}
+	return r.RemoteAddr
 }
 
 func formatPrometheus(metrics domain.OpsMetrics) string {

@@ -553,6 +553,49 @@ the signed HTTPS delivery succeeds. Failed deliveries retry from PostgreSQL
 state and leave the cursor unchanged, making the stream resumable without
 skipping audit-chain entries.
 
+## Enterprise Identity And Access
+
+Management API and UI access can use API keys or OIDC-backed sessions. API keys
+remain the bootstrap and break-glass path. OIDC identity providers are
+tenant-scoped resources managed through `/v1/identity-providers` and
+`whcp identity-providers`; reads require `security:read`, and create, update,
+test, or disable require `security:write`. Only Authorization Code + PKCE is
+implemented. Client secrets are encrypted at rest and never returned by API,
+CLI, or UI responses.
+
+The OIDC login flow starts at `/v1/auth/oidc/login?tenant_id=...&provider_id=...`
+and completes at `/v1/auth/oidc/callback`. The callback validates state, nonce,
+issuer, audience/client id, expiry, and the signed ID token before creating a
+hashed `webhookery_session` cookie. Session cookies are HttpOnly, SameSite=Lax,
+and marked Secure in production. Logout revokes the server-side session hash.
+Disabling an identity provider revokes active sessions created through that
+provider. SAML assertion processing is not implemented in this slice.
+
+SCIM provisioning is available at `/v1/scim/v2/Users` and
+`/v1/scim/v2/Groups`. SCIM bearer tokens are created through
+`/v1/scim-tokens` or `whcp scim-tokens create`, returned exactly once, and
+stored only as SHA-256 hashes with prefix/last4 metadata. SCIM delete requests
+deactivate users or groups instead of hard-deleting them. User deactivation
+disables memberships and active sessions while preserving historical users,
+memberships, audit events, and actor references.
+
+Resource-aware role bindings and access policy rules are available through
+`/v1/role-bindings`, `/v1/access-policies`, `whcp role-bindings`, and
+`whcp access-policies`. Existing fixed roles and scoped API keys remain the
+compatibility baseline. Role bindings can scope roles by principal, resource
+family, resource id, and environment. Access policy rules can explicitly allow
+or deny actions for resource families/environments; deny rules take precedence
+in explain output. `POST /v1/authz:explain` and `whcp authz explain` return a
+redacted policy decision containing matched role, role binding, policy rule,
+and reason without exposing sessions, provider tokens, secrets, or payload
+bodies.
+
+Emergency recovery remains API-key based: keep a tightly controlled owner or
+security-capable bootstrap/recovery key, rotate it after use, and audit every
+identity or access-control change. Production operators should rotate OIDC
+client secrets and SCIM tokens through the control API rather than editing
+database rows.
+
 ## SSRF Protection
 
 Customer endpoint URLs are treated as hostile input. Production endpoint

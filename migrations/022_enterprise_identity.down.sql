@@ -1,0 +1,11 @@
+DROP TABLE IF EXISTS authz_decision_logs;
+DROP TABLE IF EXISTS access_policy_rules;
+DROP TABLE IF EXISTS role_bindings;
+DROP TABLE IF EXISTS scim_group_memberships;
+DROP TABLE IF EXISTS scim_groups;
+DROP TABLE IF EXISTS scim_users;
+DROP TABLE IF EXISTS scim_tokens;
+DROP TABLE IF EXISTS auth_sessions;
+DROP TABLE IF EXISTS oidc_login_states;
+DROP TABLE IF EXISTS external_identities;
+DROP TABLE IF EXISTS identity_providers;

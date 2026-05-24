@@ -19,6 +19,25 @@ type Actor struct {
 	Scopes   []string
 }
 
+type Resource struct {
+	TenantID    string            `json:"tenant_id"`
+	Family      string            `json:"family"`
+	ID          string            `json:"id,omitempty"`
+	Environment string            `json:"environment,omitempty"`
+	Attributes  map[string]string `json:"attributes,omitempty"`
+}
+
+type Decision struct {
+	Allowed              bool     `json:"allowed"`
+	Action               string   `json:"action"`
+	Resource             Resource `json:"resource"`
+	Reason               string   `json:"reason"`
+	MatchedRole          string   `json:"matched_role,omitempty"`
+	MatchedRoleBindingID string   `json:"matched_role_binding_id,omitempty"`
+	MatchedPolicyRuleID  string   `json:"matched_policy_rule_id,omitempty"`
+	RequiredScopes       []string `json:"required_scopes,omitempty"`
+}
+
 func Can(actor Actor, scope string, resourceTenantID string) bool {
 	if actor.TenantID == "" || resourceTenantID == "" || actor.TenantID != resourceTenantID {
 		return false

@@ -735,7 +735,7 @@ func (s *ControlService) GetEndpoint(ctx context.Context, actor authz.Actor, end
 }
 
 func (s *ControlService) UpdateEndpoint(ctx context.Context, actor authz.Actor, endpointID string, req UpdateEndpointRequest) (domain.Endpoint, ssrf.Result, error) {
-	if !authz.Can(actor, "endpoints:write", actor.TenantID) {
+	if !s.authorized(ctx, actor, "endpoints:write", "endpoint", endpointID, "production") {
 		return domain.Endpoint{}, ssrf.Result{}, ErrForbidden
 	}
 	if strings.TrimSpace(endpointID) == "" || strings.TrimSpace(req.Reason) == "" {
@@ -1291,7 +1291,7 @@ func (s *ControlService) CheckEventSchemaCompatibility(ctx context.Context, acto
 }
 
 func (s *ControlService) RotateSourceSecret(ctx context.Context, actor authz.Actor, sourceID string, req RotateSourceSecretRequest) (domain.SourceSecretVersion, error) {
-	if !authz.Can(actor, "security:write", actor.TenantID) {
+	if !s.authorized(ctx, actor, "security:write", "source", sourceID, "") {
 		return domain.SourceSecretVersion{}, ErrForbidden
 	}
 	if strings.TrimSpace(sourceID) == "" || strings.TrimSpace(req.NewSecret) == "" || strings.TrimSpace(req.Reason) == "" {
@@ -1304,7 +1304,7 @@ func (s *ControlService) RotateSourceSecret(ctx context.Context, actor authz.Act
 }
 
 func (s *ControlService) RotateEndpointSecret(ctx context.Context, actor authz.Actor, endpointID string, req RotateEndpointSecretRequest) (domain.EndpointSecretVersion, error) {
-	if !authz.Can(actor, "security:write", actor.TenantID) {
+	if !s.authorized(ctx, actor, "security:write", "endpoint", endpointID, "") {
 		return domain.EndpointSecretVersion{}, ErrForbidden
 	}
 	if strings.TrimSpace(endpointID) == "" || strings.TrimSpace(req.Reason) == "" {
@@ -1331,7 +1331,7 @@ func (s *ControlService) GetEvent(ctx context.Context, actor authz.Actor, eventI
 }
 
 func (s *ControlService) GetRawPayload(ctx context.Context, actor authz.Actor, eventID string) (domain.RawPayload, error) {
-	if !authz.Can(actor, "events:raw", actor.TenantID) {
+	if !s.authorized(ctx, actor, "events:raw", "event", eventID, "") {
 		return domain.RawPayload{}, ErrForbidden
 	}
 	return s.store.GetRawPayload(ctx, actor.TenantID, eventID, actor.ID)
@@ -1341,7 +1341,7 @@ func (s *ControlService) GetNormalizedEvent(ctx context.Context, actor authz.Act
 	if !authz.Can(actor, "events:read", actor.TenantID) {
 		return domain.NormalizedEnvelope{}, ErrForbidden
 	}
-	if includeData && !authz.Can(actor, "events:raw", actor.TenantID) {
+	if includeData && !s.authorized(ctx, actor, "events:raw", "event", eventID, "") {
 		return domain.NormalizedEnvelope{}, ErrForbidden
 	}
 	return s.store.GetNormalizedEvent(ctx, actor.TenantID, eventID, actor.ID, includeData)
@@ -1544,7 +1544,7 @@ func (s *ControlService) AcknowledgeAlertFiring(ctx context.Context, actor authz
 }
 
 func (s *ControlService) CreateNotificationChannel(ctx context.Context, actor authz.Actor, req CreateNotificationChannelRequest) (domain.NotificationChannel, ssrf.Result, error) {
-	if !authz.Can(actor, "ops:write", actor.TenantID) {
+	if !s.authorized(ctx, actor, "ops:write", "notification_channel", "", "") {
 		return domain.NotificationChannel{}, ssrf.Result{}, ErrForbidden
 	}
 	if err := normalizeCreateNotificationChannel(&req); err != nil {
@@ -1577,7 +1577,7 @@ func (s *ControlService) GetNotificationChannel(ctx context.Context, actor authz
 }
 
 func (s *ControlService) UpdateNotificationChannel(ctx context.Context, actor authz.Actor, channelID string, req UpdateNotificationChannelRequest) (domain.NotificationChannel, ssrf.Result, error) {
-	if !authz.Can(actor, "ops:write", actor.TenantID) {
+	if !s.authorized(ctx, actor, "ops:write", "notification_channel", channelID, "") {
 		return domain.NotificationChannel{}, ssrf.Result{}, ErrForbidden
 	}
 	if strings.TrimSpace(channelID) == "" || strings.TrimSpace(req.Reason) == "" {
@@ -1599,7 +1599,7 @@ func (s *ControlService) UpdateNotificationChannel(ctx context.Context, actor au
 }
 
 func (s *ControlService) DeleteNotificationChannel(ctx context.Context, actor authz.Actor, channelID string, req StateChangeRequest) (domain.NotificationChannel, error) {
-	if !authz.Can(actor, "ops:write", actor.TenantID) {
+	if !s.authorized(ctx, actor, "ops:write", "notification_channel", channelID, "") {
 		return domain.NotificationChannel{}, ErrForbidden
 	}
 	if strings.TrimSpace(channelID) == "" || strings.TrimSpace(req.Reason) == "" {
@@ -1609,7 +1609,7 @@ func (s *ControlService) DeleteNotificationChannel(ctx context.Context, actor au
 }
 
 func (s *ControlService) TestNotificationChannel(ctx context.Context, actor authz.Actor, channelID string, req StateChangeRequest) (domain.NotificationDelivery, error) {
-	if !authz.Can(actor, "ops:write", actor.TenantID) {
+	if !s.authorized(ctx, actor, "ops:write", "notification_channel", channelID, "") {
 		return domain.NotificationDelivery{}, ErrForbidden
 	}
 	if strings.TrimSpace(channelID) == "" || strings.TrimSpace(req.Reason) == "" {
@@ -1658,7 +1658,7 @@ func (s *ControlService) RetryNotificationDelivery(ctx context.Context, actor au
 }
 
 func (s *ControlService) CreateSIEMSink(ctx context.Context, actor authz.Actor, req CreateSIEMSinkRequest) (domain.SIEMSink, ssrf.Result, error) {
-	if !authz.Can(actor, "security:write", actor.TenantID) {
+	if !s.authorized(ctx, actor, "security:write", "siem_sink", "", "") {
 		return domain.SIEMSink{}, ssrf.Result{}, ErrForbidden
 	}
 	if err := normalizeCreateSIEMSink(&req); err != nil {
@@ -1691,7 +1691,7 @@ func (s *ControlService) GetSIEMSink(ctx context.Context, actor authz.Actor, sin
 }
 
 func (s *ControlService) UpdateSIEMSink(ctx context.Context, actor authz.Actor, sinkID string, req UpdateSIEMSinkRequest) (domain.SIEMSink, ssrf.Result, error) {
-	if !authz.Can(actor, "security:write", actor.TenantID) {
+	if !s.authorized(ctx, actor, "security:write", "siem_sink", sinkID, "") {
 		return domain.SIEMSink{}, ssrf.Result{}, ErrForbidden
 	}
 	if strings.TrimSpace(sinkID) == "" || strings.TrimSpace(req.Reason) == "" {
@@ -1713,7 +1713,7 @@ func (s *ControlService) UpdateSIEMSink(ctx context.Context, actor authz.Actor, 
 }
 
 func (s *ControlService) DeleteSIEMSink(ctx context.Context, actor authz.Actor, sinkID string, req StateChangeRequest) (domain.SIEMSink, error) {
-	if !authz.Can(actor, "security:write", actor.TenantID) {
+	if !s.authorized(ctx, actor, "security:write", "siem_sink", sinkID, "") {
 		return domain.SIEMSink{}, ErrForbidden
 	}
 	if strings.TrimSpace(sinkID) == "" || strings.TrimSpace(req.Reason) == "" {
@@ -1723,7 +1723,7 @@ func (s *ControlService) DeleteSIEMSink(ctx context.Context, actor authz.Actor, 
 }
 
 func (s *ControlService) TestSIEMSink(ctx context.Context, actor authz.Actor, sinkID string, req StateChangeRequest) (domain.SIEMDelivery, error) {
-	if !authz.Can(actor, "security:write", actor.TenantID) {
+	if !s.authorized(ctx, actor, "security:write", "siem_sink", sinkID, "") {
 		return domain.SIEMDelivery{}, ErrForbidden
 	}
 	if strings.TrimSpace(sinkID) == "" || strings.TrimSpace(req.Reason) == "" {
@@ -1782,7 +1782,7 @@ func (s *ControlService) DryRunReplay(ctx context.Context, actor authz.Actor, re
 }
 
 func (s *ControlService) CreateReplay(ctx context.Context, actor authz.Actor, req ReplayRequest) (ReplayJob, error) {
-	if !authz.Can(actor, "replay:write", actor.TenantID) {
+	if !s.authorized(ctx, actor, "replay:write", "replay", req.EventID, "") {
 		return ReplayJob{}, ErrForbidden
 	}
 	req.Reason = strings.TrimSpace(req.Reason)
@@ -2050,7 +2050,7 @@ func (s *ControlService) CreateAuditExport(ctx context.Context, actor authz.Acto
 	if !authz.Can(actor, "audit:read", actor.TenantID) {
 		return domain.EvidenceExport{}, ErrForbidden
 	}
-	if (req.IncludeRawPayloads || req.IncludePayloadBodies) && !authz.Can(actor, "events:raw", actor.TenantID) {
+	if (req.IncludeRawPayloads || req.IncludePayloadBodies) && !s.authorized(ctx, actor, "events:raw", "audit_export", "", "") {
 		return domain.EvidenceExport{}, ErrForbidden
 	}
 	if !req.From.IsZero() && !req.To.IsZero() && req.From.After(req.To) {
@@ -2128,7 +2128,7 @@ func (s *ControlService) ListAuditExports(ctx context.Context, actor authz.Actor
 	if err != nil {
 		return nil, err
 	}
-	if !authz.Can(actor, "events:raw", actor.TenantID) {
+	if !s.authorized(ctx, actor, "events:raw", "audit_export", "", "") {
 		filtered := exports[:0]
 		for _, export := range exports {
 			if !export.IncludeRawPayloads && !export.IncludePayloadBodies {
@@ -2148,7 +2148,7 @@ func (s *ControlService) GetAuditExport(ctx context.Context, actor authz.Actor, 
 	if err != nil {
 		return domain.EvidenceExport{}, err
 	}
-	if (export.IncludeRawPayloads || export.IncludePayloadBodies) && !authz.Can(actor, "events:raw", actor.TenantID) {
+	if (export.IncludeRawPayloads || export.IncludePayloadBodies) && !s.authorized(ctx, actor, "events:raw", "audit_export", exportID, "") {
 		return domain.EvidenceExport{}, ErrForbidden
 	}
 	return export, nil
@@ -2162,7 +2162,7 @@ func (s *ControlService) DownloadAuditExport(ctx context.Context, actor authz.Ac
 	if err != nil {
 		return EvidenceExportDownload{}, err
 	}
-	if (export.IncludeRawPayloads || export.IncludePayloadBodies) && !authz.Can(actor, "events:raw", actor.TenantID) {
+	if (export.IncludeRawPayloads || export.IncludePayloadBodies) && !s.authorized(ctx, actor, "events:raw", "audit_export", exportID, "") {
 		return EvidenceExportDownload{}, ErrForbidden
 	}
 	download, err := s.store.DownloadAuditExport(ctx, actor.TenantID, exportID, actor.ID)
