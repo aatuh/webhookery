@@ -230,6 +230,45 @@ type ProducerAccessTokenCreateInput struct {
 	Token domain.ProducerAccessToken
 }
 
+type ProducerClientCreated struct {
+	Client       domain.ProducerClient `json:"client"`
+	ClientSecret string                `json:"client_secret"`
+}
+
+type ProducerClientSecretRotated struct {
+	Secret       domain.ProducerClientSecret `json:"secret"`
+	ClientSecret string                      `json:"client_secret"`
+}
+
+type CreateProducerClientRequest struct {
+	Name            string   `json:"name"`
+	SourceID        string   `json:"source_id,omitempty"`
+	Scopes          []string `json:"scopes,omitempty"`
+	TokenTTLSeconds int      `json:"token_ttl_seconds,omitempty"`
+}
+
+type UpdateProducerClientRequest struct {
+	Name            *string  `json:"name,omitempty"`
+	SourceID        *string  `json:"source_id,omitempty"`
+	Scopes          []string `json:"scopes,omitempty"`
+	TokenTTLSeconds *int     `json:"token_ttl_seconds,omitempty"`
+	State           *string  `json:"state,omitempty"`
+	Reason          string   `json:"reason"`
+}
+
+type RotateProducerClientSecretRequest struct {
+	Reason string `json:"reason"`
+}
+
+type producerClientStore interface {
+	CreateProducerClient(ctx context.Context, input ProducerClientCreateInput) (domain.ProducerClient, error)
+	ListProducerClients(ctx context.Context, tenantID string, limit int) ([]domain.ProducerClient, error)
+	GetProducerClient(ctx context.Context, tenantID, clientID string) (domain.ProducerClient, error)
+	UpdateProducerClient(ctx context.Context, tenantID, clientID, actorID string, req UpdateProducerClientRequest) (domain.ProducerClient, error)
+	DeleteProducerClient(ctx context.Context, tenantID, clientID, actorID, reason string) (domain.ProducerClient, error)
+	RotateProducerClientSecret(ctx context.Context, tenantID, clientID string, input ProducerClientSecretRotateInput) (domain.ProducerClientSecret, error)
+}
+
 type producerTokenStore interface {
 	AuthenticateProducerClient(ctx context.Context, clientID, secretHash string) (domain.ProducerClient, error)
 	CreateProducerAccessToken(ctx context.Context, input ProducerAccessTokenCreateInput) (domain.ProducerAccessToken, error)
@@ -685,6 +724,133 @@ func (s *ControlService) IssueProducerToken(ctx context.Context, clientID, clien
 		return ProducerTokenResponse{}, err
 	}
 	return ProducerTokenResponse{AccessToken: token, TokenType: "Bearer", ExpiresIn: ttl, Scope: "events:write"}, nil
+}
+
+func (s *ControlService) CreateProducerClient(ctx context.Context, actor authz.Actor, req CreateProducerClientRequest) (ProducerClientCreated, error) {
+	if !authz.Can(actor, "security:write", actor.TenantID) {
+		return ProducerClientCreated{}, ErrForbidden
+	}
+	store, ok := s.store.(producerClientStore)
+	if !ok {
+		return ProducerClientCreated{}, ErrNotFound
+	}
+	if err := normalizeCreateProducerClient(&req); err != nil {
+		return ProducerClientCreated{}, err
+	}
+	clientSecret, err := random.Token("whpcs", 32)
+	if err != nil {
+		return ProducerClientCreated{}, err
+	}
+	client, err := store.CreateProducerClient(ctx, ProducerClientCreateInput{
+		Client: domain.ProducerClient{
+			TenantID:        actor.TenantID,
+			Name:            req.Name,
+			SourceID:        req.SourceID,
+			Scopes:          req.Scopes,
+			TokenTTLSeconds: req.TokenTTLSeconds,
+			State:           domain.StateActive,
+			CreatedBy:       actor.ID,
+		},
+		Secret: domain.ProducerClientSecret{
+			Hash:   HashToken(clientSecret),
+			Prefix: tokenPrefix(clientSecret),
+			Last4:  tokenLast4(clientSecret),
+			State:  domain.StateActive,
+		},
+		ActorID: actor.ID,
+	})
+	if err != nil {
+		return ProducerClientCreated{}, err
+	}
+	return ProducerClientCreated{Client: client, ClientSecret: clientSecret}, nil
+}
+
+func (s *ControlService) ListProducerClients(ctx context.Context, actor authz.Actor, limit int) ([]domain.ProducerClient, error) {
+	if !authz.Can(actor, "security:read", actor.TenantID) {
+		return nil, ErrForbidden
+	}
+	store, ok := s.store.(producerClientStore)
+	if !ok {
+		return nil, ErrNotFound
+	}
+	return store.ListProducerClients(ctx, actor.TenantID, normalizeLimit(limit))
+}
+
+func (s *ControlService) GetProducerClient(ctx context.Context, actor authz.Actor, clientID string) (domain.ProducerClient, error) {
+	if !authz.Can(actor, "security:read", actor.TenantID) {
+		return domain.ProducerClient{}, ErrForbidden
+	}
+	if strings.TrimSpace(clientID) == "" {
+		return domain.ProducerClient{}, fmt.Errorf("%w: client_id is required", ErrInvalidInput)
+	}
+	store, ok := s.store.(producerClientStore)
+	if !ok {
+		return domain.ProducerClient{}, ErrNotFound
+	}
+	return store.GetProducerClient(ctx, actor.TenantID, clientID)
+}
+
+func (s *ControlService) UpdateProducerClient(ctx context.Context, actor authz.Actor, clientID string, req UpdateProducerClientRequest) (domain.ProducerClient, error) {
+	if !authz.Can(actor, "security:write", actor.TenantID) {
+		return domain.ProducerClient{}, ErrForbidden
+	}
+	if strings.TrimSpace(clientID) == "" || strings.TrimSpace(req.Reason) == "" {
+		return domain.ProducerClient{}, fmt.Errorf("%w: client_id and reason are required", ErrInvalidInput)
+	}
+	if err := normalizeUpdateProducerClient(&req); err != nil {
+		return domain.ProducerClient{}, err
+	}
+	store, ok := s.store.(producerClientStore)
+	if !ok {
+		return domain.ProducerClient{}, ErrNotFound
+	}
+	return store.UpdateProducerClient(ctx, actor.TenantID, clientID, actor.ID, req)
+}
+
+func (s *ControlService) DeleteProducerClient(ctx context.Context, actor authz.Actor, clientID string, req StateChangeRequest) (domain.ProducerClient, error) {
+	if !authz.Can(actor, "security:write", actor.TenantID) {
+		return domain.ProducerClient{}, ErrForbidden
+	}
+	if strings.TrimSpace(clientID) == "" || strings.TrimSpace(req.Reason) == "" {
+		return domain.ProducerClient{}, fmt.Errorf("%w: client_id and reason are required", ErrInvalidInput)
+	}
+	store, ok := s.store.(producerClientStore)
+	if !ok {
+		return domain.ProducerClient{}, ErrNotFound
+	}
+	return store.DeleteProducerClient(ctx, actor.TenantID, clientID, actor.ID, req.Reason)
+}
+
+func (s *ControlService) RotateProducerClientSecret(ctx context.Context, actor authz.Actor, clientID string, req RotateProducerClientSecretRequest) (ProducerClientSecretRotated, error) {
+	if !authz.Can(actor, "security:write", actor.TenantID) {
+		return ProducerClientSecretRotated{}, ErrForbidden
+	}
+	if strings.TrimSpace(clientID) == "" || strings.TrimSpace(req.Reason) == "" {
+		return ProducerClientSecretRotated{}, fmt.Errorf("%w: client_id and reason are required", ErrInvalidInput)
+	}
+	store, ok := s.store.(producerClientStore)
+	if !ok {
+		return ProducerClientSecretRotated{}, ErrNotFound
+	}
+	clientSecret, err := random.Token("whpcs", 32)
+	if err != nil {
+		return ProducerClientSecretRotated{}, err
+	}
+	secret, err := store.RotateProducerClientSecret(ctx, actor.TenantID, clientID, ProducerClientSecretRotateInput{
+		Secret: domain.ProducerClientSecret{
+			Hash:   HashToken(clientSecret),
+			Prefix: tokenPrefix(clientSecret),
+			Last4:  tokenLast4(clientSecret),
+			State:  domain.StateActive,
+		},
+		ActorID: actor.ID,
+		Reason:  req.Reason,
+	})
+	if err != nil {
+		return ProducerClientSecretRotated{}, err
+	}
+	secret.Hash = ""
+	return ProducerClientSecretRotated{Secret: secret, ClientSecret: clientSecret}, nil
 }
 
 func (s *ControlService) CreateSource(ctx context.Context, actor authz.Actor, req CreateSourceRequest) (domain.Source, error) {
@@ -2816,6 +2982,74 @@ func normalizeScopes(scopes []string) []string {
 		out = append(out, scope)
 	}
 	return out
+}
+
+func normalizeCreateProducerClient(req *CreateProducerClientRequest) error {
+	req.Name = strings.TrimSpace(req.Name)
+	req.SourceID = strings.TrimSpace(req.SourceID)
+	if req.Name == "" {
+		return fmt.Errorf("%w: name is required", ErrInvalidInput)
+	}
+	scopes, err := normalizeProducerScopes(req.Scopes)
+	if err != nil {
+		return err
+	}
+	req.Scopes = scopes
+	if req.TokenTTLSeconds == 0 {
+		req.TokenTTLSeconds = 900
+	}
+	if req.TokenTTLSeconds < 60 || req.TokenTTLSeconds > 3600 {
+		return fmt.Errorf("%w: token_ttl_seconds must be between 60 and 3600", ErrInvalidInput)
+	}
+	return nil
+}
+
+func normalizeUpdateProducerClient(req *UpdateProducerClientRequest) error {
+	if req.Name == nil && req.SourceID == nil && req.Scopes == nil && req.TokenTTLSeconds == nil && req.State == nil {
+		return fmt.Errorf("%w: at least one producer client field is required", ErrInvalidInput)
+	}
+	if req.Name != nil {
+		name := strings.TrimSpace(*req.Name)
+		if name == "" {
+			return fmt.Errorf("%w: name cannot be empty", ErrInvalidInput)
+		}
+		req.Name = &name
+	}
+	if req.SourceID != nil {
+		sourceID := strings.TrimSpace(*req.SourceID)
+		req.SourceID = &sourceID
+	}
+	if req.Scopes != nil {
+		scopes, err := normalizeProducerScopes(req.Scopes)
+		if err != nil {
+			return err
+		}
+		req.Scopes = scopes
+	}
+	if req.TokenTTLSeconds != nil && (*req.TokenTTLSeconds < 60 || *req.TokenTTLSeconds > 3600) {
+		return fmt.Errorf("%w: token_ttl_seconds must be between 60 and 3600", ErrInvalidInput)
+	}
+	if req.State != nil {
+		state := strings.TrimSpace(*req.State)
+		if state != domain.StateActive && state != domain.StateDisabled {
+			return fmt.Errorf("%w: state must be active or disabled", ErrInvalidInput)
+		}
+		req.State = &state
+	}
+	return nil
+}
+
+func normalizeProducerScopes(scopes []string) ([]string, error) {
+	out := normalizeScopes(scopes)
+	if len(out) == 0 {
+		out = []string{"events:write"}
+	}
+	for _, scope := range out {
+		if scope != "events:write" {
+			return nil, fmt.Errorf("%w: producer clients may only request events:write", ErrInvalidInput)
+		}
+	}
+	return out, nil
 }
 
 func containsScope(scopes []string, want string) bool {

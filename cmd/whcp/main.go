@@ -56,6 +56,8 @@ func run(args []string) error {
 		return runAdmin(args[1:])
 	case "api-keys":
 		return runAPIKeys(args[1:])
+	case "producer-clients":
+		return runProducerClients(args[1:])
 	case "identity-providers":
 		return runIdentityProviders(args[1:])
 	case "scim-tokens":
@@ -120,7 +122,7 @@ func run(args []string) error {
 }
 
 func usage() error {
-	return fmt.Errorf("usage: whcp <api|worker|scheduler|migrate|admin|api-keys|identity-providers|scim-tokens|role-bindings|access-policies|authz|events|sources|provider-connections|adapters|endpoints|subscriptions|retry-policies|routes|transformations|deliveries|replay-jobs|reconciliation-jobs|ops|alerts|notification-channels|notification-deliveries|siem-sinks|siem-deliveries|audit|retention|schemas|dead-letter|quarantine|signatures>")
+	return fmt.Errorf("usage: whcp <api|worker|scheduler|migrate|admin|api-keys|producer-clients|identity-providers|scim-tokens|role-bindings|access-policies|authz|events|sources|provider-connections|adapters|endpoints|subscriptions|retry-policies|routes|transformations|deliveries|replay-jobs|reconciliation-jobs|ops|alerts|notification-channels|notification-deliveries|siem-sinks|siem-deliveries|audit|retention|schemas|dead-letter|quarantine|signatures>")
 }
 
 func runAPI() error {
@@ -270,6 +272,74 @@ func runAPIKeys(args []string) error {
 		return postJSON(*baseURL, *apiKey, "/v1/api-keys/"+url.PathEscape(*keyID)+":revoke", map[string]string{"reason": *reason})
 	default:
 		return fmt.Errorf("usage: whcp api-keys <create|list|revoke>")
+	}
+}
+
+func runProducerClients(args []string) error {
+	if len(args) == 0 {
+		return fmt.Errorf("usage: whcp producer-clients <list|get|create|update|disable|rotate-secret>")
+	}
+	fs := flag.NewFlagSet("producer-clients "+args[0], flag.ContinueOnError)
+	baseURL := fs.String("base-url", "http://localhost:8080", "API base URL")
+	apiKey := fs.String("api-key", os.Getenv("WEBHOOKERY_API_KEY"), "API key")
+	clientID := fs.String("client-id", "", "producer client id")
+	name := fs.String("name", "", "producer client name")
+	sourceID := fs.String("source-id", "", "optional bound source id")
+	scopes := fs.String("scopes", "events:write", "comma-separated scopes")
+	ttl := fs.Int("token-ttl-seconds", 900, "producer access token TTL in seconds")
+	state := fs.String("state", "", "active or disabled")
+	reason := fs.String("reason", "", "operator reason")
+	if err := fs.Parse(args[1:]); err != nil {
+		return err
+	}
+	switch args[0] {
+	case "list":
+		return getJSON(*baseURL, *apiKey, "/v1/producer-clients")
+	case "get":
+		if strings.TrimSpace(*clientID) == "" {
+			return fmt.Errorf("client-id is required")
+		}
+		return getJSON(*baseURL, *apiKey, "/v1/producer-clients/"+url.PathEscape(*clientID))
+	case "create":
+		return postJSON(*baseURL, *apiKey, "/v1/producer-clients", map[string]any{
+			"name":              *name,
+			"source_id":         *sourceID,
+			"scopes":            splitCSV(*scopes),
+			"token_ttl_seconds": *ttl,
+		})
+	case "update":
+		if strings.TrimSpace(*clientID) == "" {
+			return fmt.Errorf("client-id is required")
+		}
+		body := map[string]any{"reason": *reason}
+		if strings.TrimSpace(*name) != "" {
+			body["name"] = *name
+		}
+		if strings.TrimSpace(*sourceID) != "" {
+			body["source_id"] = *sourceID
+		}
+		if strings.TrimSpace(*scopes) != "" {
+			body["scopes"] = splitCSV(*scopes)
+		}
+		if *ttl != 900 {
+			body["token_ttl_seconds"] = *ttl
+		}
+		if strings.TrimSpace(*state) != "" {
+			body["state"] = *state
+		}
+		return patchJSON(*baseURL, *apiKey, "/v1/producer-clients/"+url.PathEscape(*clientID), body)
+	case "disable":
+		if strings.TrimSpace(*clientID) == "" {
+			return fmt.Errorf("client-id is required")
+		}
+		return deleteJSON(*baseURL, *apiKey, "/v1/producer-clients/"+url.PathEscape(*clientID), map[string]string{"reason": *reason})
+	case "rotate-secret":
+		if strings.TrimSpace(*clientID) == "" {
+			return fmt.Errorf("client-id is required")
+		}
+		return postJSON(*baseURL, *apiKey, "/v1/producer-clients/"+url.PathEscape(*clientID)+"/secrets:rotate", map[string]string{"reason": *reason})
+	default:
+		return fmt.Errorf("usage: whcp producer-clients <list|get|create|update|disable|rotate-secret>")
 	}
 }
 

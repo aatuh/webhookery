@@ -151,6 +151,19 @@ func TestProductEventsRejectSourceBoundProducerMismatch(t *testing.T) {
 	}
 }
 
+func TestProducerClientCreateRequiresSecurityWrite(t *testing.T) {
+	server := testServerWithActor(authz.Actor{ID: "usr_1", TenantID: "ten_1", Role: authz.RoleAuditor, Scopes: []string{"security:read"}})
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/v1/producer-clients", strings.NewReader(`{"name":"billing","scopes":["events:write"]}`))
+	req.Header.Set("Authorization", "Bearer token")
+
+	server.Routes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("expected 403, got %d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
 func TestPrometheusMetricsDoesNotRequireBearer(t *testing.T) {
 	server := NewServer(ServerConfig{
 		Control: NewNoopControl(),

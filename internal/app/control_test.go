@@ -688,6 +688,39 @@ func TestControlServiceSecretRotationRequiresSecurityWrite(t *testing.T) {
 	}
 }
 
+func TestControlServiceProducerClientsRequireSecurityWriteAndRedactSecrets(t *testing.T) {
+	store := &fakeControlStore{}
+	svc := NewControlService(store, ssrf.Validator{Resolver: ssrf.StaticResolver{}})
+	reader := authz.Actor{ID: "usr_1", TenantID: "ten_a", Role: authz.RoleAuditor, Scopes: []string{"security:read"}}
+	security := authz.Actor{ID: "usr_2", TenantID: "ten_a", Role: authz.RoleSecurity, Scopes: []string{"security:write", "security:read"}}
+
+	_, err := svc.CreateProducerClient(context.Background(), reader, CreateProducerClientRequest{Name: "billing", Scopes: []string{"events:write"}})
+	if err != ErrForbidden {
+		t.Fatalf("expected forbidden producer client create, got %v", err)
+	}
+	created, err := svc.CreateProducerClient(context.Background(), security, CreateProducerClientRequest{Name: "billing", SourceID: "src_1", Scopes: []string{"events:write"}, TokenTTLSeconds: 900})
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := json.Marshal(created.Client)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if created.ClientSecret == "" || created.Client.TenantID != "ten_a" || store.producerClientTenantID != "ten_a" || store.producerClientActorID != "usr_2" {
+		t.Fatalf("expected tenant-scoped producer client with one-time secret, created=%+v tenant=%q actor=%q", created, store.producerClientTenantID, store.producerClientActorID)
+	}
+	if store.producerClientInput.Secret.Hash == "" || strings.Contains(string(raw), store.producerClientInput.Secret.Hash) || strings.Contains(string(raw), created.ClientSecret) {
+		t.Fatalf("producer client response exposed credential material: json=%s input=%+v", raw, store.producerClientInput)
+	}
+	rotated, err := svc.RotateProducerClientSecret(context.Background(), security, "pcl_1", RotateProducerClientSecretRequest{Reason: "rotation"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rotated.ClientSecret == "" || rotated.Secret.Hash != "" || store.producerClientReason != "rotation" {
+		t.Fatalf("expected secret rotation metadata without hash, rotated=%+v reason=%q", rotated, store.producerClientReason)
+	}
+}
+
 func TestControlServiceRetryPolicyValidation(t *testing.T) {
 	store := &fakeControlStore{}
 	svc := NewControlService(store, ssrf.Validator{Resolver: ssrf.StaticResolver{}})
@@ -1230,6 +1263,10 @@ type fakeControlStore struct {
 	auditExportDownloaded      bool
 	auditExports               []domain.EvidenceExport
 	apiKeyInput                APIKeyCreateInput
+	producerClientTenantID     string
+	producerClientActorID      string
+	producerClientReason       string
+	producerClientInput        ProducerClientCreateInput
 	eventSchema                domain.EventSchema
 	schemaTenantID             string
 	schemaReason               string
@@ -1284,6 +1321,41 @@ func (f *fakeControlStore) ListAPIKeys(context.Context, string, int) ([]domain.A
 }
 func (f *fakeControlStore) RevokeAPIKey(context.Context, string, string, string, string) (domain.APIKey, error) {
 	return domain.APIKey{}, nil
+}
+func (f *fakeControlStore) CreateProducerClient(_ context.Context, input ProducerClientCreateInput) (domain.ProducerClient, error) {
+	f.producerClientInput = input
+	f.producerClientTenantID = input.Client.TenantID
+	f.producerClientActorID = input.ActorID
+	input.Client.ID = "pcl_1"
+	return input.Client, nil
+}
+func (f *fakeControlStore) ListProducerClients(context.Context, string, int) ([]domain.ProducerClient, error) {
+	return nil, nil
+}
+func (f *fakeControlStore) GetProducerClient(_ context.Context, tenantID, clientID string) (domain.ProducerClient, error) {
+	f.producerClientTenantID = tenantID
+	return domain.ProducerClient{ID: clientID, TenantID: tenantID, Name: "producer", Scopes: []string{"events:write"}, TokenTTLSeconds: 900, State: domain.StateActive}, nil
+}
+func (f *fakeControlStore) UpdateProducerClient(_ context.Context, tenantID, clientID, actorID string, req UpdateProducerClientRequest) (domain.ProducerClient, error) {
+	f.producerClientTenantID = tenantID
+	f.producerClientActorID = actorID
+	f.producerClientReason = req.Reason
+	return domain.ProducerClient{ID: clientID, TenantID: tenantID, Name: "producer", Scopes: []string{"events:write"}, TokenTTLSeconds: 900, State: domain.StateActive}, nil
+}
+func (f *fakeControlStore) DeleteProducerClient(_ context.Context, tenantID, clientID, actorID, reason string) (domain.ProducerClient, error) {
+	f.producerClientTenantID = tenantID
+	f.producerClientActorID = actorID
+	f.producerClientReason = reason
+	return domain.ProducerClient{ID: clientID, TenantID: tenantID, Name: "producer", Scopes: []string{"events:write"}, TokenTTLSeconds: 900, State: domain.StateDisabled}, nil
+}
+func (f *fakeControlStore) RotateProducerClientSecret(_ context.Context, tenantID, clientID string, input ProducerClientSecretRotateInput) (domain.ProducerClientSecret, error) {
+	f.producerClientTenantID = tenantID
+	f.producerClientActorID = input.ActorID
+	f.producerClientReason = input.Reason
+	input.Secret.ID = "pcs_1"
+	input.Secret.TenantID = tenantID
+	input.Secret.ClientID = clientID
+	return input.Secret, nil
 }
 func (f *fakeControlStore) CreateSource(context.Context, domain.Source) (domain.Source, error) {
 	return domain.Source{}, nil

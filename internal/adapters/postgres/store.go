@@ -478,6 +478,103 @@ func (s *Store) GetProducerClient(ctx context.Context, tenantID, clientID string
 	return item, err
 }
 
+func (s *Store) UpdateProducerClient(ctx context.Context, tenantID, clientID, actorID string, req app.UpdateProducerClientRequest) (domain.ProducerClient, error) {
+	current, err := s.GetProducerClient(ctx, tenantID, clientID)
+	if err != nil {
+		return domain.ProducerClient{}, err
+	}
+	if req.Name != nil {
+		current.Name = *req.Name
+	}
+	if req.SourceID != nil {
+		current.SourceID = *req.SourceID
+	}
+	if req.Scopes != nil {
+		current.Scopes = req.Scopes
+	}
+	if req.TokenTTLSeconds != nil {
+		current.TokenTTLSeconds = *req.TokenTTLSeconds
+	}
+	if req.State != nil {
+		current.State = *req.State
+	}
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return domain.ProducerClient{}, err
+	}
+	defer rollback(ctx, tx)
+	if current.SourceID != "" {
+		var exists bool
+		if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM sources WHERE tenant_id=$1 AND id=$2)`, tenantID, current.SourceID).Scan(&exists); err != nil {
+			return domain.ProducerClient{}, err
+		}
+		if !exists {
+			return domain.ProducerClient{}, app.ErrNotFound
+		}
+	}
+	err = tx.QueryRow(ctx, `
+		UPDATE producer_clients
+		SET name=$3, source_id=NULLIF($4,''), scopes=$5, token_ttl_seconds=$6, state=$7, updated_at=now(), disabled_at=CASE WHEN $7='disabled' THEN COALESCE(disabled_at, now()) ELSE NULL END
+		WHERE tenant_id=$1 AND id=$2
+		RETURNING id, tenant_id, name, COALESCE(source_id,''), scopes, token_ttl_seconds, state, created_by, created_at, updated_at, COALESCE(disabled_at, 'epoch'::timestamptz)`,
+		tenantID, clientID, current.Name, current.SourceID, current.Scopes, current.TokenTTLSeconds, current.State,
+	).Scan(&current.ID, &current.TenantID, &current.Name, &current.SourceID, &current.Scopes, &current.TokenTTLSeconds, &current.State, &current.CreatedBy, &current.CreatedAt, &current.UpdatedAt, &current.DisabledAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return domain.ProducerClient{}, app.ErrNotFound
+	}
+	if err != nil {
+		return domain.ProducerClient{}, err
+	}
+	if current.DisabledAt.Equal(time.Unix(0, 0).UTC()) {
+		current.DisabledAt = time.Time{}
+	}
+	if _, err := recordAuditEventTx(ctx, tx, auditEventInput{TenantID: tenantID, ActorID: actorID, Action: "producer_client.updated", Resource: "producer_client", ResourceID: clientID, Reason: req.Reason}); err != nil {
+		return domain.ProducerClient{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return domain.ProducerClient{}, err
+	}
+	return current, nil
+}
+
+func (s *Store) DeleteProducerClient(ctx context.Context, tenantID, clientID, actorID, reason string) (domain.ProducerClient, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return domain.ProducerClient{}, err
+	}
+	defer rollback(ctx, tx)
+	var item domain.ProducerClient
+	err = tx.QueryRow(ctx, `
+		UPDATE producer_clients
+		SET state='disabled', disabled_at=COALESCE(disabled_at, now()), updated_at=now()
+		WHERE tenant_id=$1 AND id=$2
+		RETURNING id, tenant_id, name, COALESCE(source_id,''), scopes, token_ttl_seconds, state, created_by, created_at, updated_at, COALESCE(disabled_at, 'epoch'::timestamptz)`,
+		tenantID, clientID,
+	).Scan(&item.ID, &item.TenantID, &item.Name, &item.SourceID, &item.Scopes, &item.TokenTTLSeconds, &item.State, &item.CreatedBy, &item.CreatedAt, &item.UpdatedAt, &item.DisabledAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return domain.ProducerClient{}, app.ErrNotFound
+	}
+	if err != nil {
+		return domain.ProducerClient{}, err
+	}
+	if _, err := tx.Exec(ctx, `UPDATE producer_client_secrets SET state='revoked', revoked_at=COALESCE(revoked_at, now()) WHERE tenant_id=$1 AND client_id=$2 AND state <> 'revoked'`, tenantID, clientID); err != nil {
+		return domain.ProducerClient{}, err
+	}
+	if _, err := tx.Exec(ctx, `UPDATE producer_access_tokens SET state='revoked', revoked_at=COALESCE(revoked_at, now()) WHERE tenant_id=$1 AND client_id=$2 AND state <> 'revoked'`, tenantID, clientID); err != nil {
+		return domain.ProducerClient{}, err
+	}
+	if item.DisabledAt.Equal(time.Unix(0, 0).UTC()) {
+		item.DisabledAt = time.Time{}
+	}
+	if _, err := recordAuditEventTx(ctx, tx, auditEventInput{TenantID: tenantID, ActorID: actorID, Action: "producer_client.disabled", Resource: "producer_client", ResourceID: clientID, Reason: reason}); err != nil {
+		return domain.ProducerClient{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return domain.ProducerClient{}, err
+	}
+	return item, nil
+}
+
 func (s *Store) RotateProducerClientSecret(ctx context.Context, tenantID, clientID string, input app.ProducerClientSecretRotateInput) (domain.ProducerClientSecret, error) {
 	secret := input.Secret
 	if secret.ID == "" {

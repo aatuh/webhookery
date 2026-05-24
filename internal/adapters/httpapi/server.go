@@ -109,6 +109,12 @@ func (s *Server) Routes() http.Handler {
 			r.Get("/api-keys", s.listAPIKeys)
 			r.Post("/api-keys", s.createAPIKey)
 			r.Post("/api-keys/{api_key_id}:revoke", s.revokeAPIKey)
+			r.Get("/producer-clients", s.listProducerClients)
+			r.Post("/producer-clients", s.createProducerClient)
+			r.Get("/producer-clients/{client_id}", s.getProducerClient)
+			r.Patch("/producer-clients/{client_id}", s.updateProducerClient)
+			r.Delete("/producer-clients/{client_id}", s.deleteProducerClient)
+			r.Post("/producer-clients/{client_id}/secrets:rotate", s.rotateProducerClientSecret)
 			r.Get("/sources", s.listSources)
 			r.Post("/sources", s.createSource)
 			r.Get("/sources/{source_id}", s.getSource)
@@ -426,6 +432,76 @@ func (s *Server) issueOAuthToken(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Pragma", "no-cache")
 	writeJSON(w, http.StatusOK, result)
+}
+
+func (s *Server) createProducerClient(w http.ResponseWriter, r *http.Request) {
+	var req app.CreateProducerClientRequest
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	item, err := s.cfg.Control.CreateProducerClient(r.Context(), actorFrom(r), req)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, item)
+}
+
+func (s *Server) listProducerClients(w http.ResponseWriter, r *http.Request) {
+	items, err := s.cfg.Control.ListProducerClients(r.Context(), actorFrom(r), queryLimit(r))
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, page(items))
+}
+
+func (s *Server) getProducerClient(w http.ResponseWriter, r *http.Request) {
+	item, err := s.cfg.Control.GetProducerClient(r.Context(), actorFrom(r), chi.URLParam(r, "client_id"))
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, item)
+}
+
+func (s *Server) updateProducerClient(w http.ResponseWriter, r *http.Request) {
+	var req app.UpdateProducerClientRequest
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	item, err := s.cfg.Control.UpdateProducerClient(r.Context(), actorFrom(r), chi.URLParam(r, "client_id"), req)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, item)
+}
+
+func (s *Server) deleteProducerClient(w http.ResponseWriter, r *http.Request) {
+	var req app.StateChangeRequest
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	item, err := s.cfg.Control.DeleteProducerClient(r.Context(), actorFrom(r), chi.URLParam(r, "client_id"), req)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, item)
+}
+
+func (s *Server) rotateProducerClientSecret(w http.ResponseWriter, r *http.Request) {
+	var req app.RotateProducerClientSecretRequest
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	item, err := s.cfg.Control.RotateProducerClientSecret(r.Context(), actorFrom(r), chi.URLParam(r, "client_id"), req)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, item)
 }
 
 func (s *Server) createSource(w http.ResponseWriter, r *http.Request) {

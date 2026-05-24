@@ -54,6 +54,7 @@ var indexTemplate = template.Must(template.New("index").Parse(`<!doctype html>
   <script>
     const resources = [
       ["sources", "/v1/sources"],
+      ["producer clients", "/v1/producer-clients"],
       ["provider connections", "/v1/provider-connections"],
       ["adapters", "/v1/adapters"],
       ["endpoints", "/v1/endpoints"],
