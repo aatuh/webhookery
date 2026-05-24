@@ -151,14 +151,26 @@ func TestRCE2EProviderIngestToSignedDelivery(t *testing.T) {
 		t.Fatalf("list deliveries: %v", err)
 	}
 	foundDelivery := false
+	deliveryID := ""
 	for _, item := range deliveries {
 		if item.EventID == result.EventID && item.State == "succeeded" && item.DeliveryPayloadID != "" && item.DeliveryPayloadSHA256 != "" {
 			foundDelivery = true
+			deliveryID = item.ID
 			break
 		}
 	}
 	if !foundDelivery {
 		t.Fatalf("expected succeeded delivery with payload evidence for event %s: %+v", result.EventID, deliveries)
+	}
+	attempts, err := control.ListDeliveryAttempts(ctx, actor, deliveryID, 10)
+	if err != nil {
+		t.Fatalf("list delivery attempts: %v", err)
+	}
+	if len(attempts) != 1 {
+		t.Fatalf("expected one delivery attempt, got %d: %+v", len(attempts), attempts)
+	}
+	if attempts[0].State != "succeeded" || attempts[0].ResponseStatus != http.StatusAccepted || attempts[0].RequestSHA256 == "" || attempts[0].ResponseSHA256 == "" {
+		t.Fatalf("expected succeeded attempt with request/response hashes: %+v", attempts[0])
 	}
 
 	timeline, err := control.ListEventTimeline(ctx, actor, result.EventID, 50)
@@ -166,6 +178,13 @@ func TestRCE2EProviderIngestToSignedDelivery(t *testing.T) {
 		t.Fatalf("list event timeline: %v", err)
 	}
 	assertTimelineKinds(t, timeline, "event", "receipt", "normalized", "delivery", "delivery_payload", "attempt")
+	auditEvents, err := control.ListAuditEvents(ctx, actor, 50)
+	if err != nil {
+		t.Fatalf("list audit events: %v", err)
+	}
+	if !containsAuditAction(auditEvents, "source.created") || !containsAuditAction(auditEvents, "endpoint.created") || !containsAuditAction(auditEvents, "route.created") {
+		t.Fatalf("expected setup audit evidence for source, endpoint, and route: %+v", auditEvents)
+	}
 
 	otherTenant := authz.Actor{ID: "usr_other", TenantID: actor.TenantID + "_other", Role: authz.RoleOwner, Scopes: []string{"*"}}
 	if _, err := control.GetEvent(ctx, otherTenant, result.EventID); !errors.Is(err, app.ErrNotFound) {
@@ -341,6 +360,15 @@ func containsKind(items []map[string]any, kind string) bool {
 func containsTimelineRef(items []map[string]any, ref, key string) bool {
 	for _, item := range items {
 		if item[key] == ref {
+			return true
+		}
+	}
+	return false
+}
+
+func containsAuditAction(items []domain.AuditEvent, action string) bool {
+	for _, item := range items {
+		if item.Action == action {
 			return true
 		}
 	}
