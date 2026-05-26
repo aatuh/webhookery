@@ -232,7 +232,7 @@ Implementation rules:
 - update the ticket checkmark from `[ ]` to `[x]` only after the ticket is actually complete
 - update the epic checkmark from `[ ]` to `[x]` only when all child tickets are complete
 
-## Epic E5 - Persistence Test Quality [ ]
+## Epic E5 - Persistence Test Quality [x]
 
 Description: Replace static persistence assertions with behavior-level confidence for tenant isolation, migrations, SQL constraints, and failure boundaries.
 
@@ -268,7 +268,7 @@ Implementation rules:
 - update the ticket checkmark from `[ ]` to `[x]` only after the ticket is actually complete
 - update the epic checkmark from `[ ]` to `[x]` only when all child tickets are complete
 
-### Ticket E5-T3 - Add CI Artifact For DB-Backed RC Evidence [ ]
+### Ticket E5-T3 - Add CI Artifact For DB-Backed RC Evidence [x]
 
 Description: Upload a concise integration evidence artifact from the GitHub integration workflow showing migrations, RC E2E, and skipped restore-drill status.
 
