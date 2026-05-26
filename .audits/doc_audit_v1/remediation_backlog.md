@@ -47,7 +47,7 @@ Notes:
 
 - Move the long command list out of `README.md:24-113` instead of deleting useful commands.
 
-### Ticket E1-T3 - Add A Canonical Documentation Map [ ]
+### Ticket E1-T3 - Add A Canonical Documentation Map [x]
 
 Description: Add a lean docs map in README or `docs/index.md` that names each canonical document, its audience, purpose, and source-of-truth boundary.
 
