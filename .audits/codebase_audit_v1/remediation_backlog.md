@@ -7,7 +7,7 @@ Status legend:
 - [ ] not done
 - [x] done
 
-## Epic E1 - Evidence Integrity And Contract Safety [ ]
+## Epic E1 - Evidence Integrity And Contract Safety [x]
 
 Description: Close the highest-risk correctness gaps around raw evidence discoverability and API contract drift before structural refactors.
 
@@ -43,7 +43,7 @@ Implementation rules:
 - update the ticket checkmark from `[ ]` to `[x]` only after the ticket is actually complete
 - update the epic checkmark from `[ ]` to `[x]` only when all child tickets are complete
 
-### Ticket E1-T3 - Strengthen Evidence Export Tests [ ]
+### Ticket E1-T3 - Strengthen Evidence Export Tests [x]
 
 Description: Add DB-backed export tests for raw payload bodies, duplicate receipts, delivery payloads, normalized envelopes, provider API evidence, and audit-chain proof files.
 
