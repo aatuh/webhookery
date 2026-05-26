@@ -236,7 +236,7 @@ Implementation rules:
 
 Description: Replace static persistence assertions with behavior-level confidence for tenant isolation, migrations, SQL constraints, and failure boundaries.
 
-### Ticket E5-T1 - Convert Highest-Risk Static Store Tests To DB Tests [ ]
+### Ticket E5-T1 - Convert Highest-Risk Static Store Tests To DB Tests [x]
 
 Description: Convert static tests for source/endpoint/route/subscription CRUD, alerts, notification, SIEM, retry policy, and audit chain into live Postgres tests.
 
