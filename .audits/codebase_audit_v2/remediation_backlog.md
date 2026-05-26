@@ -95,7 +95,7 @@ Notes:
 
 Description: Make audit evidence for sensitive control-plane actions required, transactional, or durably recoverable.
 
-### Ticket E3-T1 - Replace Best-Effort Audit Writes For Sensitive Actions [ ]
+### Ticket E3-T1 - Replace Best-Effort Audit Writes For Sensitive Actions [x]
 
 Description: Update state-changing and evidence-sensitive store methods so audit write failure is returned or captured through a durable audit outbox instead of ignored.
 
