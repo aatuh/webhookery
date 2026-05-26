@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/netip"
 	"os"
@@ -19,6 +20,8 @@ import (
 	"webhookery/internal/app"
 	"webhookery/internal/authz"
 	"webhookery/internal/domain"
+	"webhookery/internal/evidence"
+	"webhookery/internal/reconcile"
 	"webhookery/internal/ssrf"
 	"webhookery/internal/worker"
 	"webhookery/pkg/verifier"
@@ -313,6 +316,154 @@ func TestPostgresDuplicateRawPayloadEvidenceRemainsLinkedAndExported(t *testing.
 	}
 	if retainedBodies != 0 {
 		t.Fatalf("source-scoped retention left %d duplicate raw payload bodies stored", retainedBodies)
+	}
+}
+
+func TestPostgresEvidenceExportIncludesBodyArtifactsAndProofs(t *testing.T) {
+	ctx, store, actor := openPostgresIntegrationStore(t)
+	defer store.Close()
+
+	windowStart := time.Now().UTC().Add(-time.Minute)
+	now := time.Now().UTC().Truncate(time.Second)
+	control := app.NewControlService(store, ssrf.Validator{Resolver: ssrf.StaticResolver{"receiver.example.com": {netip.MustParseAddr("93.184.216.34")}}})
+	source, _ := createPostgresIntegrationRoute(t, ctx, control, actor, "invoice.exported")
+	providerID := "evt_it_export_" + now.Format("150405.000000000")
+	first := ingestPostgresIntegrationEvent(t, ctx, store, actor, source.ID, "invoice.exported", providerID, now)
+	duplicate := ingestPostgresIntegrationEvent(t, ctx, store, actor, source.ID, "invoice.exported", providerID, now.Add(time.Second))
+	if duplicate.EventID != first.EventID || duplicate.DedupeStatus != domain.DedupeDuplicateSuppressed {
+		t.Fatalf("expected duplicate evidence linked to %s, got %+v", first.EventID, duplicate)
+	}
+	if created, err := store.createDeliveriesForEvent(ctx, actor.TenantID, first.EventID); err != nil {
+		t.Fatal(err)
+	} else if created == 0 {
+		t.Fatal("expected route fanout to create a delivery payload")
+	}
+
+	connection, err := store.CreateProviderConnection(ctx, actor.TenantID, actor.ID, app.CreateProviderConnectionRequest{
+		Name:           "export evidence connection",
+		Provider:       "stripe",
+		CredentialType: "api_key",
+		Credential:     "sk_test_placeholder",
+		Config:         map[string]string{"source_id": source.ID},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	reconciliationJob, err := store.CreateReconciliationJob(ctx, actor.TenantID, actor.ID, app.ReconciliationJobRequest{
+		ConnectionID:   connection.ID,
+		DryRun:         true,
+		CaptureMissing: true,
+		WindowStart:    windowStart,
+		WindowEnd:      now.Add(time.Minute),
+		Reason:         "export evidence regression",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	providerEvidenceID, err := store.insertProviderAPIEvidence(ctx, actor.TenantID, reconciliationJob.ID, "", connection.ID, connection.Provider, reconcile.Evidence{
+		Method:     "GET",
+		URL:        "https://api.stripe.com/v1/events/" + providerID,
+		StatusCode: 200,
+		Body:       []byte(`{"id":"` + providerID + `","object":"event"}`),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.insertReconciliationItem(ctx, reconciliationItemInput{
+		tenantID: actor.TenantID, jobID: reconciliationJob.ID, provider: connection.Provider, objectID: providerID, objectType: "event",
+		outcome: domain.ReconciliationOutcomeMatched, localEventID: first.EventID, evidenceID: providerEvidenceID, metadata: []byte(`{"test":"export"}`),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	limitedActor := authz.Actor{ID: "usr_export_limited", TenantID: actor.TenantID, Role: authz.RoleAdmin, Scopes: []string{"audit:read"}}
+	if _, err := control.CreateAuditExport(ctx, limitedActor, app.CreateAuditExportRequest{IncludeRawPayloads: true, Reason: "permission regression"}); !errors.Is(err, app.ErrForbidden) {
+		t.Fatalf("expected raw-inclusive export to require events:raw, got %v", err)
+	}
+	if _, err := control.CreateAuditExport(ctx, limitedActor, app.CreateAuditExportRequest{IncludePayloadBodies: true, Reason: "permission regression"}); !errors.Is(err, app.ErrForbidden) {
+		t.Fatalf("expected payload-inclusive export to require events:raw, got %v", err)
+	}
+
+	export, err := control.CreateAuditExport(ctx, actor, app.CreateAuditExportRequest{
+		From:                 windowStart,
+		To:                   now.Add(time.Minute),
+		IncludeRawPayloads:   true,
+		IncludeTimelines:     true,
+		IncludePayloadBodies: true,
+		Reason:               "body-inclusive export regression",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	download, err := control.DownloadAuditExport(ctx, actor, export.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	verification, err := evidence.VerifyTarGzipBundle(download.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !verification.Valid || verification.CheckedChainEntries == 0 {
+		t.Fatalf("expected valid bundle with audit chain proof, got %+v", verification)
+	}
+	files := readTestTarGzipFiles(t, download.Body)
+	rawEntries := decodeTestJSONLines(t, files["raw_payloads.jsonl"])
+	rawBodies, receiptRows := 0, 0
+	for _, entry := range rawEntries {
+		if entry["event_id"] != first.EventID {
+			continue
+		}
+		if body, ok := entry["body_base64"].(string); ok && body != "" {
+			rawBodies++
+		}
+		if receiptIDs, ok := entry["receipt_ids"].([]any); ok && len(receiptIDs) == 1 {
+			receiptRows++
+		}
+	}
+	if rawBodies != 2 || receiptRows != 2 {
+		t.Fatalf("expected two duplicate raw bodies and receipt links, bodies=%d receipts=%d entries=%+v", rawBodies, receiptRows, rawEntries)
+	}
+
+	payloadEntries := decodeTestJSONLines(t, files["payload_evidence.jsonl"])
+	var normalizedWithBody, deliveryWithBody bool
+	for _, entry := range payloadEntries {
+		switch entry["resource_type"] {
+		case "normalized_envelope":
+			_, hasEnvelope := entry["envelope"]
+			_, hasData := entry["data"]
+			normalizedWithBody = entry["event_id"] == first.EventID && entry["body_included"] == true && hasEnvelope && hasData
+		case "delivery_payload":
+			body, _ := entry["body_base64"].(string)
+			deliveryWithBody = entry["event_id"] == first.EventID && entry["body_included"] == true && body != ""
+		}
+	}
+	if !normalizedWithBody || !deliveryWithBody {
+		t.Fatalf("expected normalized and delivery payload bodies in export, normalized=%v delivery=%v entries=%+v", normalizedWithBody, deliveryWithBody, payloadEntries)
+	}
+
+	reconciliationEntries := decodeTestJSONLines(t, files["reconciliation_evidence.jsonl"])
+	providerBodyIncluded := false
+	for _, entry := range reconciliationEntries {
+		if entry["id"] != reconciliationJob.ID {
+			continue
+		}
+		for _, rawEvidence := range entry["provider_api_evidence"].([]any) {
+			apiEvidence := rawEvidence.(map[string]any)
+			body, _ := apiEvidence["response_body_base64"].(string)
+			if apiEvidence["id"] == providerEvidenceID && apiEvidence["body_included"] == true && body != "" {
+				providerBodyIncluded = true
+			}
+		}
+	}
+	if !providerBodyIncluded {
+		t.Fatalf("expected provider API evidence body in export, entries=%+v", reconciliationEntries)
+	}
+
+	if _, err := store.pool.Exec(ctx, `UPDATE raw_payloads SET body='', storage_status='deleted', storage_deleted_at=now() WHERE tenant_id=$1 AND event_id=$2`, actor.TenantID, first.EventID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := control.GetRawPayload(ctx, actor, first.EventID); !errors.Is(err, app.ErrGone) {
+		t.Fatalf("expected retained raw body read to return gone after deletion, got %v", err)
 	}
 }
 
