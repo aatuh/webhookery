@@ -133,7 +133,7 @@ Notes:
 - Prefer focused fake-store tests for app behavior and live Postgres tests for transaction behavior.
 - Ensure audit-chain updates remain compatible with existing chain verification.
 
-## Epic E4 - Concurrent Duplicate Capture [ ]
+## Epic E4 - Concurrent Duplicate Capture [x]
 
 Description: Preserve raw duplicate evidence and provider receipts even when duplicate webhook deliveries arrive concurrently.
 
@@ -156,7 +156,7 @@ Notes:
 - Consider `INSERT ... ON CONFLICT`, row-level locks, or an idempotency/dedupe record lock.
 - Preserve one routing outbox item for the canonical event and evidence rows for every receipt.
 
-### Ticket E4-T2 - Add Live Postgres Concurrency Regression Test [ ]
+### Ticket E4-T2 - Add Live Postgres Concurrency Regression Test [x]
 
 Description: Add an integration test that sends concurrent duplicate captures and verifies one event, multiple raw payloads, multiple provider receipts, and no failed duplicate response.
 
