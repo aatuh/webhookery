@@ -5,15 +5,48 @@ info:
   description: Self-hosted webhook evidence and delivery control plane.
 servers:
   - url: http://localhost:8080
+tags:
+  - name: System
+    description: Health, readiness, metrics, and the OpenAPI document.
+  - name: API Keys
+    description: Management API key lifecycle.
+  - name: Producer Trust
+    description: Product-event producer credentials, OAuth, and mTLS identities.
+  - name: Auth And Identity
+    description: OIDC sessions, SCIM, role bindings, access policies, and authorization explanation.
+  - name: Sources And Providers
+    description: Webhook sources, provider connections, adapters, and provider ingress.
+  - name: Endpoints And Routing
+    description: Outbound endpoints, subscriptions, routes, and retry policies.
+  - name: Schemas And Transformations
+    description: Event schemas, compatibility checks, and deterministic transformations.
+  - name: Events And Ingestion
+    description: Product events, provider ingestion, event evidence, raw payloads, and timelines.
+  - name: Delivery And Replay
+    description: Deliveries, attempts, replay jobs, dead letter, and quarantine.
+  - name: Reconciliation
+    description: Provider reconciliation jobs and gap evidence.
+  - name: Audit And Retention
+    description: Audit events, audit chain, evidence exports, and retention policies.
+  - name: Operations
+    description: Operational metrics, storage/config views, workers, queues, and alerts.
+  - name: Signal Egress
+    description: Notification channels, notification deliveries, SIEM sinks, and SIEM deliveries.
 paths:
   /healthz:
     get:
+      tags:
+        - System
+      operationId: getHealthz
       summary: Liveness check
       responses:
         "200":
           description: Process is alive.
   /readyz:
     get:
+      tags:
+        - System
+      operationId: getReadyz
       summary: Readiness check
       responses:
         "200":
@@ -22,12 +55,18 @@ paths:
           description: A dependency is unavailable.
   /openapi.yaml:
     get:
+      tags:
+        - System
+      operationId: getOpenapiYaml
       summary: OpenAPI document
       responses:
         "200":
           description: YAML OpenAPI document.
   /metrics:
     get:
+      tags:
+        - System
+      operationId: getMetrics
       summary: Prometheus metrics
       responses:
         "200":
@@ -38,6 +77,9 @@ paths:
                 type: string
   /v1/api-keys:
     get:
+      tags:
+        - API Keys
+      operationId: getApiKeys
       summary: List API keys
       security:
         - bearerAuth: []
@@ -51,6 +93,9 @@ paths:
               schema:
                 $ref: "#/components/schemas/APIKeyPage"
     post:
+      tags:
+        - API Keys
+      operationId: postApiKeys
       summary: Create API key
       security:
         - bearerAuth: []
@@ -71,6 +116,9 @@ paths:
           $ref: "#/components/responses/Problem"
   /v1/api-keys/{api_key_id}:revoke:
     post:
+      tags:
+        - API Keys
+      operationId: postApiKeysApiKeyIdRevoke
       summary: Revoke API key
       security:
         - bearerAuth: []
@@ -95,6 +143,9 @@ paths:
                 $ref: "#/components/schemas/APIKey"
   /v1/oauth/token:
     post:
+      tags:
+        - Producer Trust
+      operationId: postOauthToken
       summary: Issue producer OAuth access token
       description: Issues an opaque short-lived bearer token for product-event producers using the client credentials grant. Only HTTP Basic client authentication is accepted; client secrets in the form body are rejected.
       security:
@@ -135,6 +186,9 @@ paths:
           $ref: "#/components/responses/Problem"
   /v1/producer-clients:
     get:
+      tags:
+        - Producer Trust
+      operationId: getProducerClients
       summary: List producer OAuth clients
       description: Lists tenant-scoped producer client metadata. Client secret hashes and token values are never returned.
       security:
@@ -149,6 +203,9 @@ paths:
               schema:
                 $ref: "#/components/schemas/ProducerClientPage"
     post:
+      tags:
+        - Producer Trust
+      operationId: postProducerClients
       summary: Create producer OAuth client
       description: Creates a tenant/source-bound product-event producer credential. The generated client secret is returned once only.
       security:
@@ -170,6 +227,9 @@ paths:
           $ref: "#/components/responses/Problem"
   /v1/producer-clients/{client_id}:
     get:
+      tags:
+        - Producer Trust
+      operationId: getProducerClientsClientId
       summary: Get producer OAuth client
       security:
         - bearerAuth: []
@@ -187,6 +247,9 @@ paths:
               schema:
                 $ref: "#/components/schemas/ProducerClient"
     patch:
+      tags:
+        - Producer Trust
+      operationId: patchProducerClientsClientId
       summary: Update producer OAuth client
       security:
         - bearerAuth: []
@@ -210,6 +273,9 @@ paths:
               schema:
                 $ref: "#/components/schemas/ProducerClient"
     delete:
+      tags:
+        - Producer Trust
+      operationId: deleteProducerClientsClientId
       summary: Disable producer OAuth client
       security:
         - bearerAuth: []
@@ -234,6 +300,9 @@ paths:
                 $ref: "#/components/schemas/ProducerClient"
   /v1/producer-clients/{client_id}/secrets:rotate:
     post:
+      tags:
+        - Producer Trust
+      operationId: postProducerClientsClientIdSecretsRotate
       summary: Rotate producer client secret
       description: Revokes active producer client secrets and returns the new client secret once only.
       security:
@@ -259,6 +328,9 @@ paths:
                 $ref: "#/components/schemas/ProducerClientSecretRotated"
   /v1/producer-mtls-identities:
     get:
+      tags:
+        - Producer Trust
+      operationId: getProducerMtlsIdentities
       summary: List producer mTLS identities
       description: Lists tenant-scoped producer client-certificate identities. Private keys and raw certificate private material are never stored or returned.
       security:
@@ -273,6 +345,9 @@ paths:
               schema:
                 $ref: "#/components/schemas/ProducerMTLSIdentityPage"
     post:
+      tags:
+        - Producer Trust
+      operationId: postProducerMtlsIdentities
       summary: Create producer mTLS identity
       security:
         - bearerAuth: []
@@ -291,6 +366,9 @@ paths:
                 $ref: "#/components/schemas/ProducerMTLSIdentity"
   /v1/producer-mtls-identities/{identity_id}:
     get:
+      tags:
+        - Producer Trust
+      operationId: getProducerMtlsIdentitiesIdentityId
       summary: Get producer mTLS identity
       security:
         - bearerAuth: []
@@ -308,6 +386,9 @@ paths:
               schema:
                 $ref: "#/components/schemas/ProducerMTLSIdentity"
     patch:
+      tags:
+        - Producer Trust
+      operationId: patchProducerMtlsIdentitiesIdentityId
       summary: Update producer mTLS identity
       security:
         - bearerAuth: []
@@ -331,6 +412,9 @@ paths:
               schema:
                 $ref: "#/components/schemas/ProducerMTLSIdentity"
     delete:
+      tags:
+        - Producer Trust
+      operationId: deleteProducerMtlsIdentitiesIdentityId
       summary: Disable producer mTLS identity
       security:
         - bearerAuth: []
@@ -355,6 +439,9 @@ paths:
                 $ref: "#/components/schemas/ProducerMTLSIdentity"
   /v1/producer-mtls-identities/{identity_id}:verify:
     post:
+      tags:
+        - Producer Trust
+      operationId: postProducerMtlsIdentitiesIdentityIdVerify
       summary: Verify producer mTLS certificate against identity
       security:
         - bearerAuth: []
@@ -379,6 +466,9 @@ paths:
                 $ref: "#/components/schemas/ProducerMTLSIdentityVerification"
   /v1/auth/oidc/login:
     get:
+      tags:
+        - Auth And Identity
+      operationId: getAuthOidcLogin
       summary: Start OIDC management login
       description: Starts Authorization Code + PKCE login for a tenant identity provider and redirects to the provider authorization endpoint.
       parameters:
@@ -402,6 +492,9 @@ paths:
           description: Redirect to identity provider.
   /v1/auth/oidc/callback:
     get:
+      tags:
+        - Auth And Identity
+      operationId: getAuthOidcCallback
       summary: Complete OIDC management login
       description: Validates state, nonce, issuer, audience, expiry, and signed ID token before creating a hashed management session cookie.
       parameters:
@@ -424,6 +517,9 @@ paths:
                 $ref: "#/components/schemas/AuthSessionCreated"
   /v1/auth/logout:
     post:
+      tags:
+        - Auth And Identity
+      operationId: postAuthLogout
       summary: Revoke current management session
       security:
         - bearerAuth: []
@@ -432,6 +528,9 @@ paths:
           description: Session revoked.
   /v1/auth/session:
     get:
+      tags:
+        - Auth And Identity
+      operationId: getAuthSession
       summary: Get current management session
       security:
         - bearerAuth: []
@@ -453,6 +552,9 @@ paths:
                 expires_at: "2026-05-26T20:00:00Z"
   /v1/auth/sessions:
     get:
+      tags:
+        - Auth And Identity
+      operationId: getAuthSessions
       summary: List active management sessions
       security:
         - bearerAuth: []
@@ -467,6 +569,9 @@ paths:
                 $ref: "#/components/schemas/AuthSessionPage"
   /v1/auth/sessions/{session_id}:revoke:
     post:
+      tags:
+        - Auth And Identity
+      operationId: postAuthSessionsSessionIdRevoke
       summary: Revoke management session
       security:
         - bearerAuth: []
@@ -491,6 +596,9 @@ paths:
                 $ref: "#/components/schemas/AuthSession"
   /v1/identity-providers:
     get:
+      tags:
+        - Auth And Identity
+      operationId: getIdentityProviders
       summary: List identity providers
       description: Lists tenant-scoped OIDC identity provider metadata. Client secrets are never returned.
       security:
@@ -505,6 +613,9 @@ paths:
               schema:
                 $ref: "#/components/schemas/IdentityProviderPage"
     post:
+      tags:
+        - Auth And Identity
+      operationId: postIdentityProviders
       summary: Create OIDC identity provider
       security:
         - bearerAuth: []
@@ -523,6 +634,9 @@ paths:
                 $ref: "#/components/schemas/IdentityProvider"
   /v1/identity-providers/{provider_id}:
     get:
+      tags:
+        - Auth And Identity
+      operationId: getIdentityProvidersProviderId
       summary: Get identity provider
       security:
         - bearerAuth: []
@@ -540,6 +654,9 @@ paths:
               schema:
                 $ref: "#/components/schemas/IdentityProvider"
     patch:
+      tags:
+        - Auth And Identity
+      operationId: patchIdentityProvidersProviderId
       summary: Update identity provider
       security:
         - bearerAuth: []
@@ -563,6 +680,9 @@ paths:
               schema:
                 $ref: "#/components/schemas/IdentityProvider"
     delete:
+      tags:
+        - Auth And Identity
+      operationId: deleteIdentityProvidersProviderId
       summary: Disable identity provider
       security:
         - bearerAuth: []
@@ -587,6 +707,9 @@ paths:
                 $ref: "#/components/schemas/IdentityProvider"
   /v1/identity-providers/{provider_id}:test:
     post:
+      tags:
+        - Auth And Identity
+      operationId: postIdentityProvidersProviderIdTest
       summary: Test identity provider configuration
       security:
         - bearerAuth: []
@@ -611,6 +734,9 @@ paths:
                 $ref: "#/components/schemas/IdentityProvider"
   /v1/scim-tokens:
     get:
+      tags:
+        - Auth And Identity
+      operationId: getScimTokens
       summary: List SCIM tokens
       description: Lists SCIM token metadata only. Raw tokens and hashes are never returned.
       security:
@@ -623,6 +749,9 @@ paths:
               schema:
                 $ref: "#/components/schemas/SCIMTokenPage"
     post:
+      tags:
+        - Auth And Identity
+      operationId: postScimTokens
       summary: Create SCIM token
       description: Returns the SCIM bearer token exactly once.
       security:
@@ -642,6 +771,9 @@ paths:
                 $ref: "#/components/schemas/SCIMTokenCreated"
   /v1/scim-tokens/{token_id}:
     delete:
+      tags:
+        - Auth And Identity
+      operationId: deleteScimTokensTokenId
       summary: Revoke SCIM token
       security:
         - bearerAuth: []
@@ -666,6 +798,9 @@ paths:
                 $ref: "#/components/schemas/SCIMToken"
   /v1/scim/v2/Users:
     get:
+      tags:
+        - Auth And Identity
+      operationId: getScimV2Users
       summary: List SCIM users
       security:
         - bearerAuth: []
@@ -673,6 +808,9 @@ paths:
         "200":
           description: SCIM ListResponse.
     post:
+      tags:
+        - Auth And Identity
+      operationId: postScimV2Users
       summary: Provision SCIM user
       security:
         - bearerAuth: []
@@ -687,6 +825,9 @@ paths:
           description: User provisioned.
   /v1/scim/v2/Users/{user_id}:
     get:
+      tags:
+        - Auth And Identity
+      operationId: getScimV2UsersUserId
       summary: Get SCIM user
       security:
         - bearerAuth: []
@@ -700,6 +841,9 @@ paths:
         "200":
           description: SCIM user.
     put:
+      tags:
+        - Auth And Identity
+      operationId: putScimV2UsersUserId
       summary: Replace SCIM user
       security:
         - bearerAuth: []
@@ -719,6 +863,9 @@ paths:
         "200":
           description: User replaced.
     patch:
+      tags:
+        - Auth And Identity
+      operationId: patchScimV2UsersUserId
       summary: Patch SCIM user
       security:
         - bearerAuth: []
@@ -738,6 +885,9 @@ paths:
         "200":
           description: User patched.
     delete:
+      tags:
+        - Auth And Identity
+      operationId: deleteScimV2UsersUserId
       summary: Deactivate SCIM user
       security:
         - bearerAuth: []
@@ -752,6 +902,9 @@ paths:
           description: User deactivated.
   /v1/scim/v2/Groups:
     get:
+      tags:
+        - Auth And Identity
+      operationId: getScimV2Groups
       summary: List SCIM groups
       security:
         - bearerAuth: []
@@ -759,6 +912,9 @@ paths:
         "200":
           description: SCIM ListResponse.
     post:
+      tags:
+        - Auth And Identity
+      operationId: postScimV2Groups
       summary: Provision SCIM group
       security:
         - bearerAuth: []
@@ -773,6 +929,9 @@ paths:
           description: Group provisioned.
   /v1/scim/v2/Groups/{group_id}:
     get:
+      tags:
+        - Auth And Identity
+      operationId: getScimV2GroupsGroupId
       summary: Get SCIM group
       security:
         - bearerAuth: []
@@ -786,6 +945,9 @@ paths:
         "200":
           description: SCIM group.
     put:
+      tags:
+        - Auth And Identity
+      operationId: putScimV2GroupsGroupId
       summary: Replace SCIM group
       security:
         - bearerAuth: []
@@ -805,6 +967,9 @@ paths:
         "200":
           description: Group replaced.
     patch:
+      tags:
+        - Auth And Identity
+      operationId: patchScimV2GroupsGroupId
       summary: Patch SCIM group
       security:
         - bearerAuth: []
@@ -824,6 +989,9 @@ paths:
         "200":
           description: Group patched.
     delete:
+      tags:
+        - Auth And Identity
+      operationId: deleteScimV2GroupsGroupId
       summary: Deactivate SCIM group
       security:
         - bearerAuth: []
@@ -838,6 +1006,9 @@ paths:
           description: Group deactivated.
   /v1/role-bindings:
     get:
+      tags:
+        - Auth And Identity
+      operationId: getRoleBindings
       summary: List resource-aware role bindings
       security:
         - bearerAuth: []
@@ -849,6 +1020,9 @@ paths:
               schema:
                 $ref: "#/components/schemas/RoleBindingPage"
     post:
+      tags:
+        - Auth And Identity
+      operationId: postRoleBindings
       summary: Create resource-aware role binding
       security:
         - bearerAuth: []
@@ -867,6 +1041,9 @@ paths:
                 $ref: "#/components/schemas/RoleBinding"
   /v1/role-bindings/{binding_id}:
     patch:
+      tags:
+        - Auth And Identity
+      operationId: patchRoleBindingsBindingId
       summary: Update role binding
       security:
         - bearerAuth: []
@@ -886,6 +1063,9 @@ paths:
         "200":
           description: Role binding updated.
     delete:
+      tags:
+        - Auth And Identity
+      operationId: deleteRoleBindingsBindingId
       summary: Disable role binding
       security:
         - bearerAuth: []
@@ -906,6 +1086,9 @@ paths:
           description: Role binding disabled.
   /v1/access-policies:
     get:
+      tags:
+        - Auth And Identity
+      operationId: getAccessPolicies
       summary: List access policy rules
       security:
         - bearerAuth: []
@@ -917,6 +1100,9 @@ paths:
               schema:
                 $ref: "#/components/schemas/AccessPolicyRulePage"
     post:
+      tags:
+        - Auth And Identity
+      operationId: postAccessPolicies
       summary: Create access policy rule
       security:
         - bearerAuth: []
@@ -935,6 +1121,9 @@ paths:
                 $ref: "#/components/schemas/AccessPolicyRule"
   /v1/access-policies/{policy_id}:
     patch:
+      tags:
+        - Auth And Identity
+      operationId: patchAccessPoliciesPolicyId
       summary: Update access policy rule
       security:
         - bearerAuth: []
@@ -954,6 +1143,9 @@ paths:
         "200":
           description: Access policy rule updated.
     delete:
+      tags:
+        - Auth And Identity
+      operationId: deleteAccessPoliciesPolicyId
       summary: Disable access policy rule
       security:
         - bearerAuth: []
@@ -974,6 +1166,9 @@ paths:
           description: Access policy rule disabled.
   /v1/authz:explain:
     post:
+      tags:
+        - Auth And Identity
+      operationId: postAuthzExplain
       summary: Explain authorization decision
       description: Returns a redacted allow/deny explanation for security operators.
       security:
@@ -993,6 +1188,9 @@ paths:
                 $ref: "#/components/schemas/AuthzDecision"
   /v1/sources:
     get:
+      tags:
+        - Sources And Providers
+      operationId: getSources
       summary: List inbound sources
       security:
         - bearerAuth: []
@@ -1004,6 +1202,9 @@ paths:
               schema:
                 $ref: "#/components/schemas/SourcePage"
     post:
+      tags:
+        - Sources And Providers
+      operationId: postSources
       summary: Create inbound source
       security:
         - bearerAuth: []
@@ -1013,6 +1214,10 @@ paths:
           application/json:
             schema:
               $ref: "#/components/schemas/CreateSourceRequest"
+            example:
+              name: stripe-prod
+              provider: stripe
+              verification_secret: "<webhook-signing-secret>"
       responses:
         "201":
           description: Source created.
@@ -1022,6 +1227,9 @@ paths:
                 $ref: "#/components/schemas/Source"
   /v1/sources/{source_id}:
     get:
+      tags:
+        - Sources And Providers
+      operationId: getSourcesSourceId
       summary: Get inbound source
       security:
         - bearerAuth: []
@@ -1041,6 +1249,9 @@ paths:
         "404":
           description: Source not found in this tenant.
     patch:
+      tags:
+        - Sources And Providers
+      operationId: patchSourcesSourceId
       summary: Update inbound source metadata or state
       description: Updates mutable source metadata. Verification secrets are rotated through the dedicated rotate endpoint and are never returned.
       security:
@@ -1065,6 +1276,9 @@ paths:
               schema:
                 $ref: "#/components/schemas/Source"
     delete:
+      tags:
+        - Sources And Providers
+      operationId: deleteSourcesSourceId
       summary: Disable inbound source
       description: Disables the source without deleting historical evidence.
       security:
@@ -1090,6 +1304,9 @@ paths:
                 $ref: "#/components/schemas/Source"
   /v1/sources/{source_id}/secrets:rotate:
     post:
+      tags:
+        - Sources And Providers
+      operationId: postSourcesSourceIdSecretsRotate
       summary: Rotate source verification secret
       description: Creates a new active source secret version and keeps the previous version during the requested grace period. Plaintext secrets are never returned.
       security:
@@ -1115,6 +1332,9 @@ paths:
                 $ref: "#/components/schemas/SourceSecretVersion"
   /v1/provider-connections:
     get:
+      tags:
+        - Sources And Providers
+      operationId: getProviderConnections
       summary: List provider API reconciliation connections
       description: Plaintext provider credentials are never returned.
       security:
@@ -1129,6 +1349,9 @@ paths:
               schema:
                 $ref: "#/components/schemas/ProviderConnectionPage"
     post:
+      tags:
+        - Sources And Providers
+      operationId: postProviderConnections
       summary: Create provider API reconciliation connection
       security:
         - bearerAuth: []
@@ -1138,6 +1361,13 @@ paths:
           application/json:
             schema:
               $ref: "#/components/schemas/CreateProviderConnectionRequest"
+            example:
+              name: stripe-reconciliation
+              provider: stripe
+              credential_type: api_key
+              credential: "<provider-api-token>"
+              config:
+                source_id: src_stripe
       responses:
         "201":
           description: Provider connection created with encrypted credentials.
@@ -1147,6 +1377,9 @@ paths:
                 $ref: "#/components/schemas/ProviderConnection"
   /v1/provider-connections/{connection_id}:
     get:
+      tags:
+        - Sources And Providers
+      operationId: getProviderConnectionsConnectionId
       summary: Get provider API reconciliation connection
       security:
         - bearerAuth: []
@@ -1165,6 +1398,9 @@ paths:
                 $ref: "#/components/schemas/ProviderConnection"
   /v1/provider-connections/{connection_id}:verify:
     post:
+      tags:
+        - Sources And Providers
+      operationId: postProviderConnectionsConnectionIdVerify
       summary: Verify provider API connection credentials
       security:
         - bearerAuth: []
@@ -1189,6 +1425,9 @@ paths:
                 $ref: "#/components/schemas/ProviderConnection"
   /v1/provider-connections/{connection_id}:revoke:
     post:
+      tags:
+        - Sources And Providers
+      operationId: postProviderConnectionsConnectionIdRevoke
       summary: Revoke provider API connection credentials
       security:
         - bearerAuth: []
@@ -1213,6 +1452,9 @@ paths:
                 $ref: "#/components/schemas/ProviderConnection"
   /v1/adapters:
     get:
+      tags:
+        - Sources And Providers
+      operationId: getAdapters
       summary: List built-in and tenant custom adapters
       description: Returns adapter governance metadata only. Plugin packages are not executed by this endpoint.
       security:
@@ -1227,6 +1469,9 @@ paths:
               schema:
                 $ref: "#/components/schemas/ProviderAdapterPage"
     post:
+      tags:
+        - Sources And Providers
+      operationId: postAdapters
       summary: Create tenant custom adapter
       security:
         - bearerAuth: []
@@ -1245,6 +1490,9 @@ paths:
                 $ref: "#/components/schemas/ProviderAdapter"
   /v1/adapters/{adapter_id}:
     get:
+      tags:
+        - Sources And Providers
+      operationId: getAdaptersAdapterId
       summary: Get adapter metadata
       security:
         - bearerAuth: []
@@ -1263,6 +1511,9 @@ paths:
                 $ref: "#/components/schemas/ProviderAdapter"
   /v1/adapters/{adapter_id}/versions:
     get:
+      tags:
+        - Sources And Providers
+      operationId: getAdaptersAdapterIdVersions
       summary: List adapter versions
       security:
         - bearerAuth: []
@@ -1281,6 +1532,9 @@ paths:
               schema:
                 $ref: "#/components/schemas/AdapterVersionPage"
     post:
+      tags:
+        - Sources And Providers
+      operationId: postAdaptersAdapterIdVersions
       summary: Create adapter version
       description: Declarative versions store JSON definitions. Plugin versions store signed package metadata only and are not executed.
       security:
@@ -1306,6 +1560,9 @@ paths:
                 $ref: "#/components/schemas/AdapterVersion"
   /v1/adapters/{adapter_id}/versions/{version_id}/test-vectors:
     post:
+      tags:
+        - Sources And Providers
+      operationId: postAdaptersAdapterIdVersionsVersionIdTestVectors
       summary: Add adapter version test vector
       security:
         - bearerAuth: []
@@ -1335,6 +1592,9 @@ paths:
                 $ref: "#/components/schemas/AdapterTestVector"
   /v1/adapters/{adapter_id}/versions/{version_id}:transition:
     post:
+      tags:
+        - Sources And Providers
+      operationId: postAdaptersAdapterIdVersionsVersionIdTransition
       summary: Transition adapter version through approval workflow
       description: Supported actions are submit_tests, request_review, approve_staging, activate, deprecate, and retire.
       security:
@@ -1365,6 +1625,9 @@ paths:
                 $ref: "#/components/schemas/AdapterVersion"
   /v1/endpoints:
     get:
+      tags:
+        - Endpoints And Routing
+      operationId: getEndpoints
       summary: List outbound endpoints
       security:
         - bearerAuth: []
@@ -1376,6 +1639,9 @@ paths:
               schema:
                 $ref: "#/components/schemas/EndpointPage"
     post:
+      tags:
+        - Endpoints And Routing
+      operationId: postEndpoints
       summary: Create outbound endpoint
       security:
         - bearerAuth: []
@@ -1385,6 +1651,9 @@ paths:
           application/json:
             schema:
               $ref: "#/components/schemas/CreateEndpointRequest"
+            example:
+              name: billing-receiver
+              url: https://receiver.example/webhook
       responses:
         "201":
           description: Endpoint created after SSRF validation.
@@ -1394,6 +1663,9 @@ paths:
                 $ref: "#/components/schemas/Endpoint"
   /v1/endpoints/{endpoint_id}:
     get:
+      tags:
+        - Endpoints And Routing
+      operationId: getEndpointsEndpointId
       summary: Get outbound endpoint
       security:
         - bearerAuth: []
@@ -1413,6 +1685,9 @@ paths:
         "404":
           description: Endpoint not found in this tenant.
     patch:
+      tags:
+        - Endpoints And Routing
+      operationId: patchEndpointsEndpointId
       summary: Update outbound endpoint metadata, URL, retry policy, or state
       description: URL updates rerun the SSRF policy before persistence. Signing secrets and mTLS key material are managed through dedicated endpoints.
       security:
@@ -1439,6 +1714,9 @@ paths:
         "422":
           description: Endpoint URL blocked by SSRF policy.
     delete:
+      tags:
+        - Endpoints And Routing
+      operationId: deleteEndpointsEndpointId
       summary: Disable outbound endpoint
       description: Disables future delivery claims without deleting historical deliveries, attempts, or evidence.
       security:
@@ -1464,6 +1742,9 @@ paths:
                 $ref: "#/components/schemas/Endpoint"
   /v1/endpoints:validate-url:
     post:
+      tags:
+        - Endpoints And Routing
+      operationId: postEndpointsValidateUrl
       summary: Validate endpoint URL against SSRF policy
       security:
         - bearerAuth: []
@@ -1472,6 +1753,9 @@ paths:
           description: URL validation result.
   /v1/endpoints/{endpoint_id}:test:
     post:
+      tags:
+        - Endpoints And Routing
+      operationId: postEndpointsEndpointIdTest
       summary: Schedule a signed endpoint test delivery
       security:
         - bearerAuth: []
@@ -1492,6 +1776,9 @@ paths:
           description: Endpoint test delivery scheduled.
   /v1/endpoints/{endpoint_id}/secrets:rotate:
     post:
+      tags:
+        - Endpoints And Routing
+      operationId: postEndpointsEndpointIdSecretsRotate
       summary: Rotate endpoint signing secret
       description: Creates a new active endpoint signing secret version. Outbound deliveries include signing key metadata headers.
       security:
@@ -1517,6 +1804,9 @@ paths:
                 $ref: "#/components/schemas/EndpointSecretVersion"
   /v1/subscriptions:
     get:
+      tags:
+        - Endpoints And Routing
+      operationId: getSubscriptions
       summary: List subscriptions
       security:
         - bearerAuth: []
@@ -1528,6 +1818,9 @@ paths:
               schema:
                 $ref: "#/components/schemas/SubscriptionPage"
     post:
+      tags:
+        - Endpoints And Routing
+      operationId: postSubscriptions
       summary: Create subscription
       security:
         - bearerAuth: []
@@ -1546,6 +1839,9 @@ paths:
                 $ref: "#/components/schemas/Subscription"
   /v1/subscriptions/{subscription_id}:
     get:
+      tags:
+        - Endpoints And Routing
+      operationId: getSubscriptionsSubscriptionId
       summary: Get subscription
       security:
         - bearerAuth: []
@@ -1565,6 +1861,9 @@ paths:
         "404":
           description: Subscription not found in this tenant.
     patch:
+      tags:
+        - Endpoints And Routing
+      operationId: patchSubscriptionsSubscriptionId
       summary: Update subscription
       description: Updates fanout configuration and records a new immutable subscription version.
       security:
@@ -1589,6 +1888,9 @@ paths:
               schema:
                 $ref: "#/components/schemas/Subscription"
     delete:
+      tags:
+        - Endpoints And Routing
+      operationId: deleteSubscriptionsSubscriptionId
       summary: Disable subscription
       description: Disables future fanout without deleting historical deliveries or configuration evidence.
       security:
@@ -1614,6 +1916,9 @@ paths:
                 $ref: "#/components/schemas/Subscription"
   /v1/transformations:
     get:
+      tags:
+        - Schemas And Transformations
+      operationId: getTransformations
       summary: List deterministic transformations
       security:
         - bearerAuth: []
@@ -1627,6 +1932,9 @@ paths:
               schema:
                 $ref: "#/components/schemas/TransformationPage"
     post:
+      tags:
+        - Schemas And Transformations
+      operationId: postTransformations
       summary: Create deterministic transformation
       security:
         - bearerAuth: []
@@ -1645,6 +1953,9 @@ paths:
                 $ref: "#/components/schemas/Transformation"
   /v1/transformations/{transformation_id}:
     get:
+      tags:
+        - Schemas And Transformations
+      operationId: getTransformationsTransformationId
       summary: Get deterministic transformation
       security:
         - bearerAuth: []
@@ -1663,6 +1974,9 @@ paths:
                 $ref: "#/components/schemas/Transformation"
   /v1/transformations/{transformation_id}/versions:
     get:
+      tags:
+        - Schemas And Transformations
+      operationId: getTransformationsTransformationIdVersions
       summary: List immutable transformation versions
       security:
         - bearerAuth: []
@@ -1681,6 +1995,9 @@ paths:
               schema:
                 $ref: "#/components/schemas/TransformationVersionPage"
     post:
+      tags:
+        - Schemas And Transformations
+      operationId: postTransformationsTransformationIdVersions
       summary: Create immutable transformation version
       security:
         - bearerAuth: []
@@ -1705,6 +2022,9 @@ paths:
                 $ref: "#/components/schemas/TransformationVersion"
   /v1/transformations/{transformation_id}/versions/{version_id}:activate:
     post:
+      tags:
+        - Schemas And Transformations
+      operationId: postTransformationsTransformationIdVersionsVersionIdActivate
       summary: Activate transformation version
       security:
         - bearerAuth: []
@@ -1734,6 +2054,9 @@ paths:
                 $ref: "#/components/schemas/TransformationVersion"
   /v1/retry-policies:
     get:
+      tags:
+        - Endpoints And Routing
+      operationId: getRetryPolicies
       summary: List retry policies
       security:
         - bearerAuth: []
@@ -1745,6 +2068,9 @@ paths:
               schema:
                 $ref: "#/components/schemas/RetryPolicyPage"
     post:
+      tags:
+        - Endpoints And Routing
+      operationId: postRetryPolicies
       summary: Create retry policy version
       security:
         - bearerAuth: []
@@ -1763,6 +2089,9 @@ paths:
                 $ref: "#/components/schemas/RetryPolicy"
   /v1/retry-policies/{retry_policy_id}:
     get:
+      tags:
+        - Endpoints And Routing
+      operationId: getRetryPoliciesRetryPolicyId
       summary: Get retry policy
       security:
         - bearerAuth: []
@@ -1782,6 +2111,9 @@ paths:
         "404":
           description: Retry policy not found in this tenant.
     patch:
+      tags:
+        - Endpoints And Routing
+      operationId: patchRetryPoliciesRetryPolicyId
       summary: Create a new retry policy version from an existing policy
       description: Leaves the existing policy row intact and returns the new version row.
       security:
@@ -1806,6 +2138,9 @@ paths:
               schema:
                 $ref: "#/components/schemas/RetryPolicy"
     delete:
+      tags:
+        - Endpoints And Routing
+      operationId: deleteRetryPoliciesRetryPolicyId
       summary: Disable retry policy
       description: Disables future use of the referenced retry policy row without deleting historical delivery evidence.
       security:
@@ -1831,6 +2166,9 @@ paths:
                 $ref: "#/components/schemas/RetryPolicy"
   /v1/routes:
     get:
+      tags:
+        - Endpoints And Routing
+      operationId: getRoutes
       summary: List routes
       security:
         - bearerAuth: []
@@ -1842,6 +2180,9 @@ paths:
               schema:
                 $ref: "#/components/schemas/RoutePage"
     post:
+      tags:
+        - Endpoints And Routing
+      operationId: postRoutes
       summary: Create route
       security:
         - bearerAuth: []
@@ -1851,6 +2192,15 @@ paths:
           application/json:
             schema:
               $ref: "#/components/schemas/CreateRouteRequest"
+            example:
+              source_id: src_stripe
+              name: invoice-events
+              endpoint_id: end_billing
+              event_types:
+                - invoice.paid
+                - invoice.updated
+              priority: 100
+              state: active
       responses:
         "201":
           description: Route created.
@@ -1860,6 +2210,9 @@ paths:
                 $ref: "#/components/schemas/Route"
   /v1/routes/{route_id}:
     get:
+      tags:
+        - Endpoints And Routing
+      operationId: getRoutesRouteId
       summary: Get route
       security:
         - bearerAuth: []
@@ -1879,6 +2232,9 @@ paths:
         "404":
           description: Route not found in this tenant.
     patch:
+      tags:
+        - Endpoints And Routing
+      operationId: patchRoutesRouteId
       summary: Update route
       description: Updates route matching/destination metadata and records a new immutable route version.
       security:
@@ -1903,6 +2259,9 @@ paths:
               schema:
                 $ref: "#/components/schemas/Route"
     delete:
+      tags:
+        - Endpoints And Routing
+      operationId: deleteRoutesRouteId
       summary: Inactivate route
       description: Moves the route to inactive without deleting historical decisions, deliveries, or version evidence.
       security:
@@ -1928,6 +2287,9 @@ paths:
                 $ref: "#/components/schemas/Route"
   /v1/routes/{route_id}/versions:
     get:
+      tags:
+        - Endpoints And Routing
+      operationId: getRoutesRouteIdVersions
       summary: List immutable route versions
       security:
         - bearerAuth: []
@@ -1947,6 +2309,9 @@ paths:
                 $ref: "#/components/schemas/RouteVersionPage"
   /v1/routes/{route_id}:activate:
     post:
+      tags:
+        - Endpoints And Routing
+      operationId: postRoutesRouteIdActivate
       summary: Activate route
       security:
         - bearerAuth: []
@@ -1961,6 +2326,9 @@ paths:
           description: Route activated.
   /v1/routes/{route_id}:dry-run:
     post:
+      tags:
+        - Endpoints And Routing
+      operationId: postRoutesRouteIdDryRun
       summary: Dry-run route against event
       security:
         - bearerAuth: []
@@ -1975,6 +2343,9 @@ paths:
           description: Route match explanation.
   /v1/event-types:
     get:
+      tags:
+        - Schemas And Transformations
+      operationId: getEventTypes
       summary: List event types
       security:
         - bearerAuth: []
@@ -1986,6 +2357,9 @@ paths:
               schema:
                 $ref: "#/components/schemas/EventTypePage"
     post:
+      tags:
+        - Schemas And Transformations
+      operationId: postEventTypes
       summary: Create event type
       security:
         - bearerAuth: []
@@ -2004,6 +2378,9 @@ paths:
                 $ref: "#/components/schemas/EventType"
   /v1/event-types/{event_type}:
     get:
+      tags:
+        - Schemas And Transformations
+      operationId: getEventTypesEventType
       summary: Get event type
       security:
         - bearerAuth: []
@@ -2023,6 +2400,9 @@ paths:
         "404":
           description: Event type not found in this tenant.
     patch:
+      tags:
+        - Schemas And Transformations
+      operationId: patchEventTypesEventType
       summary: Update event type metadata or state
       description: Event type names remain immutable; delete disables the event type.
       security:
@@ -2047,6 +2427,9 @@ paths:
               schema:
                 $ref: "#/components/schemas/EventType"
     delete:
+      tags:
+        - Schemas And Transformations
+      operationId: deleteEventTypesEventType
       summary: Disable event type
       description: Event type delete is a state transition to disabled; historical schemas and evidence remain.
       security:
@@ -2072,6 +2455,9 @@ paths:
                 $ref: "#/components/schemas/EventType"
   /v1/event-types/{event_type}/schemas:
     get:
+      tags:
+        - Schemas And Transformations
+      operationId: getEventTypesEventTypeSchemas
       summary: List schemas for event type
       security:
         - bearerAuth: []
@@ -2089,6 +2475,9 @@ paths:
               schema:
                 $ref: "#/components/schemas/EventSchemaPage"
     post:
+      tags:
+        - Schemas And Transformations
+      operationId: postEventTypesEventTypeSchemas
       summary: Create schema for event type
       security:
         - bearerAuth: []
@@ -2113,6 +2502,9 @@ paths:
                 $ref: "#/components/schemas/EventSchema"
   /v1/event-types/{event_type}/schemas/{schema_version}:
     get:
+      tags:
+        - Schemas And Transformations
+      operationId: getEventTypesEventTypeSchemasSchemaVersion
       summary: Get schema for event type
       security:
         - bearerAuth: []
@@ -2137,6 +2529,9 @@ paths:
         "404":
           description: Schema not found in this tenant.
     patch:
+      tags:
+        - Schemas And Transformations
+      operationId: patchEventTypesEventTypeSchemasSchemaVersion
       summary: Update schema lifecycle state
       description: Schema body and version remain immutable; lifecycle state changes are audited and config-versioned.
       security:
@@ -2166,6 +2561,9 @@ paths:
               schema:
                 $ref: "#/components/schemas/EventSchema"
     delete:
+      tags:
+        - Schemas And Transformations
+      operationId: deleteEventTypesEventTypeSchemasSchemaVersion
       summary: Retire schema
       description: Schema delete is a state transition to retired; historical evidence remains.
       security:
@@ -2196,6 +2594,9 @@ paths:
                 $ref: "#/components/schemas/EventSchema"
   /v1/event-types/{event_type}/schemas/{schema_version}:validate:
     post:
+      tags:
+        - Schemas And Transformations
+      operationId: postEventTypesEventTypeSchemasSchemaVersionValidate
       summary: Validate payload against schema
       security:
         - bearerAuth: []
@@ -2225,6 +2626,9 @@ paths:
                 $ref: "#/components/schemas/SchemaValidationResult"
   /v1/event-types/{event_type}/schemas/{schema_version}:check-compatibility:
     post:
+      tags:
+        - Schemas And Transformations
+      operationId: postEventTypesEventTypeSchemasSchemaVersionCheckCompatibility
       summary: Check schema compatibility
       description: Performs conservative JSON-object compatibility checks for required fields and property type changes.
       security:
@@ -2255,6 +2659,9 @@ paths:
                 $ref: "#/components/schemas/SchemaCompatibilityResult"
   /v1/events:
     get:
+      tags:
+        - Events And Ingestion
+      operationId: getEvents
       summary: Search events
       security:
         - bearerAuth: []
@@ -2262,6 +2669,9 @@ paths:
         "200":
           description: Paginated event list.
     post:
+      tags:
+        - Events And Ingestion
+      operationId: postEvents
       summary: Ingest product event
       description: Accepts product events from management API keys, producer OAuth bearer tokens, or verified producer mTLS identities. Source-bound credentials must match the submitted `source_id`.
       security:
@@ -2273,15 +2683,36 @@ paths:
           application/json:
             schema:
               $ref: "#/components/schemas/ProductEventIngestRequest"
+            example:
+              source_id: src_internal
+              id: evt_demo_001
+              type: demo.created
+              data:
+                ok: true
       responses:
         "202":
           description: Product event accepted after durable capture.
+          content:
+            application/json:
+              example:
+                Accepted: true
+                EventID: evt_example
+                ReceiptID: rcp_example
+                RawPayloadID: raw_example
+                TraceID: req_example
+                VerifyReason: verified
+                DedupeStatus: unique
+        "400":
+          $ref: "#/components/responses/ValidationProblem"
         "401":
-          $ref: "#/components/responses/Problem"
+          $ref: "#/components/responses/UnauthorizedProblem"
         "403":
-          $ref: "#/components/responses/Problem"
+          $ref: "#/components/responses/ForbiddenProblem"
   /v1/events/{event_id}:
     get:
+      tags:
+        - Events And Ingestion
+      operationId: getEventsEventId
       summary: Get event
       security:
         - bearerAuth: []
@@ -2294,10 +2725,22 @@ paths:
       responses:
         "200":
           description: Event detail.
+          content:
+            application/json:
+              example:
+                id: evt_example
+                source_id: src_internal
+                event_type: demo.created
+                verification_status: verified
+                dedupe_status: unique
+                created_at: "2026-05-26T12:00:00Z"
         "404":
-          description: Event not found or not visible.
+          $ref: "#/components/responses/NotFoundProblem"
   /v1/events/{event_id}/raw:
     get:
+      tags:
+        - Events And Ingestion
+      operationId: getEventsEventIdRaw
       summary: Get raw payload evidence
       security:
         - bearerAuth: []
@@ -2321,11 +2764,14 @@ paths:
                 storage_status: stored
                 body_base64: eyJpZCI6ImV2dF9leGFtcGxlIn0=
         "403":
-          description: Actor lacks raw payload permission.
+          $ref: "#/components/responses/ForbiddenProblem"
         "410":
           description: Raw payload body has expired or was deleted by retention; metadata remains on related records.
   /v1/events/{event_id}/normalized:
     get:
+      tags:
+        - Events And Ingestion
+      operationId: getEventsEventIdNormalized
       summary: Get normalized event evidence
       description: Metadata and hashes require events:read. Including normalized data requires events:raw and writes an audit event.
       security:
@@ -2350,11 +2796,14 @@ paths:
               schema:
                 $ref: "#/components/schemas/NormalizedEnvelope"
         "403":
-          description: Actor lacks events:raw for include_data=true.
+          $ref: "#/components/responses/ForbiddenProblem"
         "410":
           description: Normalized data was deleted by retention; metadata and hashes remain.
   /v1/events/{event_id}/timeline:
     get:
+      tags:
+        - Events And Ingestion
+      operationId: getEventsEventIdTimeline
       summary: Get event timeline
       security:
         - bearerAuth: []
@@ -2370,6 +2819,9 @@ paths:
           description: Timeline entries for event, receipts, deliveries, attempts, and audit records.
   /v1/ingest/{tenant_id}/{source_id}:
     post:
+      tags:
+        - Events And Ingestion
+      operationId: postIngestTenantIdSourceId
       summary: Generic provider webhook ingestion
       parameters:
         - name: tenant_id
@@ -2408,55 +2860,73 @@ paths:
                 VerifyReason: verified
                 DedupeStatus: unique
         "401":
-          description: Invalid signature.
+          $ref: "#/components/responses/UnauthorizedProblem"
         "413":
-          description: Payload too large.
+          $ref: "#/components/responses/PayloadTooLargeProblem"
         "431":
-          description: Request headers too large.
+          $ref: "#/components/responses/HeadersTooLargeProblem"
         "503":
-          description: Durable storage unavailable before acknowledgement.
+          $ref: "#/components/responses/StorageUnavailableProblem"
   /v1/ingest/stripe/{source_id}:
     post:
+      tags:
+        - Events And Ingestion
+      operationId: postIngestStripeSourceId
       summary: Stripe webhook ingestion
       responses:
         "200":
           description: Accepted after durable capture.
         "431":
-          description: Request headers too large.
+          $ref: "#/components/responses/HeadersTooLargeProblem"
   /v1/ingest/github/{source_id}:
     post:
+      tags:
+        - Events And Ingestion
+      operationId: postIngestGithubSourceId
       summary: GitHub webhook ingestion
       responses:
         "200":
           description: Accepted after durable capture.
         "431":
-          description: Request headers too large.
+          $ref: "#/components/responses/HeadersTooLargeProblem"
   /v1/ingest/shopify/{source_id}:
     post:
+      tags:
+        - Events And Ingestion
+      operationId: postIngestShopifySourceId
       summary: Shopify webhook ingestion
       responses:
         "200":
           description: Accepted after durable capture.
         "431":
-          description: Request headers too large.
+          $ref: "#/components/responses/HeadersTooLargeProblem"
   /v1/ingest/slack/{source_id}:
     post:
+      tags:
+        - Events And Ingestion
+      operationId: postIngestSlackSourceId
       summary: Slack webhook ingestion
       responses:
         "200":
           description: Accepted after durable capture.
         "431":
-          description: Request headers too large.
+          $ref: "#/components/responses/HeadersTooLargeProblem"
   /v1/ingest/cloudevents/{source_id}:
     post:
+      tags:
+        - Events And Ingestion
+      operationId: postIngestCloudeventsSourceId
       summary: CloudEvents webhook ingestion
       responses:
         "200":
           description: Accepted after durable capture for binary or structured CloudEvents envelopes.
         "431":
-          description: Request headers too large.
+          $ref: "#/components/responses/HeadersTooLargeProblem"
   /v1/ingest/generic-jwt/{source_id}:
     post:
+      tags:
+        - Events And Ingestion
+      operationId: postIngestGenericJwtSourceId
       summary: Generic JWT/JWS webhook ingestion
       description: "Accepts compact JWT/JWS signatures from `Authorization: Bearer ...` or `Webhook-JWT`; only HS256 is supported and the token must include `exp` plus a `body_sha256` claim for the exact raw body."
       responses:
@@ -2465,9 +2935,12 @@ paths:
         "401":
           description: Invalid or unsupported JWT signature.
         "431":
-          description: Request headers too large.
+          $ref: "#/components/responses/HeadersTooLargeProblem"
   /v1/deliveries:
     get:
+      tags:
+        - Delivery And Replay
+      operationId: getDeliveries
       summary: List deliveries
       security:
         - bearerAuth: []
@@ -2476,6 +2949,9 @@ paths:
           description: Paginated delivery list, including retry seed evidence for reproducible scheduling.
   /v1/deliveries/{delivery_id}/attempts:
     get:
+      tags:
+        - Delivery And Replay
+      operationId: getDeliveriesDeliveryIdAttempts
       summary: List delivery attempts
       security:
         - bearerAuth: []
@@ -2490,6 +2966,9 @@ paths:
           description: Paginated delivery attempts, including deterministic retry delay and next retry timestamp when retryable.
   /v1/deliveries/{delivery_id}:retry:
     post:
+      tags:
+        - Delivery And Replay
+      operationId: postDeliveriesDeliveryIdRetry
       summary: Manually retry delivery
       security:
         - bearerAuth: []
@@ -2510,6 +2989,9 @@ paths:
           description: Delivery retry scheduled.
   /v1/deliveries/{delivery_id}:cancel:
     post:
+      tags:
+        - Delivery And Replay
+      operationId: postDeliveriesDeliveryIdCancel
       summary: Cancel scheduled delivery
       security:
         - bearerAuth: []
@@ -2530,6 +3012,9 @@ paths:
           description: Delivery canceled.
   /v1/delivery-attempts/{attempt_id}:
     get:
+      tags:
+        - Delivery And Replay
+      operationId: getDeliveryAttemptsAttemptId
       summary: Get delivery attempt
       security:
         - bearerAuth: []
@@ -2544,6 +3029,9 @@ paths:
           description: Delivery attempt detail, including deterministic retry delay evidence when retryable.
   /v1/replay-jobs:dry-run:
     post:
+      tags:
+        - Delivery And Replay
+      operationId: postReplayJobsDryRun
       summary: Dry-run replay
       security:
         - bearerAuth: []
@@ -2558,6 +3046,9 @@ paths:
           description: Replay dry-run result.
   /v1/replay-jobs:
     get:
+      tags:
+        - Delivery And Replay
+      operationId: getReplayJobs
       summary: List replay jobs
       security:
         - bearerAuth: []
@@ -2565,6 +3056,9 @@ paths:
         "200":
           description: Paginated replay job list.
     post:
+      tags:
+        - Delivery And Replay
+      operationId: postReplayJobs
       summary: Create replay job
       security:
         - bearerAuth: []
@@ -2597,6 +3091,9 @@ paths:
                 approval_required: false
   /v1/replay-jobs/{replay_job_id}:approve:
     post:
+      tags:
+        - Delivery And Replay
+      operationId: postReplayJobsReplayJobIdApprove
       summary: Approve pending replay job
       description: Moves a tenant-scoped pending replay job into scheduled state and enqueues durable replay work.
       security:
@@ -2618,6 +3115,9 @@ paths:
           description: Replay job approved and scheduled.
   /v1/replay-jobs/{replay_job_id}:pause:
     post:
+      tags:
+        - Delivery And Replay
+      operationId: postReplayJobsReplayJobIdPause
       summary: Pause replay job
       security:
         - bearerAuth: []
@@ -2638,6 +3138,9 @@ paths:
           description: Replay job paused.
   /v1/replay-jobs/{replay_job_id}:resume:
     post:
+      tags:
+        - Delivery And Replay
+      operationId: postReplayJobsReplayJobIdResume
       summary: Resume replay job
       security:
         - bearerAuth: []
@@ -2658,6 +3161,9 @@ paths:
           description: Replay job scheduled again.
   /v1/replay-jobs/{replay_job_id}:cancel:
     post:
+      tags:
+        - Delivery And Replay
+      operationId: postReplayJobsReplayJobIdCancel
       summary: Cancel replay job
       security:
         - bearerAuth: []
@@ -2678,6 +3184,9 @@ paths:
           description: Replay job canceled.
   /v1/reconciliation-jobs:dry-run:
     post:
+      tags:
+        - Reconciliation
+      operationId: postReconciliationJobsDryRun
       summary: Dry-run provider reconciliation
       description: Reports expected matched, missing, recoverable, redelivery, or unrecoverable outcomes without capturing recovered events or requesting redelivery.
       security:
@@ -2697,6 +3206,9 @@ paths:
                 $ref: "#/components/schemas/ReconciliationJob"
   /v1/reconciliation-jobs:
     get:
+      tags:
+        - Reconciliation
+      operationId: getReconciliationJobs
       summary: List provider reconciliation jobs
       security:
         - bearerAuth: []
@@ -2710,6 +3222,9 @@ paths:
               schema:
                 $ref: "#/components/schemas/ReconciliationJobPage"
     post:
+      tags:
+        - Reconciliation
+      operationId: postReconciliationJobs
       summary: Create provider reconciliation job
       description: Recovered provider API events are not marked as signed webhooks and route only when `route_recovered=true`.
       security:
@@ -2743,6 +3258,9 @@ paths:
                 $ref: "#/components/schemas/ReconciliationJob"
   /v1/reconciliation-jobs/{job_id}:
     get:
+      tags:
+        - Reconciliation
+      operationId: getReconciliationJobsJobId
       summary: Get provider reconciliation job
       security:
         - bearerAuth: []
@@ -2761,6 +3279,9 @@ paths:
                 $ref: "#/components/schemas/ReconciliationJob"
   /v1/reconciliation-jobs/{job_id}/items:
     get:
+      tags:
+        - Reconciliation
+      operationId: getReconciliationJobsJobIdItems
       summary: List provider reconciliation gap items
       security:
         - bearerAuth: []
@@ -2780,6 +3301,9 @@ paths:
                 $ref: "#/components/schemas/ReconciliationItemPage"
   /v1/reconciliation-jobs/{job_id}:cancel:
     post:
+      tags:
+        - Reconciliation
+      operationId: postReconciliationJobsJobIdCancel
       summary: Cancel provider reconciliation job
       security:
         - bearerAuth: []
@@ -2804,6 +3328,9 @@ paths:
                 $ref: "#/components/schemas/ReconciliationJob"
   /v1/dead-letter:
     get:
+      tags:
+        - Delivery And Replay
+      operationId: getDeadLetter
       summary: List dead-letter entries
       security:
         - bearerAuth: []
@@ -2812,6 +3339,9 @@ paths:
           description: Paginated dead-letter list.
   /v1/dead-letter/{entry_id}:release:
     post:
+      tags:
+        - Delivery And Replay
+      operationId: postDeadLetterEntryIdRelease
       summary: Release dead-letter entry into replay work
       security:
         - bearerAuth: []
@@ -2826,6 +3356,9 @@ paths:
           description: Replay job scheduled for dead-letter entry.
   /v1/dead-letter:bulk-release:
     post:
+      tags:
+        - Delivery And Replay
+      operationId: postDeadLetterBulkRelease
       summary: Bulk release dead-letter entries
       security:
         - bearerAuth: []
@@ -2840,6 +3373,9 @@ paths:
           description: Replay jobs scheduled for matching dead-letter entries.
   /v1/quarantine:
     get:
+      tags:
+        - Delivery And Replay
+      operationId: getQuarantine
       summary: List quarantine entries
       security:
         - bearerAuth: []
@@ -2848,6 +3384,9 @@ paths:
           description: Paginated quarantine list.
   /v1/quarantine/{entry_id}:approve:
     post:
+      tags:
+        - Delivery And Replay
+      operationId: postQuarantineEntryIdApprove
       summary: Approve quarantine entry
       security:
         - bearerAuth: []
@@ -2862,6 +3401,9 @@ paths:
           description: Quarantine entry approved.
   /v1/quarantine/{entry_id}:reject:
     post:
+      tags:
+        - Delivery And Replay
+      operationId: postQuarantineEntryIdReject
       summary: Reject quarantine entry
       security:
         - bearerAuth: []
@@ -2876,6 +3418,9 @@ paths:
           description: Quarantine entry rejected.
   /v1/audit-events:
     get:
+      tags:
+        - Audit And Retention
+      operationId: getAuditEvents
       summary: List audit events
       security:
         - bearerAuth: []
@@ -2884,6 +3429,9 @@ paths:
           description: Paginated audit event list.
   /v1/audit-chain/head:
     get:
+      tags:
+        - Audit And Retention
+      operationId: getAuditChainHead
       summary: Get audit chain head
       security:
         - bearerAuth: []
@@ -2896,6 +3444,9 @@ paths:
                 $ref: "#/components/schemas/AuditChainHead"
   /v1/audit-chain:verify:
     post:
+      tags:
+        - Audit And Retention
+      operationId: postAuditChainVerify
       summary: Verify audit chain continuity
       security:
         - bearerAuth: []
@@ -2914,6 +3465,9 @@ paths:
                 $ref: "#/components/schemas/AuditChainVerification"
   /v1/audit-chain:anchor:
     post:
+      tags:
+        - Audit And Retention
+      operationId: postAuditChainAnchor
       summary: Anchor a verified audit chain range
       security:
         - bearerAuth: []
@@ -2934,6 +3488,9 @@ paths:
           description: Actor lacks security:write.
   /v1/audit-chain/anchors:
     get:
+      tags:
+        - Audit And Retention
+      operationId: getAuditChainAnchors
       summary: List audit chain anchors
       security:
         - bearerAuth: []
@@ -2948,6 +3505,9 @@ paths:
                 $ref: "#/components/schemas/AuditChainAnchorPage"
   /v1/audit-chain/anchors/{anchor_id}:
     get:
+      tags:
+        - Audit And Retention
+      operationId: getAuditChainAnchorsAnchorId
       summary: Get audit chain anchor
       security:
         - bearerAuth: []
@@ -2968,6 +3528,9 @@ paths:
           description: Anchor not found.
   /v1/audit-events:export:
     post:
+      tags:
+        - Audit And Retention
+      operationId: postAuditEventsExport
       summary: Create audit evidence export
       description: Creates a tenant-scoped tar.gz bundle containing manifest.json, audit_events.jsonl, and optional timeline or raw payload JSONL files. Raw payload bodies require events:raw in addition to audit:read.
       security:
@@ -3010,6 +3573,9 @@ paths:
           description: Actor lacks audit:read or requested raw payload bodies without events:raw.
   /v1/audit-exports:
     get:
+      tags:
+        - Audit And Retention
+      operationId: getAuditExports
       summary: List audit evidence exports
       security:
         - bearerAuth: []
@@ -3024,6 +3590,9 @@ paths:
                 $ref: "#/components/schemas/EvidenceExportPage"
   /v1/audit-exports/{export_id}:
     get:
+      tags:
+        - Audit And Retention
+      operationId: getAuditExportsExportId
       summary: Get audit evidence export status
       security:
         - bearerAuth: []
@@ -3044,6 +3613,9 @@ paths:
           description: Export not found or not visible.
   /v1/audit-exports/{export_id}:download:
     get:
+      tags:
+        - Audit And Retention
+      operationId: getAuditExportsExportIdDownload
       summary: Download audit evidence export bundle
       security:
         - bearerAuth: []
@@ -3071,6 +3643,9 @@ paths:
           description: Export bundle is unavailable.
   /v1/admin/retention-policies:
     get:
+      tags:
+        - Audit And Retention
+      operationId: getAdminRetentionPolicies
       summary: List retention policies
       security:
         - bearerAuth: []
@@ -3084,6 +3659,9 @@ paths:
               schema:
                 $ref: "#/components/schemas/RetentionPolicyPage"
     post:
+      tags:
+        - Audit And Retention
+      operationId: postAdminRetentionPolicies
       summary: Create or update retention policy
       security:
         - bearerAuth: []
@@ -3102,6 +3680,9 @@ paths:
                 $ref: "#/components/schemas/RetentionPolicy"
   /v1/admin/retention-policies/{policy_id}:
     patch:
+      tags:
+        - Audit And Retention
+      operationId: patchAdminRetentionPoliciesPolicyId
       summary: Update retention policy
       security:
         - bearerAuth: []
@@ -3126,6 +3707,9 @@ paths:
                 $ref: "#/components/schemas/RetentionPolicy"
   /v1/endpoint-health:
     get:
+      tags:
+        - Operations
+      operationId: getEndpointHealth
       summary: List endpoint health
       security:
         - bearerAuth: []
@@ -3138,6 +3722,9 @@ paths:
                 $ref: "#/components/schemas/EndpointHealthPage"
   /v1/ops/metrics:
     get:
+      tags:
+        - Operations
+      operationId: getOpsMetrics
       summary: Get tenant ops metrics
       security:
         - bearerAuth: []
@@ -3150,6 +3737,9 @@ paths:
                 $ref: "#/components/schemas/OpsMetrics"
   /v1/ops/metrics/rollups:
     get:
+      tags:
+        - Operations
+      operationId: getOpsMetricsRollups
       summary: List tenant metrics rollups
       description: Returns tenant-scoped derived operational rollups. Rollups summarize state for dashboards and alerts and are not evidence source-of-truth.
       security:
@@ -3173,6 +3763,9 @@ paths:
           description: Invalid metric filter.
   /v1/ops/storage:
     get:
+      tags:
+        - Operations
+      operationId: getOpsStorage
       summary: Get tenant storage status
       description: Returns redacted storage metadata and tenant-scoped counts without object-store credentials or raw payload bodies.
       security:
@@ -3186,6 +3779,9 @@ paths:
                 $ref: "#/components/schemas/OpsStorageStatus"
   /v1/ops/config:
     get:
+      tags:
+        - Operations
+      operationId: getOpsConfig
       summary: Get redacted runtime configuration
       description: Returns safe runtime configuration metadata only; secret values and connection strings are never included.
       security:
@@ -3199,6 +3795,9 @@ paths:
                 $ref: "#/components/schemas/OpsConfig"
   /v1/ops/workers:
     get:
+      tags:
+        - Operations
+      operationId: getOpsWorkers
       summary: List worker leases
       description: Lists runtime worker lease metadata only; no tenant payload data is exposed.
       security:
@@ -3214,6 +3813,9 @@ paths:
                 $ref: "#/components/schemas/WorkerStatusPage"
   /v1/ops/workers/{worker_id}:
     get:
+      tags:
+        - Operations
+      operationId: getOpsWorkersWorkerId
       summary: Get worker lease
       security:
         - bearerAuth: []
@@ -3234,6 +3836,9 @@ paths:
           description: Worker lease not found.
   /v1/ops/queues:
     get:
+      tags:
+        - Operations
+      operationId: getOpsQueues
       summary: List tenant queue stats
       description: Returns tenant-scoped durable outbox and delivery queue counts.
       security:
@@ -3247,6 +3852,9 @@ paths:
                 $ref: "#/components/schemas/QueueStatsPage"
   /v1/alerts:
     get:
+      tags:
+        - Operations
+      operationId: getAlerts
       summary: List alert rules
       security:
         - bearerAuth: []
@@ -3260,6 +3868,9 @@ paths:
               schema:
                 $ref: "#/components/schemas/AlertRulePage"
     post:
+      tags:
+        - Operations
+      operationId: postAlerts
       summary: Create alert rule
       security:
         - bearerAuth: []
@@ -3301,6 +3912,9 @@ paths:
           description: Actor lacks ops:write.
   /v1/alerts/{alert_id}:
     get:
+      tags:
+        - Operations
+      operationId: getAlertsAlertId
       summary: Get alert rule
       security:
         - bearerAuth: []
@@ -3318,6 +3932,9 @@ paths:
               schema:
                 $ref: "#/components/schemas/AlertRule"
     patch:
+      tags:
+        - Operations
+      operationId: patchAlertsAlertId
       summary: Update alert rule
       security:
         - bearerAuth: []
@@ -3341,6 +3958,9 @@ paths:
               schema:
                 $ref: "#/components/schemas/AlertRule"
     delete:
+      tags:
+        - Operations
+      operationId: deleteAlertsAlertId
       summary: Disable alert rule
       description: Disables the rule and preserves historical firings.
       security:
@@ -3366,6 +3986,9 @@ paths:
                 $ref: "#/components/schemas/AlertRule"
   /v1/alert-firings:
     get:
+      tags:
+        - Operations
+      operationId: getAlertFirings
       summary: List alert firings
       security:
         - bearerAuth: []
@@ -3386,6 +4009,9 @@ paths:
                 $ref: "#/components/schemas/AlertFiringPage"
   /v1/alert-firings/{firing_id}:
     get:
+      tags:
+        - Operations
+      operationId: getAlertFiringsFiringId
       summary: Get alert firing
       security:
         - bearerAuth: []
@@ -3404,6 +4030,9 @@ paths:
                 $ref: "#/components/schemas/AlertFiring"
   /v1/alert-firings/{firing_id}:acknowledge:
     post:
+      tags:
+        - Operations
+      operationId: postAlertFiringsFiringIdAcknowledge
       summary: Acknowledge alert firing
       security:
         - bearerAuth: []
@@ -3428,6 +4057,9 @@ paths:
                 $ref: "#/components/schemas/AlertFiring"
   /v1/notification-channels:
     get:
+      tags:
+        - Signal Egress
+      operationId: getNotificationChannels
       summary: List notification channels
       description: Lists tenant-scoped generic HTTPS webhook alert notification channels. Signing secrets are never returned.
       security:
@@ -3442,6 +4074,9 @@ paths:
               schema:
                 $ref: "#/components/schemas/NotificationChannelPage"
     post:
+      tags:
+        - Signal Egress
+      operationId: postNotificationChannels
       summary: Create notification channel
       security:
         - bearerAuth: []
@@ -3476,6 +4111,9 @@ paths:
                 updated_at: "2026-05-26T12:00:00Z"
   /v1/notification-channels/{channel_id}:
     get:
+      tags:
+        - Signal Egress
+      operationId: getNotificationChannelsChannelId
       summary: Get notification channel
       security:
         - bearerAuth: []
@@ -3493,6 +4131,9 @@ paths:
               schema:
                 $ref: "#/components/schemas/NotificationChannel"
     patch:
+      tags:
+        - Signal Egress
+      operationId: patchNotificationChannelsChannelId
       summary: Update notification channel
       security:
         - bearerAuth: []
@@ -3516,6 +4157,9 @@ paths:
               schema:
                 $ref: "#/components/schemas/NotificationChannel"
     delete:
+      tags:
+        - Signal Egress
+      operationId: deleteNotificationChannelsChannelId
       summary: Disable notification channel
       security:
         - bearerAuth: []
@@ -3540,6 +4184,9 @@ paths:
                 $ref: "#/components/schemas/NotificationChannel"
   /v1/notification-channels/{channel_id}:test:
     post:
+      tags:
+        - Signal Egress
+      operationId: postNotificationChannelsChannelIdTest
       summary: Queue a test notification delivery
       security:
         - bearerAuth: []
@@ -3564,6 +4211,9 @@ paths:
                 $ref: "#/components/schemas/NotificationDelivery"
   /v1/notification-deliveries:
     get:
+      tags:
+        - Signal Egress
+      operationId: getNotificationDeliveries
       summary: List notification deliveries
       security:
         - bearerAuth: []
@@ -3584,6 +4234,9 @@ paths:
                 $ref: "#/components/schemas/NotificationDeliveryPage"
   /v1/notification-deliveries/{delivery_id}/attempts:
     get:
+      tags:
+        - Signal Egress
+      operationId: getNotificationDeliveriesDeliveryIdAttempts
       summary: List notification delivery attempts
       security:
         - bearerAuth: []
@@ -3603,6 +4256,9 @@ paths:
                 $ref: "#/components/schemas/NotificationDeliveryAttemptPage"
   /v1/notification-deliveries/{delivery_id}:retry:
     post:
+      tags:
+        - Signal Egress
+      operationId: postNotificationDeliveriesDeliveryIdRetry
       summary: Retry notification delivery
       security:
         - bearerAuth: []
@@ -3627,6 +4283,9 @@ paths:
                 $ref: "#/components/schemas/NotificationDelivery"
   /v1/siem-sinks:
     get:
+      tags:
+        - Signal Egress
+      operationId: getSiemSinks
       summary: List SIEM sinks
       description: Lists tenant-scoped generic HTTPS audit-chain stream sinks. Signing secrets are never returned.
       security:
@@ -3641,6 +4300,9 @@ paths:
               schema:
                 $ref: "#/components/schemas/SIEMSinkPage"
     post:
+      tags:
+        - Signal Egress
+      operationId: postSiemSinks
       summary: Create SIEM sink
       security:
         - bearerAuth: []
@@ -3676,6 +4338,9 @@ paths:
                 updated_at: "2026-05-26T12:00:00Z"
   /v1/siem-sinks/{sink_id}:
     get:
+      tags:
+        - Signal Egress
+      operationId: getSiemSinksSinkId
       summary: Get SIEM sink
       security:
         - bearerAuth: []
@@ -3693,6 +4358,9 @@ paths:
               schema:
                 $ref: "#/components/schemas/SIEMSink"
     patch:
+      tags:
+        - Signal Egress
+      operationId: patchSiemSinksSinkId
       summary: Update SIEM sink
       security:
         - bearerAuth: []
@@ -3716,6 +4384,9 @@ paths:
               schema:
                 $ref: "#/components/schemas/SIEMSink"
     delete:
+      tags:
+        - Signal Egress
+      operationId: deleteSiemSinksSinkId
       summary: Disable SIEM sink
       security:
         - bearerAuth: []
@@ -3740,6 +4411,9 @@ paths:
                 $ref: "#/components/schemas/SIEMSink"
   /v1/siem-sinks/{sink_id}:test:
     post:
+      tags:
+        - Signal Egress
+      operationId: postSiemSinksSinkIdTest
       summary: Queue a test SIEM delivery
       security:
         - bearerAuth: []
@@ -3764,6 +4438,9 @@ paths:
                 $ref: "#/components/schemas/SIEMDelivery"
   /v1/siem-deliveries:
     get:
+      tags:
+        - Signal Egress
+      operationId: getSiemDeliveries
       summary: List SIEM deliveries
       security:
         - bearerAuth: []
@@ -3784,6 +4461,9 @@ paths:
                 $ref: "#/components/schemas/SIEMDeliveryPage"
   /v1/siem-deliveries/{delivery_id}/attempts:
     get:
+      tags:
+        - Signal Egress
+      operationId: getSiemDeliveriesDeliveryIdAttempts
       summary: List SIEM delivery attempts
       security:
         - bearerAuth: []
@@ -3803,6 +4483,9 @@ paths:
                 $ref: "#/components/schemas/SIEMDeliveryAttemptPage"
   /v1/siem-deliveries/{delivery_id}:retry:
     post:
+      tags:
+        - Signal Egress
+      operationId: postSiemDeliveriesDeliveryIdRetry
       summary: Retry SIEM delivery
       security:
         - bearerAuth: []
@@ -3851,6 +4534,105 @@ components:
         application/problem+json:
           schema:
             $ref: "#/components/schemas/Problem"
+          example:
+            type: about:blank
+            title: Forbidden
+            status: 403
+            code: forbidden
+            request_id: req_example
+            retryable: false
+    ValidationProblem:
+      description: The request is malformed or violates validation rules.
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+          example:
+            type: about:blank
+            title: Bad request
+            status: 400
+            code: validation_error
+            detail: Invalid JSON body.
+            request_id: req_example
+            retryable: false
+    UnauthorizedProblem:
+      description: Authentication is missing, invalid, or expired.
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+          example:
+            type: about:blank
+            title: Unauthorized
+            status: 401
+            code: unauthorized
+            request_id: req_example
+            retryable: false
+    ForbiddenProblem:
+      description: The authenticated actor lacks the required role, scope, tenant membership, or raw-payload permission.
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+          example:
+            type: about:blank
+            title: Forbidden
+            status: 403
+            code: forbidden
+            request_id: req_example
+            retryable: false
+    NotFoundProblem:
+      description: The resource does not exist or is not visible to the actor.
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+          example:
+            type: about:blank
+            title: Not found
+            status: 404
+            code: not_found
+            request_id: req_example
+            retryable: false
+    PayloadTooLargeProblem:
+      description: The request body exceeds the configured capture limit.
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+          example:
+            type: about:blank
+            title: Payload too large
+            status: 413
+            code: payload_too_large
+            request_id: req_example
+            retryable: false
+    HeadersTooLargeProblem:
+      description: Header count or header bytes exceed the configured ingress limits.
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+          example:
+            type: about:blank
+            title: Headers too large
+            status: 431
+            code: headers_too_large
+            request_id: req_example
+            retryable: false
+    StorageUnavailableProblem:
+      description: Durable storage was unavailable before acknowledgement.
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+          example:
+            type: about:blank
+            title: Internal server error
+            status: 503
+            code: storage_unavailable
+            request_id: req_example
+            retryable: true
   schemas:
     Problem:
       type: object
