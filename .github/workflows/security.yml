@@ -1,0 +1,68 @@
+name: security
+
+on:
+  push:
+    branches:
+      - master
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  security:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Dependency review
+        if: github.event_name == 'pull_request'
+        uses: actions/dependency-review-action@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Vulnerability check
+        run: make vuln
+
+      - name: Static security scan
+        run: make gosec
+
+      - name: Build Docker image
+        run: docker build -t webhookery:security .
+
+      - name: Generate source SBOM
+        uses: anchore/sbom-action@v0
+        with:
+          path: .
+          format: spdx-json
+          output-file: source.spdx.json
+          upload-artifact: false
+
+      - name: Generate image SBOM
+        uses: anchore/sbom-action@v0
+        with:
+          image: webhookery:security
+          format: spdx-json
+          output-file: image.spdx.json
+          upload-artifact: false
+
+      - name: Trivy image scan
+        uses: aquasecurity/trivy-action@0.31.0
+        with:
+          image-ref: webhookery:security
+          format: table
+          exit-code: "1"
+          ignore-unfixed: true
+          severity: HIGH,CRITICAL
+
+      - name: Upload security artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: security-artifacts
+          path: |
+            source.spdx.json
+            image.spdx.json

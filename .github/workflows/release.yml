@@ -1,0 +1,158 @@
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+  packages: write
+
+env:
+  IMAGE_NAME: ghcr.io/aatuh/webhookery
+  RANDONNEE_TEST_DATABASE_URL: postgres://webhookery:webhookery-ci@localhost:5432/webhookery?sslmode=disable
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: webhookery
+          POSTGRES_PASSWORD: webhookery-ci
+          POSTGRES_DB: webhookery
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U webhookery -d webhookery"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - uses: hashicorp/setup-terraform@v3
+
+      - name: Install SDK check tools
+        run: npm install --global typescript
+
+      - name: Release acceptance
+        run: make release-acceptance
+
+      - name: Release-candidate checks
+        run: make rc-check
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Docker metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE_NAME }}
+          tags: |
+            type=ref,event=tag
+            type=sha,prefix=sha-
+
+      - name: Build and push image
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v3
+
+      - name: Sign image
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: cosign sign --yes "${IMAGE_NAME}@${DIGEST}"
+
+      - name: Generate source SBOM
+        uses: anchore/sbom-action@v0
+        with:
+          path: .
+          format: spdx-json
+          output-file: source.spdx.json
+          upload-artifact: false
+
+      - name: Generate image SBOM
+        uses: anchore/sbom-action@v0
+        with:
+          image: ${{ env.IMAGE_NAME }}@${{ steps.build.outputs.digest }}
+          format: spdx-json
+          output-file: image.spdx.json
+          upload-artifact: false
+
+      - name: Trivy image scan
+        uses: aquasecurity/trivy-action@0.31.0
+        with:
+          image-ref: ${{ env.IMAGE_NAME }}@${{ steps.build.outputs.digest }}
+          format: table
+          exit-code: "1"
+          ignore-unfixed: true
+          severity: HIGH,CRITICAL
+
+      - name: Capture release evidence summary
+        env:
+          BUILD_DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          mkdir -p release-evidence
+          {
+            printf '%s\n' "# Webhookery Release Evidence"
+            printf '\n'
+            printf '%s\n' "- Tag: ${GITHUB_REF_NAME}"
+            printf '%s\n' "- Commit: ${GITHUB_SHA}"
+            printf '%s\n' "- Image: ${IMAGE_NAME}"
+            printf '%s\n' "- Image digest: ${BUILD_DIGEST}"
+            printf '%s\n' "- Source SBOM: source.spdx.json"
+            printf '%s\n' "- Image SBOM: image.spdx.json"
+            printf '\n'
+            printf '%s\n' "## Checks"
+            printf '%s\n' "- make release-acceptance"
+            printf '%s\n' "- make rc-check with local Postgres service"
+            printf '%s\n' "- Docker build and push"
+            printf '%s\n' "- Cosign keyless image signing"
+            printf '%s\n' "- SBOM generation"
+            printf '%s\n' "- Trivy HIGH/CRITICAL image scan"
+            printf '\n'
+            printf '%s\n' "## Checksums"
+            sha256sum openapi.yaml sdk/openapi.yaml source.spdx.json image.spdx.json
+            printf '\n'
+            printf '%s\n' "## Non-Claims"
+            printf '%s\n' "This evidence does not claim exactly-once delivery, provider-side event completeness, compliance certification, external timestamping, live-provider acceptance, or legal evidentiary certification."
+          } > release-evidence/release-evidence.md
+
+      - name: Upload release evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-evidence
+          path: |
+            release-evidence/
+            source.spdx.json
+            image.spdx.json

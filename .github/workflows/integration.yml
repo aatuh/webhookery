@@ -1,0 +1,56 @@
+name: integration
+
+on:
+  push:
+    branches:
+      - master
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  postgres:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: webhookery
+          POSTGRES_PASSWORD: webhookery-ci
+          POSTGRES_DB: webhookery
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U webhookery -d webhookery"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 20
+    env:
+      RANDONNEE_TEST_DATABASE_URL: postgres://webhookery:webhookery-ci@localhost:5432/webhookery?sslmode=disable
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - uses: hashicorp/setup-terraform@v3
+
+      - name: Install SDK check tools
+        run: npm install --global typescript
+
+      - name: Postgres integration tests
+        run: make postgres-integration-test
+
+      - name: DB-backed release-candidate checks
+        run: make rc-check
