@@ -105,7 +105,7 @@ Notes:
 
 - Align `.env.example`, `.api.env.example`, `.test.env.example`, Helm values, and Kubernetes Secret examples.
 
-### Ticket E2-T2 - Restructure Operations Around Runbooks [ ]
+### Ticket E2-T2 - Restructure Operations Around Runbooks [x]
 
 Description: Rewrite `docs/operations.md` as a runbook-focused document for production doctor, RC checks, backup/restore, incident triage, audit verification, and recovery.
 
