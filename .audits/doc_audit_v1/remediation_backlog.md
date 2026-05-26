@@ -87,7 +87,7 @@ Notes:
 
 Description: Turn the overloaded operations runbook into maintainable operator documentation without losing the security-sensitive operational details.
 
-### Ticket E2-T1 - Extract Canonical Configuration Reference [ ]
+### Ticket E2-T1 - Extract Canonical Configuration Reference [x]
 
 Description: Create or designate one configuration reference for environment variables, defaults, safe production values, secrets, and process applicability.
 
