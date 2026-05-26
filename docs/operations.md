@@ -8,6 +8,9 @@ Use these canonical references with this runbook:
 
 - `docs/configuration.md`: environment variables, defaults, safe production
   values, and secret sensitivity.
+- `docs/deployment.md`: shared deployment posture for dependencies, TLS,
+  secrets, object storage, network policy, readiness, backup/restore, upgrade,
+  and rollback.
 - `docs/feature-behavior.md`: capture, auth, routing, delivery, replay,
   reconciliation, transformations, retention, identity, producer trust, and
   SSRF behavior.
