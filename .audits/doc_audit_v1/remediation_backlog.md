@@ -311,7 +311,7 @@ Notes:
 
 - This should summarize migration practice, not duplicate every SQL table definition.
 
-## Epic E5 - Add Documentation Maintenance Discipline [ ]
+## Epic E5 - Add Documentation Maintenance Discipline [x]
 
 Description: Reduce future drift by documenting ownership, freshness checks, provider-claim review, and validation expectations.
 
@@ -351,7 +351,7 @@ Notes:
 
 - Place this where contributors and agents will actually see it.
 
-### Ticket E5-T3 - Align Documentation Checks With The New Structure [ ]
+### Ticket E5-T3 - Align Documentation Checks With The New Structure [x]
 
 Description: Update documentation-adjacent validation so `make docs-check` continues to verify canonical docs, derived OpenAPI/SDK artifacts, collections, deployment docs, and required metadata after the split.
 
