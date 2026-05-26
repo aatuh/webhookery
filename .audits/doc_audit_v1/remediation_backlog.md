@@ -163,7 +163,7 @@ Notes:
 
 Description: Make the API-first product usable from contracts, CLI commands, SDKs, and request collections without forcing readers through the operations monolith.
 
-### Ticket E3-T1 - Add OpenAPI Navigation And Common Contract Detail [ ]
+### Ticket E3-T1 - Add OpenAPI Navigation And Common Contract Detail [x]
 
 Description: Add OpenAPI tags, operation IDs, common error responses, and representative examples for high-value workflows without changing API behavior.
 
