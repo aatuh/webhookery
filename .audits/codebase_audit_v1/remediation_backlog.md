@@ -180,7 +180,7 @@ Implementation rules:
 - update the ticket checkmark from `[ ]` to `[x]` only after the ticket is actually complete
 - update the epic checkmark from `[ ]` to `[x]` only when all child tickets are complete
 
-## Epic E4 - Runtime Resilience And Startup Safety [ ]
+## Epic E4 - Runtime Resilience And Startup Safety [x]
 
 Description: Improve operational isolation so one subsystem failure or backfill cannot degrade unrelated core product work.
 
@@ -216,7 +216,7 @@ Implementation rules:
 - update the ticket checkmark from `[ ]` to `[x]` only after the ticket is actually complete
 - update the epic checkmark from `[ ]` to `[x]` only when all child tickets are complete
 
-### Ticket E4-T3 - Add Trusted Proxy Policy For Session Metadata [ ]
+### Ticket E4-T3 - Add Trusted Proxy Policy For Session Metadata [x]
 
 Description: Stop trusting `X-Forwarded-For` unconditionally and add explicit trusted-proxy configuration for OIDC session IP metadata.
 
