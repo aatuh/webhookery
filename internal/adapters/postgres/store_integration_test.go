@@ -555,6 +555,169 @@ func TestPostgresAuditChainBackfillIsBoundedAndIdempotent(t *testing.T) {
 	}
 }
 
+func TestPostgresControlResourcesTenantIsolationAndEvidence(t *testing.T) {
+	ctx, store, actor := openPostgresIntegrationStore(t)
+	defer store.Close()
+
+	suffix := time.Now().UTC().Format("150405.000000000")
+	other := authz.Actor{ID: "usr_it_other_" + suffix, TenantID: "ten_it_other_" + suffix, Role: authz.RoleOwner, Scopes: []string{"*"}}
+	control := app.NewControlService(store, ssrf.Validator{Resolver: ssrf.StaticResolver{
+		"receiver.example.com": {netip.MustParseAddr("93.184.216.34")},
+		"signals.example.com":  {netip.MustParseAddr("93.184.216.34")},
+	}})
+
+	source, err := control.CreateSource(ctx, actor, app.CreateSourceRequest{Name: "tenant source", Provider: "stripe", Adapter: "stripe", VerificationSecret: "whsec_it"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	endpoint, _, err := control.CreateEndpoint(ctx, actor, app.CreateEndpointRequest{Name: "tenant endpoint", URL: "https://receiver.example.com/webhook"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	retryPolicy, err := control.CreateRetryPolicy(ctx, actor, app.CreateRetryPolicyRequest{Name: "tenant retry", MaxAttempts: 3, MaxDurationSeconds: 3600, InitialDelaySeconds: 1, MaxDelaySeconds: 60})
+	if err != nil {
+		t.Fatal(err)
+	}
+	route, err := control.CreateRoute(ctx, actor, app.CreateRouteRequest{SourceID: source.ID, Name: "tenant route", Priority: 10, EventTypes: []string{"invoice.created"}, EndpointID: endpoint.ID, RetryPolicyID: retryPolicy.ID, State: domain.StateActive})
+	if err != nil {
+		t.Fatal(err)
+	}
+	subscription, err := control.CreateSubscription(ctx, actor, app.CreateSubscriptionRequest{EndpointID: endpoint.ID, EventTypes: []string{"invoice.created"}, PayloadFormat: "canonical_json"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	channel, _, err := control.CreateNotificationChannel(ctx, actor, app.CreateNotificationChannelRequest{Name: "tenant notification", URL: "https://signals.example.com/notify", SigningSecret: "notify-secret"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	alert, err := control.CreateAlertRule(ctx, actor, app.CreateAlertRuleRequest{Name: "tenant alert", RuleType: domain.AlertRuleDeadLetterOpen, Threshold: 1, ChannelIDs: []string{channel.ID}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sink, _, err := control.CreateSIEMSink(ctx, actor, app.CreateSIEMSinkRequest{Name: "tenant siem", URL: "https://signals.example.com/siem", SigningSecret: "siem-secret"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	sourceName := "tenant source updated"
+	if _, err := control.UpdateSource(ctx, actor, source.ID, app.UpdateSourceRequest{Name: &sourceName, Reason: "integration update"}); err != nil {
+		t.Fatal(err)
+	}
+	endpointName := "tenant endpoint updated"
+	if _, _, err := control.UpdateEndpoint(ctx, actor, endpoint.ID, app.UpdateEndpointRequest{Name: &endpointName, Reason: "integration update"}); err != nil {
+		t.Fatal(err)
+	}
+	routeName := "tenant route updated"
+	if _, err := control.UpdateRoute(ctx, actor, route.ID, app.UpdateRouteRequest{Name: &routeName, Reason: "integration update"}); err != nil {
+		t.Fatal(err)
+	}
+	subscriptionFormat := "canonical_json"
+	if _, err := control.UpdateSubscription(ctx, actor, subscription.ID, app.UpdateSubscriptionRequest{PayloadFormat: &subscriptionFormat, Reason: "integration update"}); err != nil {
+		t.Fatal(err)
+	}
+	retryName := "tenant retry updated"
+	if _, err := control.UpdateRetryPolicy(ctx, actor, retryPolicy.ID, app.UpdateRetryPolicyRequest{Name: &retryName, Reason: "integration update"}); err != nil {
+		t.Fatal(err)
+	}
+	alertName := "tenant alert updated"
+	if _, err := control.UpdateAlertRule(ctx, actor, alert.ID, app.UpdateAlertRuleRequest{Name: &alertName, Reason: "integration update"}); err != nil {
+		t.Fatal(err)
+	}
+	channelName := "tenant notification updated"
+	if _, _, err := control.UpdateNotificationChannel(ctx, actor, channel.ID, app.UpdateNotificationChannelRequest{Name: &channelName, Reason: "integration update"}); err != nil {
+		t.Fatal(err)
+	}
+	sinkName := "tenant siem updated"
+	if _, _, err := control.UpdateSIEMSink(ctx, actor, sink.ID, app.UpdateSIEMSinkRequest{Name: &sinkName, Reason: "integration update"}); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = control.GetSource(ctx, other, source.ID)
+	assertPostgresNotFound(t, err)
+	_, err = control.GetEndpoint(ctx, other, endpoint.ID)
+	assertPostgresNotFound(t, err)
+	_, err = control.GetRoute(ctx, other, route.ID)
+	assertPostgresNotFound(t, err)
+	_, err = control.GetSubscription(ctx, other, subscription.ID)
+	assertPostgresNotFound(t, err)
+	_, err = control.GetRetryPolicy(ctx, other, retryPolicy.ID)
+	assertPostgresNotFound(t, err)
+	_, err = control.GetAlertRule(ctx, other, alert.ID)
+	assertPostgresNotFound(t, err)
+	_, err = control.GetNotificationChannel(ctx, other, channel.ID)
+	assertPostgresNotFound(t, err)
+	_, err = control.GetSIEMSink(ctx, other, sink.ID)
+	assertPostgresNotFound(t, err)
+
+	for _, item := range []struct {
+		resourceType string
+		resourceID   string
+	}{
+		{domain.ConfigResourceSource, source.ID},
+		{domain.ConfigResourceEndpoint, endpoint.ID},
+		{domain.ConfigResourceRoute, route.ID},
+		{domain.ConfigResourceSubscription, subscription.ID},
+		{domain.ConfigResourceRetryPolicy, retryPolicy.ID},
+	} {
+		assertPostgresConfigVersion(t, ctx, store, actor.TenantID, item.resourceType, item.resourceID)
+	}
+	for _, item := range []struct {
+		action     string
+		resource   string
+		resourceID string
+	}{
+		{"source.updated", "source", source.ID},
+		{"endpoint.updated", "endpoint", endpoint.ID},
+		{"route.updated", "route", route.ID},
+		{"subscription.updated", "subscription", subscription.ID},
+		{"retry_policy.updated", "retry_policy", retryPolicy.ID},
+		{"alert_rule.updated", "alert_rule", alert.ID},
+		{"notification_channel.updated", "notification_channel", channel.ID},
+		{"siem_sink.updated", "siem_sink", sink.ID},
+	} {
+		assertPostgresAuditEvent(t, ctx, store, actor.TenantID, item.action, item.resource, item.resourceID)
+	}
+}
+
+func assertPostgresNotFound(t *testing.T, err error) {
+	t.Helper()
+	if !errors.Is(err, app.ErrNotFound) {
+		t.Fatalf("expected wrong-tenant lookup to return not found, got %v", err)
+	}
+}
+
+func assertPostgresConfigVersion(t *testing.T, ctx context.Context, store *Store, tenantID, resourceType, resourceID string) {
+	t.Helper()
+	var count int
+	if err := store.pool.QueryRow(ctx, `
+		SELECT count(*)
+		FROM config_versions
+		WHERE tenant_id=$1 AND resource_type=$2 AND resource_id=$3`,
+		tenantID, resourceType, resourceID,
+	).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count == 0 {
+		t.Fatalf("expected config version for %s/%s", resourceType, resourceID)
+	}
+}
+
+func assertPostgresAuditEvent(t *testing.T, ctx context.Context, store *Store, tenantID, action, resource, resourceID string) {
+	t.Helper()
+	var count int
+	if err := store.pool.QueryRow(ctx, `
+		SELECT count(*)
+		FROM audit_events
+		WHERE tenant_id=$1 AND action=$2 AND resource=$3 AND resource_id=$4`,
+		tenantID, action, resource, resourceID,
+	).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count == 0 {
+		t.Fatalf("expected audit event %s for %s/%s", action, resource, resourceID)
+	}
+}
+
 func openPostgresIntegrationStore(t *testing.T) (context.Context, *Store, authz.Actor) {
 	t.Helper()
 	databaseURL := os.Getenv("WEBHOOKERY_TEST_DATABASE_URL")
