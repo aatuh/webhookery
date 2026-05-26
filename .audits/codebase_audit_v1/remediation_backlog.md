@@ -27,7 +27,7 @@ Implementation rules:
 - update the ticket checkmark from `[ ]` to `[x]` only after the ticket is actually complete
 - update the epic checkmark from `[ ]` to `[x]` only when all child tickets are complete
 
-### Ticket E1-T2 - Add Router And OpenAPI Parity Checks [ ]
+### Ticket E1-T2 - Add Router And OpenAPI Parity Checks [x]
 
 Description: Replace the current `/openapi.yaml` smoke check with a real contract check that compares registered routes/methods against `openapi.yaml`.
 
