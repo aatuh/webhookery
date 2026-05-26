@@ -54,4 +54,5 @@ When adding docs, examples, release evidence, or support text:
   keys, real database URLs, provider credentials, bearer tokens, or session
   tokens.
 - Verify provider-specific statements against official upstream docs before
-  changing provider semantics.
+  changing provider semantics. Use `docs/documentation-maintenance.md` for the
+  freshness record.

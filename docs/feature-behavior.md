@@ -15,7 +15,8 @@ Canonical sources still win for exact behavior:
 
 Provider-specific behavior changes over time. Before changing provider
 semantics for Stripe, GitHub, Shopify, Slack, CloudEvents, or SSRF guidance,
-check current official upstream documentation and record the freshness context.
+check current official upstream documentation and record the freshness context
+using `docs/documentation-maintenance.md`.
 
 ## Inbound Capture And Acknowledgement
 
