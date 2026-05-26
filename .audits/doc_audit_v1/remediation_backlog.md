@@ -83,7 +83,7 @@ Notes:
 
 - Audit evidence: `.initial_design.md:7-9` reads as prompt critique rather than maintained architecture documentation.
 
-## Epic E2 - Split And Tighten Operator Documentation [ ]
+## Epic E2 - Split And Tighten Operator Documentation [x]
 
 Description: Turn the overloaded operations runbook into maintainable operator documentation without losing the security-sensitive operational details.
 
@@ -141,7 +141,7 @@ Notes:
 
 - Do not create many tiny docs. Group by reader task and maintenance boundary.
 
-### Ticket E2-T4 - Consolidate Non-Claims And Security Promise Language [ ]
+### Ticket E2-T4 - Consolidate Non-Claims And Security Promise Language [x]
 
 Description: Establish one canonical non-claims/security-promise section and replace repeated prose elsewhere with short links or references.
 
