@@ -87,6 +87,8 @@ commits, issues, support requests, or audit artifacts.
 
 - `docs/index.md`: canonical documentation map by audience, purpose, and
   source-of-truth boundary.
+- `docs/configuration.md`: canonical environment variable and secret handling
+  reference.
 - `docs/operations.md`: operator runbooks and production RC procedures.
 - `docs/security-review-package.md`: security reviewer artifact map.
 - `docs/release-evidence-template.md`: canonical release evidence template.

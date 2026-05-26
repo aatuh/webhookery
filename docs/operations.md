@@ -5,6 +5,10 @@ marketing.
 
 ## Deployment Profile
 
+Use `docs/configuration.md` as the canonical environment variable and secret
+handling reference. This runbook calls out only the variables that matter to a
+specific operational procedure.
+
 The MVP deployment profile is a Go API/worker binary backed by PostgreSQL.
 Docker Compose starts PostgreSQL, runs migrations, starts the API, and starts a worker. PostgreSQL is the
 source of truth for raw payload metadata, events, dedupe records, delivery
