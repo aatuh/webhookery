@@ -87,6 +87,8 @@ commits, issues, support requests, or audit artifacts.
 - `docs/security-promise.md`: canonical durable-capture promise and
   non-claims.
 - `docs/deployment.md`: common self-hosted deployment posture.
+- `docs/schema-migrations.md`: schema review, migration ordering, and restore
+  compatibility guidance.
 - `docs/security-review-package.md`: security reviewer artifact map.
 - `docs/release-evidence-template.md`: canonical release evidence template.
 - `docs/cli.md`: CLI command reference and moved command catalog.

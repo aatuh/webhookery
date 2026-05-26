@@ -12,6 +12,7 @@ owner document for a topic and linking to it from secondary docs.
 | `sdk/openapi.yaml` | SDK maintainers | SDK-ready OpenAPI copy. | Derived from `openapi.yaml`; keep aligned with `make sdk-generate` and `make sdk-check`. |
 | `cmd/`, `internal/`, `pkg/` | Developers, reviewers | Go implementation for processes, app logic, adapters, and public helpers. | Implemented behavior. Docs must not claim behavior not supported by these files. |
 | `migrations/` | DB reviewers, operators, developers | PostgreSQL schema evolution. | Database schema history and migration ordering. |
+| `docs/schema-migrations.md` | DB reviewers, operators, release managers | Migration runner behavior, ordering, evidence-authority tables, rollback stance, and restore compatibility review. | Human operations guide for schema changes. Exact DDL remains in `migrations/`. |
 | `Makefile` | Contributors, CI maintainers, release operators | Project-owned commands and validation gates. | Command names and check composition. Confirm with `make help`. |
 | `docs/configuration.md` | Operators, deployment maintainers, contributors | Environment variables, defaults, safe production values, secret sensitivity, and process applicability. | Canonical configuration reference. Keep env examples and deployment profile references aligned here. |
 | `docs/operations.md` | Self-hosted operators and SREs | Production doctor, RC checks, backup/restore, incident triage, audit verification, and recovery guidance. | Operator runbooks. Avoid moving API reference or command catalogs back into this file. |
