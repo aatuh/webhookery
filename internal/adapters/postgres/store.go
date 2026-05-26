@@ -2466,29 +2466,37 @@ func (s *Store) CaptureInbound(ctx context.Context, input app.CaptureInboundInpu
 		return app.CaptureInboundResult{}, err
 	}
 
-	var existingEventID string
-	err = tx.QueryRow(ctx, `SELECT id FROM events WHERE tenant_id=$1 AND dedupe_key=$2`, input.Source.TenantID, input.Event.DedupeKey).Scan(&existingEventID)
+	if input.Event.Type == "" {
+		input.Event.Type = "unknown"
+	}
+	dedupeStatus := domain.DedupeUnique
+	var insertedEventID string
+	err = tx.QueryRow(ctx, `
+		INSERT INTO events(id, tenant_id, source_id, provider, type, provider_event_id, raw_payload_id, raw_payload_hash,
+			signature_verified, verification_reason, dedupe_key, dedupe_status, received_at, trace_id)
+		VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+		ON CONFLICT (tenant_id, dedupe_key) DO NOTHING
+		RETURNING id`,
+		eventID, input.Source.TenantID, input.Source.ID, input.Source.Provider, input.Event.Type, input.Event.ProviderID,
+		rawID, input.RawPayload.SHA256, input.VerificationOK, input.VerifyReason, input.Event.DedupeKey, dedupeStatus,
+		input.Event.ReceivedAt, input.Event.TraceID,
+	).Scan(&insertedEventID)
 	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 		return app.CaptureInboundResult{}, err
 	}
-	dedupeStatus := domain.DedupeUnique
-	if existingEventID != "" {
-		eventID = existingEventID
+	if insertedEventID == "" {
 		dedupeStatus = domain.DedupeDuplicateSuppressed
-	} else {
-		if input.Event.Type == "" {
-			input.Event.Type = "unknown"
-		}
-		if _, err := tx.Exec(ctx, `
-			INSERT INTO events(id, tenant_id, source_id, provider, type, provider_event_id, raw_payload_id, raw_payload_hash,
-				signature_verified, verification_reason, dedupe_key, dedupe_status, received_at, trace_id)
-			VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
-			eventID, input.Source.TenantID, input.Source.ID, input.Source.Provider, input.Event.Type, input.Event.ProviderID,
-			rawID, input.RawPayload.SHA256, input.VerificationOK, input.VerifyReason, input.Event.DedupeKey, dedupeStatus,
-			input.Event.ReceivedAt, input.Event.TraceID,
-		); err != nil {
+		err = tx.QueryRow(ctx, `
+			SELECT id
+			FROM events
+			WHERE tenant_id=$1 AND dedupe_key=$2`,
+			input.Source.TenantID, input.Event.DedupeKey,
+		).Scan(&eventID)
+		if err != nil {
 			return app.CaptureInboundResult{}, err
 		}
+	} else {
+		eventID = insertedEventID
 		if len(input.Normalized.Envelope) > 0 {
 			adapterVersionID, err := s.lookupAdapterVersionID(ctx, tx, firstNonEmpty(input.Source.Adapter, input.Source.Provider))
 			if err != nil {
