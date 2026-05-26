@@ -96,6 +96,22 @@ func TestCloudEventsAdapterDoesNotVerifyUnsignedStructuredMode(t *testing.T) {
 	}
 }
 
+func TestCloudEventsAdapterDoesNotVerifyUnsignedBinaryMode(t *testing.T) {
+	adapter := CloudEventsAdapter{}
+	result := adapter.Verify(VerifyInput{
+		Headers: map[string][]string{
+			"ce-id":          {"evt_1"},
+			"ce-type":        {"invoice.paid"},
+			"ce-source":      {"tests"},
+			"ce-specversion": {"1.0"},
+		},
+		RawBody: []byte(`{"amount":42}`),
+	})
+	if result.Verified || result.Reason != "unsigned_cloudevents" {
+		t.Fatalf("binary CloudEvents validity must not imply trust, got %+v", result)
+	}
+}
+
 func TestProviderRejectsMissingSignature(t *testing.T) {
 	adapter, ok := BuiltInRegistry().Adapter("github")
 	if !ok {
