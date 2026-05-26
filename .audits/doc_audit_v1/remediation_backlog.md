@@ -315,7 +315,7 @@ Notes:
 
 Description: Reduce future drift by documenting ownership, freshness checks, provider-claim review, and validation expectations.
 
-### Ticket E5-T1 - Document Provider Claim Freshness Rules [ ]
+### Ticket E5-T1 - Document Provider Claim Freshness Rules [x]
 
 Description: Add a rule for dated provider-specific claims that records owner, review cadence, official source links, and how stale claims should be updated.
 
