@@ -7,7 +7,7 @@ Status legend:
 - [ ] not done
 - [x] done
 
-## Epic E1 - Stabilize Documentation Entry Points [ ]
+## Epic E1 - Stabilize Documentation Entry Points [x]
 
 Description: Make the documentation source-of-truth clear before rewriting deeper docs. This epic removes stale guidance and gives readers a reliable first path through the repository.
 
@@ -65,7 +65,7 @@ Notes:
 
 - Keep the map short. Do not duplicate command lists or route catalogs.
 
-### Ticket E1-T4 - Reclassify The Initial Design Document [ ]
+### Ticket E1-T4 - Reclassify The Initial Design Document [x]
 
 Description: Clarify whether `.initial_design.md` is historical design input or a maintained architecture reference, then add the minimum context needed to prevent misuse.
 
