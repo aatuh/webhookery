@@ -230,12 +230,16 @@ self-hosted release candidate. Before promoting a deployment:
    fixed before promotion.
 2. Run `make finalize`; all unit, contract, SDK, vulnerability, gosec, and race
    checks must pass.
-3. Run `WEBHOOKERY_TEST_DATABASE_URL=postgres://... make rc-check` against a
+3. Run `WEBHOOKERY_TEST_DATABASE_URL=postgres://... make live-postgres-check`
+   against a disposable PostgreSQL database. This is the canonical live
+   database quality gate; `make fast-check` remains non-live for local and CI
+   iteration without credentials.
+4. Run `WEBHOOKERY_TEST_DATABASE_URL=postgres://... make rc-check` against a
    disposable PostgreSQL database; it should end with
    `release-candidate acceptance checks passed`.
-4. Run the restore drill with a separate disposable restore database by setting
+5. Run the restore drill with a separate disposable restore database by setting
    `WEBHOOKERY_RC_RESTORE_DATABASE_URL=postgres://...` before `make rc-check`.
-5. Confirm the operator runbooks in `docs/operations.md` match the deployed
+6. Confirm the operator runbooks in `docs/operations.md` match the deployed
    storage, key-custody, TLS, and retention configuration.
 
 This RC scope does not claim exactly-once delivery, multi-region active-active

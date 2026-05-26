@@ -139,6 +139,9 @@ Before promotion, complete this checklist:
 - `go run ./cmd/whcp doctor production` exits with no `blocker` findings.
   Warnings require an explicit operator decision.
 - `make finalize` passes on the release candidate commit.
+- `WEBHOOKERY_TEST_DATABASE_URL=postgres://... make live-postgres-check` passes
+  against a disposable PostgreSQL database. This is the canonical live
+  PostgreSQL gate and uses only local/CI database resources.
 - `make rc-check` passes without live third-party provider, AWS, Vault, Slack,
   PagerDuty, SIEM, or customer receiver calls.
 - `WEBHOOKERY_TEST_DATABASE_URL=postgres://... make rc-check` passes against a
@@ -159,6 +162,7 @@ Expected local RC command sequence:
 
 ```bash
 docker compose up -d postgres
+WEBHOOKERY_TEST_DATABASE_URL=postgres://webhookery:change-me@localhost:5432/webhookery?sslmode=disable make live-postgres-check
 WEBHOOKERY_TEST_DATABASE_URL=postgres://webhookery:change-me@localhost:5432/webhookery?sslmode=disable make rc-check
 ```
 

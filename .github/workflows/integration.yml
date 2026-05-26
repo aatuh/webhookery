@@ -49,9 +49,9 @@ jobs:
       - name: Install SDK check tools
         run: npm install --global typescript
 
-      - name: Postgres integration tests
-        id: postgres_tests
-        run: make postgres-integration-test
+      - name: Live Postgres quality gate
+        id: live_postgres_check
+        run: make live-postgres-check
 
       - name: DB-backed release-candidate checks
         id: rc_check
@@ -60,7 +60,7 @@ jobs:
       - name: Capture integration evidence
         if: always()
         env:
-          POSTGRES_INTEGRATION_OUTCOME: ${{ steps.postgres_tests.outcome }}
+          LIVE_POSTGRES_CHECK_OUTCOME: ${{ steps.live_postgres_check.outcome }}
           RC_CHECK_OUTCOME: ${{ steps.rc_check.outcome }}
           RESTORE_DRILL_STATUS: skipped_not_configured
         run: scripts/integration_evidence.sh

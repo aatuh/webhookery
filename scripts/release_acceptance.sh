@@ -62,9 +62,12 @@ grep -q "Incident Triage" docs/operations.md
 grep -q "Explicit Non-Goals" docs/operations.md
 grep -q "Production RC Readiness" README.md
 grep -q "make rc-check" README.md
+grep -q "make live-postgres-check" README.md
+grep -q "make live-postgres-check" docs/operations.md
+grep -q "make live-postgres-check" docs/release-evidence-template.md
 
 if [ -n "${WEBHOOKERY_TEST_DATABASE_URL:-}" ]; then
-  make postgres-integration-test
+  make live-postgres-check
 fi
 
 printf '%s\n' "release acceptance checks passed"

@@ -8,7 +8,7 @@ GOSEC_VERSION ?= v2.25.0
 GOVULNCHECK_VERSION ?= v1.2.0
 FUZZTIME ?= 5s
 
-.PHONY: help tools fmt lint vuln gosec test test-race coverage openapi-check test-vectors-check crypto-inventory deployment-profile-check collections-check meta-files-check fuzz-smoke sdk-generate sdk-check docs-check release-acceptance rc-check compose-up compose-down migrate postgres-integration-test redis-integration-test fast-check finalize clean
+.PHONY: help tools fmt lint vuln gosec test test-race coverage openapi-check test-vectors-check crypto-inventory deployment-profile-check collections-check meta-files-check fuzz-smoke sdk-generate sdk-check docs-check release-acceptance rc-check compose-up compose-down migrate live-postgres-check postgres-integration-test redis-integration-test fast-check finalize clean
 
 help: ## Show help
 	@awk 'BEGIN {FS=":.*## "}; /^[a-zA-Z0-9_.-]+:.*## / { printf "  %-16s %s\n", $$1, $$2 }' $(MAKEFILE_LIST)
@@ -105,6 +105,9 @@ meta-files-check: ## Check governance, licensing, and release-evidence metadata
 	@grep -q "no provider-side event completeness" RELEASE_EVIDENCE.md
 	@grep -q "compliance" RELEASE_EVIDENCE.md
 	@grep -q "live third-party provider" docs/release-evidence-template.md
+	@grep -q "make live-postgres-check" README.md
+	@grep -q "make live-postgres-check" docs/operations.md
+	@grep -q "make live-postgres-check" docs/release-evidence-template.md
 	@grep -q "not a certification" RELEASE_EVIDENCE.md
 	@grep -q ".refs" .dockerignore
 	@grep -q "release-evidence" .dockerignore
@@ -161,9 +164,11 @@ compose-down: ## Stop local dependencies
 migrate: ## Run Postgres migrations using DATABASE_URL
 	@$(GO) run ./cmd/whcp migrate -dir migrations up
 
-postgres-integration-test: ## Run live Postgres migration and store integration tests
+live-postgres-check: ## Run the live Postgres quality gate using WEBHOOKERY_TEST_DATABASE_URL
 	@test -n "$$WEBHOOKERY_TEST_DATABASE_URL" || (printf '%s\n' "WEBHOOKERY_TEST_DATABASE_URL is required; start postgres with docker compose up -d postgres" >&2; exit 2)
 	@$(GO) test ./internal/adapters/postgres -run 'TestPostgres|TestMigration' -count=1
+
+postgres-integration-test: live-postgres-check ## Compatibility alias for live-postgres-check
 
 redis-integration-test: ## Run live Redis edge-store integration tests
 	@test -n "$$WEBHOOKERY_TEST_REDIS_ADDR" || (printf '%s\n' "WEBHOOKERY_TEST_REDIS_ADDR is required; start redis with docker compose up -d redis" >&2; exit 2)
