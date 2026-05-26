@@ -112,7 +112,7 @@ Implementation rules:
 - update the ticket checkmark from `[ ]` to `[x]` only after the ticket is actually complete
 - update the epic checkmark from `[ ]` to `[x]` only when all child tickets are complete
 
-## Epic E3 - Hexagonal Boundary Repair [ ]
+## Epic E3 - Hexagonal Boundary Repair [x]
 
 Description: Reduce the blast radius of core changes by moving orchestration out of infrastructure adapters and splitting god files into cohesive modules.
 
@@ -164,7 +164,7 @@ Implementation rules:
 - update the ticket checkmark from `[ ]` to `[x]` only after the ticket is actually complete
 - update the epic checkmark from `[ ]` to `[x]` only when all child tickets are complete
 
-### Ticket E3-T4 - Split HTTP And CLI Entrypoint Files [ ]
+### Ticket E3-T4 - Split HTTP And CLI Entrypoint Files [x]
 
 Description: Split `server.go` and `cmd/whcp/main.go` into cohesive resource and command files without changing routes or flags.
 
