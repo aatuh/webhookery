@@ -53,7 +53,7 @@ Notes:
 
 Description: Bind SSRF validation to the actual outbound connection for customer-controlled endpoint, notification, and SIEM URLs.
 
-### Ticket E2-T1 - Implement Pinned-IP HTTP Transport [ ]
+### Ticket E2-T1 - Implement Pinned-IP HTTP Transport [x]
 
 Description: Add an egress transport that resolves the hostname, validates every resolved IP against policy, dials an allowed IP, and preserves the original Host/SNI semantics.
 
