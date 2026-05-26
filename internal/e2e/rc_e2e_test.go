@@ -848,9 +848,10 @@ func createRCRouteWithOptions(t *testing.T, ctx context.Context, control *app.Co
 
 func runWorkerOnce(t *testing.T, ctx context.Context, store *postgres.Store, delivery worker.DeliveryClient, workerID string) {
 	t.Helper()
+	fanout := app.NewDeliveryFanoutService(store, fixedClock{now: time.Now().UTC()})
 	err := (worker.Worker{
 		Store:          store,
-		Processor:      store,
+		Processor:      fanout,
 		DeliveryStore:  store,
 		DeliveryClient: delivery,
 		WorkerID:       workerID,
