@@ -26,7 +26,6 @@ type DeliveryFanoutStore interface {
 	GetCurrentDeliveryFanoutTarget(ctx context.Context, tenantID, routeID, subscriptionID string) (DeliveryFanoutTarget, bool, error)
 	InsertReplayNoopItem(ctx context.Context, tenantID, replayJobID, eventID, configMode, errorText string) error
 	CompleteReplayJob(ctx context.Context, tenantID, replayJobID string, processedItems int) error
-	RunReconciliationJob(ctx context.Context, tenantID, jobID string) error
 }
 
 type DeliveryFanoutService struct {
@@ -149,8 +148,6 @@ func (s *DeliveryFanoutService) ProcessOutbox(ctx context.Context, item worker.O
 		return err
 	case OutboxKindReplayJob:
 		return s.CreateReplayDeliveries(ctx, item.TenantID, item.ResourceID)
-	case OutboxKindReconciliationJob:
-		return s.store.RunReconciliationJob(ctx, item.TenantID, item.ResourceID)
 	default:
 		return nil
 	}

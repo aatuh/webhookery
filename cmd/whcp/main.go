@@ -231,9 +231,11 @@ func runWorker(args []string) error {
 	}
 	defer store.Close()
 	fanout := apppkg.NewDeliveryFanoutService(store, apppkg.SystemClock{})
+	reconciliation := apppkg.NewReconciliationService(store, nil)
+	processor := apppkg.NewOutboxProcessorService(fanout, reconciliation)
 	w := worker.Worker{
 		Store:                     store,
-		Processor:                 fanout,
+		Processor:                 processor,
 		DeliveryStore:             store,
 		DeliveryClient:            deliveryAdapter{client: deliveryhttp.Client{SSRF: ssrf.Validator{}}},
 		NotificationDeliveryStore: store,

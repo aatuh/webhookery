@@ -147,7 +147,6 @@ type ProviderConnectionStore interface {
 }
 
 type ReconciliationStore interface {
-	DryRunReconciliation(ctx context.Context, tenantID string, req ReconciliationJobRequest) (domain.ReconciliationJob, error)
 	CreateReconciliationJob(ctx context.Context, tenantID, actorID string, req ReconciliationJobRequest) (domain.ReconciliationJob, error)
 	ListReconciliationJobs(ctx context.Context, tenantID string, limit int) ([]domain.ReconciliationJob, error)
 	GetReconciliationJob(ctx context.Context, tenantID, jobID string) (domain.ReconciliationJob, error)
