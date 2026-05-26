@@ -333,7 +333,7 @@ Notes:
 
 - Current dated claims include provider behavior checked on May 25, 2026.
 
-### Ticket E5-T2 - Add Documentation Review Checklist [ ]
+### Ticket E5-T2 - Add Documentation Review Checklist [x]
 
 Description: Add a short checklist for documentation changes covering audience, doc type, source of truth, examples, command validation, security claims, and non-claim consistency.
 
