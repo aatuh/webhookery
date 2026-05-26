@@ -137,7 +137,7 @@ Notes:
 
 Description: Preserve raw duplicate evidence and provider receipts even when duplicate webhook deliveries arrive concurrently.
 
-### Ticket E4-T1 - Make Dedupe Capture Atomic [ ]
+### Ticket E4-T1 - Make Dedupe Capture Atomic [x]
 
 Description: Refactor inbound capture to avoid the select-then-insert race on `(tenant_id, dedupe_key)` while still linking duplicate raw payloads and receipts to the first event.
 
