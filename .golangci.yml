@@ -1,0 +1,67 @@
+version: "2"
+
+run:
+  timeout: 5m
+  tests: true
+  modules-download-mode: readonly
+  relative-path-mode: gomod
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
+  settings:
+    goimports:
+      local-prefixes:
+        - webhookery
+
+linters:
+  default: none
+  enable:
+    # Baseline correctness.
+    - govet
+    - staticcheck
+    - ineffassign
+    - unused
+    - errorlint
+
+    # Error-handling and nil-path bugs.
+    - errcheck
+    - nilerr
+
+    # Resource leaks.
+    - bodyclose
+    - rowserrcheck
+    - sqlclosecheck
+
+    # Security and hardening.
+    - gosec
+    - bidichk
+
+    # Server/API context propagation.
+    - noctx
+    - contextcheck
+
+    # Developer experience.
+    - nolintlint
+    - durationcheck
+    - misspell
+
+  exclusions:
+    presets:
+      - comments
+      - std-error-handling
+      - common-false-positives
+      - legacy
+    rules:
+      - path: _test\.go
+        linters:
+          - gosec
+        text: "G101|G204|G404"
+      - path: _test\.go
+        linters:
+          - noctx
+      - path: _test\.go
+        linters:
+          - errorlint
+        text: "comparing with"

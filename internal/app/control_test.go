@@ -69,11 +69,11 @@ func TestControlServiceSchemaLifecycleRequiresSchemasWrite(t *testing.T) {
 	state := domain.StateDeprecated
 
 	_, err := svc.UpdateEventType(context.Background(), actor, "invoice.paid", UpdateEventTypeRequest{Description: ptrString("Invoice paid"), Reason: "describe"})
-	if err != ErrForbidden {
+	if !errors.Is(err, ErrForbidden) {
 		t.Fatalf("expected forbidden event type update, got %v", err)
 	}
 	_, err = svc.UpdateEventSchema(context.Background(), actor, "invoice.paid", "2026-05-01", UpdateEventSchemaRequest{State: &state, Reason: "deprecate"})
-	if err != ErrForbidden {
+	if !errors.Is(err, ErrForbidden) {
 		t.Fatalf("expected forbidden schema update, got %v", err)
 	}
 }
@@ -120,11 +120,11 @@ func TestControlServiceSourceMutationRequiresSourcesWrite(t *testing.T) {
 	name := "renamed"
 
 	_, err := svc.UpdateSource(context.Background(), actor, "src_123", UpdateSourceRequest{Name: &name, Reason: "rename"})
-	if err != ErrForbidden {
+	if !errors.Is(err, ErrForbidden) {
 		t.Fatalf("expected forbidden source update, got %v", err)
 	}
 	_, err = svc.DeleteSource(context.Background(), actor, "src_123", StateChangeRequest{Reason: "retire"})
-	if err != ErrForbidden {
+	if !errors.Is(err, ErrForbidden) {
 		t.Fatalf("expected forbidden source delete, got %v", err)
 	}
 	if store.sourceTenantID != "" {
@@ -184,11 +184,11 @@ func TestControlServiceEndpointMutationRequiresEndpointsWrite(t *testing.T) {
 	name := "receiver"
 
 	_, _, err := svc.UpdateEndpoint(context.Background(), actor, "end_123", UpdateEndpointRequest{Name: &name, Reason: "rename"})
-	if err != ErrForbidden {
+	if !errors.Is(err, ErrForbidden) {
 		t.Fatalf("expected forbidden endpoint update, got %v", err)
 	}
 	_, err = svc.DeleteEndpoint(context.Background(), actor, "end_123", StateChangeRequest{Reason: "retire"})
-	if err != ErrForbidden {
+	if !errors.Is(err, ErrForbidden) {
 		t.Fatalf("expected forbidden endpoint delete, got %v", err)
 	}
 	if store.endpointTenantID != "" {

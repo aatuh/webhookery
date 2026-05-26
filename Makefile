@@ -8,7 +8,7 @@ GOSEC_VERSION ?= v2.25.0
 GOVULNCHECK_VERSION ?= v1.2.0
 FUZZTIME ?= 5s
 
-.PHONY: help tools fmt lint vuln gosec test test-race coverage openapi-check test-vectors-check crypto-inventory deployment-profile-check collections-check fuzz-smoke sdk-generate sdk-check docs-check release-acceptance rc-check compose-up compose-down migrate postgres-integration-test redis-integration-test fast-check finalize clean
+.PHONY: help tools fmt lint vuln gosec test test-race coverage openapi-check test-vectors-check crypto-inventory deployment-profile-check collections-check meta-files-check fuzz-smoke sdk-generate sdk-check docs-check release-acceptance rc-check compose-up compose-down migrate postgres-integration-test redis-integration-test fast-check finalize clean
 
 help: ## Show help
 	@awk 'BEGIN {FS=":.*## "}; /^[a-zA-Z0-9_.-]+:.*## / { printf "  %-16s %s\n", $$1, $$2 }' $(MAKEFILE_LIST)
@@ -81,6 +81,40 @@ collections-check: ## Check committed API client collections
 	@grep -q "/v1/events" collections/bruno/Webhookery/events-list.bru
 	@grep -q "/v1/audit-chain:verify" collections/bruno/Webhookery/audit-chain-verify.bru
 
+meta-files-check: ## Check governance, licensing, and release-evidence metadata
+	@test -f LICENSE
+	@grep -q "GNU AFFERO GENERAL PUBLIC LICENSE" LICENSE
+	@test -f COMMERCIAL.md
+	@test -f SECURITY.md
+	@test -f SUPPORT.md
+	@test -f CONTRIBUTING.md
+	@test -f GOVERNANCE.md
+	@test -f TRADEMARKS.md
+	@test -f RELEASE_EVIDENCE.md
+	@test -f docs/release-evidence-template.md
+	@test -f docs/security-review-package.md
+	@test -f .dockerignore
+	@test -f .golangci.yml
+	@grep -q "AGPL-3.0-only" COMMERCIAL.md
+	@grep -q "AGPL-3.0-only" CONTRIBUTING.md
+	@grep -q "https://www.linkedin.com/in/aatu-harju" SECURITY.md
+	@grep -q "Do not include" SECURITY.md
+	@grep -q "webhook secrets" SECURITY.md
+	@grep -q "raw payloads" SECURITY.md
+	@grep -q "no exactly-once delivery" RELEASE_EVIDENCE.md
+	@grep -q "no provider-side event completeness" RELEASE_EVIDENCE.md
+	@grep -q "compliance" RELEASE_EVIDENCE.md
+	@grep -q "live third-party provider" docs/release-evidence-template.md
+	@grep -q "not a certification" RELEASE_EVIDENCE.md
+	@grep -q ".refs" .dockerignore
+	@grep -q "release-evidence" .dockerignore
+	@grep -q "backups" .dockerignore
+	@grep -q "gosec" .golangci.yml
+	@grep -q "bodyclose" .golangci.yml
+	@grep -q "contextcheck" .golangci.yml
+	@git ls-files --cached --others --exclude-standard .dockerignore | grep -qx ".dockerignore" || (printf '%s\n' ".dockerignore must be trackable" >&2; exit 1)
+	@git ls-files --cached --others --exclude-standard .golangci.yml | grep -qx ".golangci.yml" || (printf '%s\n' ".golangci.yml must be trackable" >&2; exit 1)
+
 fuzz-smoke: ## Run short CI-safe fuzz/property smoke tests
 	@$(GO) test ./internal/canonicaljson -run '^$$' -fuzz=Fuzz -fuzztime=$(FUZZTIME)
 	@$(GO) test ./internal/adapters/httpapi -run '^$$' -fuzz=Fuzz -fuzztime=$(FUZZTIME)
@@ -116,6 +150,7 @@ docs-check: ## Run non-mutating documentation-adjacent checks
 	@$(MAKE) crypto-inventory
 	@$(MAKE) deployment-profile-check
 	@$(MAKE) collections-check
+	@$(MAKE) meta-files-check
 
 compose-up: ## Start local dependencies and API
 	@docker compose up --build
@@ -141,6 +176,7 @@ fast-check: ## Run non-mutating checks
 	@$(MAKE) crypto-inventory
 	@$(MAKE) deployment-profile-check
 	@$(MAKE) collections-check
+	@$(MAKE) meta-files-check
 	@$(MAKE) sdk-check
 
 finalize: ## Thorough validity check
@@ -155,6 +191,7 @@ finalize: ## Thorough validity check
 	@$(MAKE) crypto-inventory
 	@$(MAKE) deployment-profile-check
 	@$(MAKE) collections-check
+	@$(MAKE) meta-files-check
 	@$(MAKE) sdk-check
 
 clean: ## Clean local test artifacts

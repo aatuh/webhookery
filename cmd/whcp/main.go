@@ -9,6 +9,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -188,7 +189,7 @@ func runAPI() error {
 		defer cancel()
 		return httpServer.Shutdown(shutdownCtx)
 	case err := <-errCh:
-		if err == http.ErrServerClosed {
+		if errors.Is(err, http.ErrServerClosed) {
 			return nil
 		}
 		return err
@@ -620,7 +621,7 @@ func runKeyCustody(args []string) error {
 	if err != nil {
 		return err
 	}
-	box, err := secretBoxFromConfig(cfg)
+	box, err := secretBoxFromConfig(context.Background(), cfg)
 	if err != nil {
 		return err
 	}
@@ -2209,7 +2210,7 @@ func runSignatures(args []string) error {
 }
 
 func openStore(ctx context.Context, cfg config.Config) (*postgres.Store, error) {
-	box, err := secretBoxFromConfig(cfg)
+	box, err := secretBoxFromConfig(ctx, cfg)
 	if err != nil {
 		return nil, err
 	}
@@ -2232,7 +2233,7 @@ func openStore(ctx context.Context, cfg config.Config) (*postgres.Store, error) 
 	return postgres.NewWithOptions(ctx, cfg.DatabaseURL, box, opts)
 }
 
-func secretBoxFromConfig(cfg config.Config) (postgres.SecretBox, error) {
+func secretBoxFromConfig(ctx context.Context, cfg config.Config) (postgres.SecretBox, error) {
 	switch cfg.SecretBoxMode {
 	case "", "local":
 		return crypto.NewEnvelope(cfg.MasterKeyBase64)
@@ -2243,7 +2244,7 @@ func secretBoxFromConfig(cfg config.Config) (postgres.SecretBox, error) {
 			KeyName: cfg.VaultTransitKey,
 		})
 	case "aws-kms":
-		awsCfg, err := awsconfig.LoadDefaultConfig(context.Background(), awsconfig.WithRegion(cfg.AWSRegion))
+		awsCfg, err := awsconfig.LoadDefaultConfig(ctx, awsconfig.WithRegion(cfg.AWSRegion))
 		if err != nil {
 			return nil, fmt.Errorf("load aws config: %w", err)
 		}
@@ -2404,7 +2405,7 @@ func getJSON(baseURL, apiKey, path string) error {
 		return err
 	}
 	// #nosec G107,G704 -- CLI connects only to the operator-supplied Webhookery API URL after scheme/host validation.
-	req, err := http.NewRequest(http.MethodGet, endpoint, nil)
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, endpoint, nil)
 	if err != nil {
 		return err
 	}
@@ -2429,7 +2430,7 @@ func postJSON(baseURL, apiKey, path string, body any) error {
 		return err
 	}
 	// #nosec G107,G704 -- CLI connects only to the operator-supplied Webhookery API URL after scheme/host validation.
-	req, err := http.NewRequest(http.MethodPost, endpoint, bytes.NewReader(raw))
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, endpoint, bytes.NewReader(raw))
 	if err != nil {
 		return err
 	}
@@ -2455,7 +2456,7 @@ func patchJSON(baseURL, apiKey, path string, body any) error {
 		return err
 	}
 	// #nosec G107,G704 -- CLI connects only to the operator-supplied Webhookery API URL after scheme/host validation.
-	req, err := http.NewRequest(http.MethodPatch, endpoint, bytes.NewReader(raw))
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodPatch, endpoint, bytes.NewReader(raw))
 	if err != nil {
 		return err
 	}
@@ -2481,7 +2482,7 @@ func deleteJSON(baseURL, apiKey, path string, body any) error {
 		return err
 	}
 	// #nosec G107,G704 -- CLI connects only to the operator-supplied Webhookery API URL after scheme/host validation.
-	req, err := http.NewRequest(http.MethodDelete, endpoint, bytes.NewReader(raw))
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodDelete, endpoint, bytes.NewReader(raw))
 	if err != nil {
 		return err
 	}
@@ -2503,7 +2504,7 @@ func downloadAuditExport(baseURL, apiKey, exportID, outputPath string) error {
 		return err
 	}
 	// #nosec G107,G704 -- CLI connects only to the operator-supplied Webhookery API URL after scheme/host validation.
-	req, err := http.NewRequest(http.MethodGet, endpoint, nil)
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, endpoint, nil)
 	if err != nil {
 		return err
 	}
@@ -2551,7 +2552,7 @@ func exportRawPayload(baseURL, apiKey, eventID, outputPath string) error {
 		return err
 	}
 	// #nosec G107,G704 -- CLI connects only to the operator-supplied Webhookery API URL after scheme/host validation.
-	req, err := http.NewRequest(http.MethodGet, endpoint, nil)
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, endpoint, nil)
 	if err != nil {
 		return err
 	}

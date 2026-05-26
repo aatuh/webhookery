@@ -41,9 +41,9 @@ func HTTPClient(timeout time.Duration) *http.Client {
 	}
 }
 
-func (c Client) BuildRequest(rawURL string, body []byte) (*http.Request, error) {
+func (c Client) BuildRequest(ctx context.Context, rawURL string, body []byte) (*http.Request, error) {
 	validator := c.SSRF
-	result := validator.Validate(context.Background(), rawURL, ssrf.DefaultPolicy())
+	result := validator.Validate(ctx, rawURL, ssrf.DefaultPolicy())
 	if !result.Allowed {
 		return nil, fmt.Errorf("endpoint URL blocked: %v", result.BlockedReasons)
 	}
@@ -51,7 +51,7 @@ func (c Client) BuildRequest(rawURL string, body []byte) (*http.Request, error) 
 	if c.Now != nil {
 		now = c.Now().UTC()
 	}
-	req, err := http.NewRequest(http.MethodPost, result.NormalizedURL, bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, result.NormalizedURL, bytes.NewReader(body))
 	if err != nil {
 		return nil, err
 	}
@@ -71,11 +71,10 @@ func (c Client) BuildRequest(rawURL string, body []byte) (*http.Request, error) 
 }
 
 func (c Client) Deliver(ctx context.Context, rawURL string, body []byte) (Result, error) {
-	req, err := c.BuildRequest(rawURL, body)
+	req, err := c.BuildRequest(ctx, rawURL, body)
 	if err != nil {
 		return Result{FailureClass: "policy_blocked"}, err
 	}
-	req = req.WithContext(ctx)
 	httpClient, err := c.httpClient()
 	if err != nil {
 		return Result{FailureClass: "client_certificate_error"}, err
@@ -84,6 +83,7 @@ func (c Client) Deliver(ctx context.Context, rawURL string, body []byte) (Result
 	if err != nil {
 		return Result{FailureClass: "network_error"}, err
 	}
+	defer func() { _ = resp.Body.Close() }()
 	bodyBytes, err := readTruncated(resp.Body, 16<<10)
 	if err != nil {
 		return Result{StatusCode: resp.StatusCode, FailureClass: "response_read_error"}, err
@@ -139,8 +139,7 @@ func (c Client) httpClient() (*http.Client, error) {
 	return base, nil
 }
 
-func readTruncated(body io.ReadCloser, max int64) ([]byte, error) {
-	defer func() { _ = body.Close() }()
+func readTruncated(body io.Reader, max int64) ([]byte, error) {
 	return io.ReadAll(io.LimitReader(body, max))
 }
 

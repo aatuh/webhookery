@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"io"
 	"os"
@@ -109,7 +110,7 @@ func TestReadSmallFileRejectsSymlink(t *testing.T) {
 }
 
 func TestSecretBoxFromConfigAcceptsVaultTransit(t *testing.T) {
-	box, err := secretBoxFromConfig(config.Config{
+	box, err := secretBoxFromConfig(context.Background(), config.Config{
 		SecretBoxMode:   "vault-transit",
 		VaultAddr:       "https://vault.example",
 		VaultToken:      "vault-token",

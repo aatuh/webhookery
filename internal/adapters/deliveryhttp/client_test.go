@@ -22,7 +22,7 @@ func TestBuildSignedRequestAddsHMACHeader(t *testing.T) {
 			"example.com": {netip.MustParseAddr("93.184.216.34")},
 		}},
 	}
-	req, err := client.BuildRequest("https://example.com/webhook", []byte(`{"id":"evt_123"}`))
+	req, err := client.BuildRequest(context.Background(), "https://example.com/webhook", []byte(`{"id":"evt_123"}`))
 	if err != nil {
 		t.Fatal(err)
 	}

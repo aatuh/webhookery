@@ -1,0 +1,49 @@
+.git
+.github
+.refs
+.trash
+
+# Local secrets and environment overrides. Keep examples in git, but do not
+# send operator-specific values into Docker build contexts.
+.env
+.env.*
+.api.env
+.api.env.*
+.test.env
+.test.env.*
+*.pem
+*.key
+*.p12
+*.pfx
+
+# Release, backup, and generated evidence artifacts.
+release-evidence
+release-evidence/
+backups
+backups/
+coverage.out
+*.prof
+*.pprof
+*.test
+
+# Build output and temporary files.
+bin
+bin/
+dist
+dist/
+tmp
+tmp/
+__pycache__
+**/__pycache__
+
+# SDK and frontend build artifacts.
+sdk/typescript/.build
+sdk/typescript/node_modules
+sdk/python/**/__pycache__
+
+# Terraform local state/cache.
+.terraform
+**/.terraform
+.terraform.lock.hcl
+*.tfstate
+*.tfstate.*

@@ -34,8 +34,8 @@ func HTTPClient(timeout time.Duration) *http.Client {
 	}
 }
 
-func (c Client) BuildRequest(rawURL string, body []byte, secret []byte) (*http.Request, error) {
-	result := c.SSRF.Validate(context.Background(), rawURL, ssrf.DefaultPolicy())
+func (c Client) BuildRequest(ctx context.Context, rawURL string, body []byte, secret []byte) (*http.Request, error) {
+	result := c.SSRF.Validate(ctx, rawURL, ssrf.DefaultPolicy())
 	if !result.Allowed {
 		return nil, fmt.Errorf("signal URL blocked: %v", result.BlockedReasons)
 	}
@@ -44,7 +44,7 @@ func (c Client) BuildRequest(rawURL string, body []byte, secret []byte) (*http.R
 		now = c.Now().UTC()
 	}
 	timestamp := fmt.Sprint(now.Unix())
-	req, err := http.NewRequest(http.MethodPost, result.NormalizedURL, bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, result.NormalizedURL, bytes.NewReader(body))
 	if err != nil {
 		return nil, err
 	}
@@ -57,11 +57,10 @@ func (c Client) BuildRequest(rawURL string, body []byte, secret []byte) (*http.R
 }
 
 func (c Client) Deliver(ctx context.Context, rawURL string, body []byte, secret []byte) (Result, error) {
-	req, err := c.BuildRequest(rawURL, body, secret)
+	req, err := c.BuildRequest(ctx, rawURL, body, secret)
 	if err != nil {
 		return Result{FailureClass: "policy_blocked"}, err
 	}
-	req = req.WithContext(ctx)
 	httpClient := c.HTTP
 	if httpClient == nil {
 		httpClient = HTTPClient(10 * time.Second)
@@ -76,6 +75,7 @@ func (c Client) Deliver(ctx context.Context, rawURL string, body []byte, secret 
 	if err != nil {
 		return Result{FailureClass: "network_error"}, err
 	}
+	defer func() { _ = resp.Body.Close() }()
 	bodyBytes, err := readTruncated(resp.Body, 16<<10)
 	if err != nil {
 		return Result{StatusCode: resp.StatusCode, FailureClass: "response_read_error"}, err
@@ -88,8 +88,7 @@ func (c Client) Deliver(ctx context.Context, rawURL string, body []byte, secret 
 	}, nil
 }
 
-func readTruncated(body io.ReadCloser, max int64) ([]byte, error) {
-	defer func() { _ = body.Close() }()
+func readTruncated(body io.Reader, max int64) ([]byte, error) {
 	return io.ReadAll(io.LimitReader(body, max))
 }
 

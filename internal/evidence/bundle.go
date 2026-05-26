@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"sort"
@@ -196,7 +197,7 @@ func readTarGzipFiles(body []byte) (map[string][]byte, error) {
 	files := map[string][]byte{}
 	for {
 		header, err := tr.Next()
-		if err == io.EOF {
+		if errors.Is(err, io.EOF) {
 			break
 		}
 		if err != nil {
@@ -226,7 +227,7 @@ func verifyAuditChainProof(raw []byte) ([]string, int, error) {
 	for {
 		var entry domain.AuditChainEntry
 		if err := dec.Decode(&entry); err != nil {
-			if err == io.EOF {
+			if errors.Is(err, io.EOF) {
 				break
 			}
 			return nil, checked, err

@@ -2442,7 +2442,7 @@ func (s *ControlService) CreateTransformation(ctx context.Context, actor authz.A
 	}
 	if len(req.Operations) != 0 {
 		if _, err := transform.ParseOperations(req.Operations); err != nil {
-			return domain.Transformation{}, fmt.Errorf("%w: %v", ErrInvalidInput, err)
+			return domain.Transformation{}, fmt.Errorf("%w: %w", ErrInvalidInput, err)
 		}
 	}
 	return s.store.CreateTransformation(ctx, actor.TenantID, actor.ID, req)
@@ -2470,7 +2470,7 @@ func (s *ControlService) CreateTransformationVersion(ctx context.Context, actor 
 		return domain.TransformationVersion{}, fmt.Errorf("%w: transformation_id and operations are required", ErrInvalidInput)
 	}
 	if _, err := transform.ParseOperations(req.Operations); err != nil {
-		return domain.TransformationVersion{}, fmt.Errorf("%w: %v", ErrInvalidInput, err)
+		return domain.TransformationVersion{}, fmt.Errorf("%w: %w", ErrInvalidInput, err)
 	}
 	return s.store.CreateTransformationVersion(ctx, actor.TenantID, transformationID, actor.ID, req)
 }

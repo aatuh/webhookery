@@ -2,6 +2,7 @@ package crypto
 
 import (
 	"bytes"
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -95,7 +96,7 @@ func (e VaultTransitEnvelope) call(operation string, payload map[string]string) 
 	}
 	endpoint := e.address + "/v1/transit/" + operation + "/" + url.PathEscape(e.keyName)
 	// #nosec G107,G704 -- Vault address is operator configuration validated for scheme and host; response bodies are not included in errors.
-	req, err := http.NewRequest(http.MethodPost, endpoint, bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, endpoint, bytes.NewReader(body))
 	if err != nil {
 		return vaultTransitResponse{}, errors.New("build vault transit request")
 	}

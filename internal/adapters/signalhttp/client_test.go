@@ -1,6 +1,7 @@
 package signalhttp
 
 import (
+	"context"
 	"net/netip"
 	"testing"
 	"time"
@@ -17,7 +18,7 @@ func TestBuildRequestSignsExactSignalBytes(t *testing.T) {
 		Now: func() time.Time { return time.Unix(1710000000, 0).UTC() },
 	}
 	body := []byte(`{"type":"alert.opened","value":"snowman"}`)
-	req, err := client.BuildRequest("https://signals.example/hook", body, []byte("0123456789abcdef"))
+	req, err := client.BuildRequest(context.Background(), "https://signals.example/hook", body, []byte("0123456789abcdef"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -32,7 +33,7 @@ func TestBuildRequestSignsExactSignalBytes(t *testing.T) {
 
 func TestBuildRequestBlocksSSRFUnsafeURLs(t *testing.T) {
 	client := Client{}
-	if _, err := client.BuildRequest("http://169.254.169.254/latest", []byte("{}"), []byte("secret")); err == nil {
+	if _, err := client.BuildRequest(context.Background(), "http://169.254.169.254/latest", []byte("{}"), []byte("secret")); err == nil {
 		t.Fatal("expected unsafe signal URL to be blocked")
 	}
 }

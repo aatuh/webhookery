@@ -55,7 +55,7 @@ type recordingDeliveryClient struct {
 	calls  []deliveryCall
 }
 
-func (c *recordingDeliveryClient) Deliver(_ context.Context, rawURL string, body []byte, secret []byte, keyID string, keyVersion int, _, _ []byte) (worker.DeliveryResult, error) {
+func (c *recordingDeliveryClient) Deliver(ctx context.Context, rawURL string, body []byte, secret []byte, keyID string, keyVersion int, _, _ []byte) (worker.DeliveryResult, error) {
 	c.t.Helper()
 	if len(secret) == 0 {
 		c.t.Fatal("expected signing secret for outbound delivery")
@@ -74,7 +74,7 @@ func (c *recordingDeliveryClient) Deliver(_ context.Context, rawURL string, body
 		Now: func() time.Time {
 			return c.now
 		},
-	}).BuildRequest(rawURL, body)
+	}).BuildRequest(ctx, rawURL, body)
 	if err != nil {
 		c.t.Fatalf("build signed delivery request: %v", err)
 	}

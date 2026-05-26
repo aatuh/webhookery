@@ -1,6 +1,7 @@
 **/.*
 !.gitignore
 !.github/
+!.dockerignore
 !.golangci.yml
 !.env.example
 !.api.env.example

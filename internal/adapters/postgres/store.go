@@ -2381,7 +2381,7 @@ func (s *Store) CaptureInbound(ctx context.Context, input app.CaptureInboundInpu
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		if objectWritten {
-			_ = s.objectStore.Delete(context.Background(), storage.bucket, storage.key)
+			_ = s.objectStore.Delete(ctx, storage.bucket, storage.key)
 		}
 		return app.CaptureInboundResult{}, err
 	}
@@ -2397,7 +2397,7 @@ func (s *Store) CaptureInbound(ctx context.Context, input app.CaptureInboundInpu
 		storage.backend, storage.bucket, storage.key, domain.StorageStatusStored, input.RawPayload.CreatedAt,
 	); err != nil {
 		if objectWritten {
-			_ = s.objectStore.Delete(context.Background(), storage.bucket, storage.key)
+			_ = s.objectStore.Delete(ctx, storage.bucket, storage.key)
 		}
 		return app.CaptureInboundResult{}, err
 	}
@@ -2490,7 +2490,7 @@ func (s *Store) CaptureInbound(ctx context.Context, input app.CaptureInboundInpu
 	}
 	if err := tx.Commit(ctx); err != nil {
 		if objectWritten {
-			_ = s.objectStore.Delete(context.Background(), storage.bucket, storage.key)
+			_ = s.objectStore.Delete(ctx, storage.bucket, storage.key)
 		}
 		return app.CaptureInboundResult{}, err
 	}
@@ -4416,7 +4416,7 @@ func (s *Store) CreateAuditChainAnchor(ctx context.Context, tenantID, actorID st
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		if objectWritten {
-			_ = s.objectStore.Delete(context.Background(), objectBucket, objectKey)
+			_ = s.objectStore.Delete(ctx, objectBucket, objectKey)
 		}
 		return domain.AuditChainAnchor{}, err
 	}
@@ -4433,19 +4433,19 @@ func (s *Store) CreateAuditChainAnchor(ctx context.Context, tenantID, actorID st
 			&out.StorageBackend, &out.ObjectBucket, &out.ObjectKey, &out.CreatedBy, &out.Reason, &out.CreatedAt)
 	if err != nil {
 		if objectWritten {
-			_ = s.objectStore.Delete(context.Background(), objectBucket, objectKey)
+			_ = s.objectStore.Delete(ctx, objectBucket, objectKey)
 		}
 		return domain.AuditChainAnchor{}, err
 	}
 	if _, err := recordAuditEventTx(ctx, tx, auditEventInput{TenantID: tenantID, ActorID: actorID, Action: "audit_chain.anchored", Resource: "audit_chain_anchor", ResourceID: id, Reason: req.Reason}); err != nil {
 		if objectWritten {
-			_ = s.objectStore.Delete(context.Background(), objectBucket, objectKey)
+			_ = s.objectStore.Delete(ctx, objectBucket, objectKey)
 		}
 		return domain.AuditChainAnchor{}, err
 	}
 	if err := tx.Commit(ctx); err != nil {
 		if objectWritten {
-			_ = s.objectStore.Delete(context.Background(), objectBucket, objectKey)
+			_ = s.objectStore.Delete(ctx, objectBucket, objectKey)
 		}
 		return domain.AuditChainAnchor{}, err
 	}
@@ -5167,7 +5167,7 @@ func (s *Store) CreateAuditExport(ctx context.Context, tenantID, actorID string,
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		if objectWritten {
-			_ = s.objectStore.Delete(context.Background(), objectBucket, objectKey)
+			_ = s.objectStore.Delete(ctx, objectBucket, objectKey)
 		}
 		return domain.EvidenceExport{}, err
 	}
@@ -5189,7 +5189,7 @@ func (s *Store) CreateAuditExport(ctx context.Context, tenantID, actorID string,
 		&out.SizeBytes, &out.Error, &out.CreatedBy, &out.CreatedAt, &out.CompletedAt)
 	if err != nil {
 		if objectWritten {
-			_ = s.objectStore.Delete(context.Background(), objectBucket, objectKey)
+			_ = s.objectStore.Delete(ctx, objectBucket, objectKey)
 		}
 		return domain.EvidenceExport{}, err
 	}
@@ -5200,7 +5200,7 @@ func (s *Store) CreateAuditExport(ctx context.Context, tenantID, actorID string,
 			mustID("exi"), tenantID, id, file.Name, file.Name, file.SHA256, file.SizeBytes,
 		); err != nil {
 			if objectWritten {
-				_ = s.objectStore.Delete(context.Background(), objectBucket, objectKey)
+				_ = s.objectStore.Delete(ctx, objectBucket, objectKey)
 			}
 			return domain.EvidenceExport{}, err
 		}
@@ -5211,13 +5211,13 @@ func (s *Store) CreateAuditExport(ctx context.Context, tenantID, actorID string,
 	}
 	if _, err := recordAuditEventTx(ctx, tx, auditEventInput{TenantID: tenantID, ActorID: actorID, Action: "audit_export.created", Resource: "audit_export", ResourceID: id, Reason: reason}); err != nil {
 		if objectWritten {
-			_ = s.objectStore.Delete(context.Background(), objectBucket, objectKey)
+			_ = s.objectStore.Delete(ctx, objectBucket, objectKey)
 		}
 		return domain.EvidenceExport{}, err
 	}
 	if err := tx.Commit(ctx); err != nil {
 		if objectWritten {
-			_ = s.objectStore.Delete(context.Background(), objectBucket, objectKey)
+			_ = s.objectStore.Delete(ctx, objectBucket, objectKey)
 		}
 		return domain.EvidenceExport{}, err
 	}
@@ -6071,7 +6071,7 @@ func (s *Store) captureRecoveredProviderEvent(ctx context.Context, conn domain.P
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		if objectWritten {
-			_ = s.objectStore.Delete(context.Background(), storage.bucket, storage.key)
+			_ = s.objectStore.Delete(ctx, storage.bucket, storage.key)
 		}
 		return "", err
 	}
@@ -6082,7 +6082,7 @@ func (s *Store) captureRecoveredProviderEvent(ctx context.Context, conn domain.P
 		rawID, conn.TenantID, rawHash, raw.ContentType, raw.SizeBytes, bodyForDB, storage.backend, storage.bucket, storage.key, domain.StorageStatusStored, now,
 	); err != nil {
 		if objectWritten {
-			_ = s.objectStore.Delete(context.Background(), storage.bucket, storage.key)
+			_ = s.objectStore.Delete(ctx, storage.bucket, storage.key)
 		}
 		return "", err
 	}
@@ -6163,7 +6163,7 @@ func (s *Store) captureRecoveredProviderEvent(ctx context.Context, conn domain.P
 	}
 	if err := tx.Commit(ctx); err != nil {
 		if objectWritten {
-			_ = s.objectStore.Delete(context.Background(), storage.bucket, storage.key)
+			_ = s.objectStore.Delete(ctx, storage.bucket, storage.key)
 		}
 		return "", err
 	}
