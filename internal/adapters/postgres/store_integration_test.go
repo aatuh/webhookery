@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -317,6 +318,89 @@ func TestPostgresDuplicateRawPayloadEvidenceRemainsLinkedAndExported(t *testing.
 	}
 	if retainedBodies != 0 {
 		t.Fatalf("source-scoped retention left %d duplicate raw payload bodies stored", retainedBodies)
+	}
+}
+
+func TestPostgresConcurrentDuplicateCapturePreservesEvidence(t *testing.T) {
+	ctx, store, actor := openPostgresIntegrationStore(t)
+	defer store.Close()
+
+	now := time.Now().UTC().Truncate(time.Second)
+	control := app.NewControlService(store, ssrf.Validator{Resolver: ssrf.StaticResolver{"receiver.example.com": {netip.MustParseAddr("93.184.216.34")}}})
+	source, _ := createPostgresIntegrationRoute(t, ctx, control, actor, "invoice.concurrent_duplicate")
+	providerID := "evt_it_concurrent_duplicate_" + now.Format("150405.000000000")
+	body := []byte(`{"id":"` + providerID + `","type":"invoice.concurrent_duplicate","account":"acct_it"}`)
+	signature := verifier.TimestampedHeader("v1", now, []byte("whsec_it"), body)
+
+	const attempts = 8
+	results := make([]app.IngestResult, attempts)
+	errs := make([]error, attempts)
+	var wg sync.WaitGroup
+	wg.Add(attempts)
+	for i := 0; i < attempts; i++ {
+		i := i
+		go func() {
+			defer wg.Done()
+			results[i], errs[i] = app.NewIngestService(store, fixedIntegrationClock{now: now}).Ingest(ctx, app.IngestRequest{
+				TenantID:    actor.TenantID,
+				SourceID:    source.ID,
+				Provider:    "stripe",
+				RawBody:     body,
+				Headers:     []domain.HeaderPair{{Name: "Stripe-Signature", Value: signature}},
+				ContentType: "application/json",
+				RemoteIP:    "198.51.100.20",
+			})
+		}()
+	}
+	wg.Wait()
+
+	eventID := ""
+	uniqueCount := 0
+	duplicateCount := 0
+	for i, err := range errs {
+		if err != nil {
+			t.Fatalf("concurrent duplicate capture %d failed: %v", i, err)
+		}
+		if !results[i].Accepted || results[i].EventID == "" {
+			t.Fatalf("concurrent duplicate capture %d was not accepted: %+v", i, results[i])
+		}
+		if eventID == "" {
+			eventID = results[i].EventID
+		}
+		if results[i].EventID != eventID {
+			t.Fatalf("duplicate capture %d linked to %s, want canonical event %s", i, results[i].EventID, eventID)
+		}
+		switch results[i].DedupeStatus {
+		case domain.DedupeUnique:
+			uniqueCount++
+		case domain.DedupeDuplicateSuppressed:
+			duplicateCount++
+		default:
+			t.Fatalf("unexpected dedupe status for capture %d: %s", i, results[i].DedupeStatus)
+		}
+	}
+	if uniqueCount != 1 || duplicateCount != attempts-1 {
+		t.Fatalf("expected one unique and %d duplicates, got unique=%d duplicate=%d", attempts-1, uniqueCount, duplicateCount)
+	}
+
+	var eventRows, rawRows, receiptRows, distinctReceiptRawRows, outboxRows int
+	if err := store.pool.QueryRow(ctx, `SELECT count(*) FROM events WHERE tenant_id=$1 AND source_id=$2 AND provider_event_id=$3`, actor.TenantID, source.ID, providerID).Scan(&eventRows); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.pool.QueryRow(ctx, `SELECT count(*) FROM raw_payloads WHERE tenant_id=$1 AND event_id=$2`, actor.TenantID, eventID).Scan(&rawRows); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.pool.QueryRow(ctx, `SELECT count(*) FROM provider_receipts WHERE tenant_id=$1 AND event_id=$2`, actor.TenantID, eventID).Scan(&receiptRows); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.pool.QueryRow(ctx, `SELECT count(DISTINCT raw_payload_id) FROM provider_receipts WHERE tenant_id=$1 AND event_id=$2`, actor.TenantID, eventID).Scan(&distinctReceiptRawRows); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.pool.QueryRow(ctx, `SELECT count(*) FROM outbox WHERE tenant_id=$1 AND kind=$2 AND resource_id=$3`, actor.TenantID, app.OutboxKindRouteEvent, eventID).Scan(&outboxRows); err != nil {
+		t.Fatal(err)
+	}
+	if eventRows != 1 || rawRows != attempts || receiptRows != attempts || distinctReceiptRawRows != attempts || outboxRows != 1 {
+		t.Fatalf("unexpected concurrent duplicate evidence counts: events=%d raw=%d receipts=%d distinct_receipt_raw=%d outbox=%d", eventRows, rawRows, receiptRows, distinctReceiptRawRows, outboxRows)
 	}
 }
 
