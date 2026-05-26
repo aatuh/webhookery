@@ -105,6 +105,9 @@ paths:
           application/x-www-form-urlencoded:
             schema:
               $ref: "#/components/schemas/OAuthClientCredentialsRequest"
+            example:
+              grant_type: client_credentials
+              scope: events:write
       responses:
         "200":
           description: Non-cacheable producer access token response.
@@ -121,6 +124,11 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ProducerTokenResponse"
+              example:
+                access_token: "<opaque-access-token>"
+                token_type: Bearer
+                expires_in: 900
+                scope: events:write
         "400":
           $ref: "#/components/responses/Problem"
         "401":
@@ -434,6 +442,15 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/AuthSession"
+              example:
+                id: ses_example
+                tenant_id: ten_example
+                user_id: usr_example
+                external_identity_id: oidc_example
+                state: active
+                created_at: "2026-05-26T12:00:00Z"
+                last_seen_at: "2026-05-26T12:05:00Z"
+                expires_at: "2026-05-26T20:00:00Z"
   /v1/auth/sessions:
     get:
       summary: List active management sessions
@@ -2293,6 +2310,16 @@ paths:
       responses:
         "200":
           description: Raw body as base64 plus hash and storage metadata.
+          content:
+            application/json:
+              example:
+                event_id: evt_example
+                raw_payload_hash: sha256:0f343b0931126a20f133d67c2b018a3b
+                content_type: application/json
+                size_bytes: 42
+                storage_backend: postgres
+                storage_status: stored
+                body_base64: eyJpZCI6ImV2dF9leGFtcGxlIn0=
         "403":
           description: Actor lacks raw payload permission.
         "410":
@@ -2355,9 +2382,31 @@ paths:
           required: true
           schema:
             type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+            example:
+              id: evt_provider_123
+              type: invoice.paid
+              data:
+                object: invoice
       responses:
         "200":
           description: Accepted after durable capture.
+          content:
+            application/json:
+              example:
+                Accepted: true
+                EventID: evt_example
+                ReceiptID: rcp_example
+                RawPayloadID: raw_example
+                TraceID: ""
+                VerifyReason: verified
+                DedupeStatus: unique
         "401":
           description: Invalid signature.
         "413":
@@ -2409,7 +2458,7 @@ paths:
   /v1/ingest/generic-jwt/{source_id}:
     post:
       summary: Generic JWT/JWS webhook ingestion
-      description: Accepts compact JWT/JWS signatures from `Authorization: Bearer ...` or `Webhook-JWT`; only HS256 is supported and the token must include `exp` plus a `body_sha256` claim for the exact raw body.
+      description: "Accepts compact JWT/JWS signatures from `Authorization: Bearer ...` or `Webhook-JWT`; only HS256 is supported and the token must include `exp` plus a `body_sha256` claim for the exact raw body."
       responses:
         "200":
           description: Accepted after durable capture.
@@ -2525,9 +2574,27 @@ paths:
           application/json:
             schema:
               $ref: "#/components/schemas/ReplayRequest"
+            example:
+              event_id: evt_example
+              endpoint_id: end_example
+              reason: "customer requested replay after downstream fix"
+              config_mode: current
+              rate_limit_per_minute: 60
       responses:
         "202":
           description: Replay job scheduled or pending approval when require_approval is true.
+          content:
+            application/json:
+              example:
+                id: rpl_example
+                state: scheduled
+                scope_hash: sha256:2c26b46b68ffc68ff99b453c1d304134
+                config_mode: current
+                rate_limit_per_minute: 60
+                total_items: 1
+                processed_items: 0
+                failed_items: 0
+                approval_required: false
   /v1/replay-jobs/{replay_job_id}:approve:
     post:
       summary: Approve pending replay job
@@ -2911,6 +2978,13 @@ paths:
           application/json:
             schema:
               $ref: "#/components/schemas/CreateAuditExportRequest"
+            example:
+              from: "2026-05-26T00:00:00Z"
+              to: "2026-05-26T23:59:59Z"
+              include_raw_payloads: true
+              include_payload_bodies: false
+              include_timelines: true
+              reason: "support evidence package"
       responses:
         "202":
           description: Export created and ready for download.
@@ -2918,6 +2992,20 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/EvidenceExport"
+              example:
+                id: exp_example
+                tenant_id: ten_example
+                state: ready
+                include_raw_payloads: true
+                include_timelines: true
+                include_payload_bodies: false
+                format: tar+gzip+jsonl
+                storage_backend: postgres
+                sha256: sha256:2c26b46b68ffc68ff99b453c1d304134
+                manifest_sha256: sha256:fcde2b2edba56bf408601fb721fe9b5c
+                size_bytes: 4096
+                created_by: usr_example
+                created_at: "2026-05-26T12:00:00Z"
         "403":
           description: Actor lacks audit:read or requested raw payload bodies without events:raw.
   /v1/audit-exports:
@@ -3181,6 +3269,14 @@ paths:
           application/json:
             schema:
               $ref: "#/components/schemas/CreateAlertRuleRequest"
+            example:
+              name: "DLQ backlog"
+              rule_type: dead_letter_open
+              metric_name: dead_letter.open
+              threshold: 0
+              comparator: ">"
+              window_seconds: 300
+              state: active
       responses:
         "201":
           description: Alert rule created.
@@ -3188,6 +3284,19 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/AlertRule"
+              example:
+                id: alr_example
+                tenant_id: ten_example
+                name: "DLQ backlog"
+                rule_type: dead_letter_open
+                metric_name: dead_letter.open
+                threshold: 0
+                comparator: ">"
+                window_seconds: 300
+                state: active
+                created_by: usr_example
+                created_at: "2026-05-26T12:00:00Z"
+                updated_at: "2026-05-26T12:00:00Z"
         "403":
           description: Actor lacks ops:write.
   /v1/alerts/{alert_id}:
@@ -3342,6 +3451,11 @@ paths:
           application/json:
             schema:
               $ref: "#/components/schemas/CreateNotificationChannelRequest"
+            example:
+              name: "Ops webhook"
+              channel_type: webhook
+              url: "https://alerts.example.com/webhook"
+              signing_secret: "<notification-signing-secret>"
       responses:
         "201":
           description: Notification channel created.
@@ -3349,6 +3463,17 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/NotificationChannel"
+              example:
+                id: nch_example
+                tenant_id: ten_example
+                name: "Ops webhook"
+                channel_type: webhook
+                url: "https://alerts.example.com/webhook"
+                state: active
+                secret_hint: configured
+                created_by: usr_example
+                created_at: "2026-05-26T12:00:00Z"
+                updated_at: "2026-05-26T12:00:00Z"
   /v1/notification-channels/{channel_id}:
     get:
       summary: Get notification channel
@@ -3525,6 +3650,11 @@ paths:
           application/json:
             schema:
               $ref: "#/components/schemas/CreateSIEMSinkRequest"
+            example:
+              name: "Security log stream"
+              sink_type: webhook
+              url: "https://siem.example.com/ingest"
+              signing_secret: "<siem-signing-secret>"
       responses:
         "201":
           description: SIEM sink created.
@@ -3532,6 +3662,18 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/SIEMSink"
+              example:
+                id: siem_example
+                tenant_id: ten_example
+                name: "Security log stream"
+                sink_type: webhook
+                url: "https://siem.example.com/ingest"
+                state: active
+                secret_hint: configured
+                cursor_sequence: 0
+                created_by: usr_example
+                created_at: "2026-05-26T12:00:00Z"
+                updated_at: "2026-05-26T12:00:00Z"
   /v1/siem-sinks/{sink_id}:
     get:
       summary: Get SIEM sink

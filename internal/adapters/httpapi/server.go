@@ -61,8 +61,7 @@ func (s *Server) Routes() http.Handler {
 	r.Get("/openapi.yaml", s.openapi)
 
 	r.Route("/v1", func(r chi.Router) {
-		r.Post("/ingest/{tenant_id}/{source_id}", s.ingestGeneric)
-		r.Post("/ingest/{provider}/{source_id}", s.ingestProvider)
+		r.Post("/ingest/{tenant_id}/{source_id}", s.ingestGenericOrProvider)
 		r.Post("/oauth/token", s.issueOAuthToken)
 		r.With(s.requireProducerAuth).Post("/events", s.ingestProductEvent)
 		r.Get("/auth/oidc/login", s.oidcLogin)
@@ -1356,12 +1355,20 @@ func (s *Server) ingestGeneric(w http.ResponseWriter, r *http.Request) {
 	s.writeIngestResult(w, r, result, err)
 }
 
-func (s *Server) ingestProvider(w http.ResponseWriter, r *http.Request) {
+func (s *Server) ingestGenericOrProvider(w http.ResponseWriter, r *http.Request) {
+	firstSegment := chi.URLParam(r, "tenant_id")
+	if documentedProviderPath(firstSegment) {
+		s.ingestProviderName(w, r, firstSegment)
+		return
+	}
+	s.ingestGeneric(w, r)
+}
+
+func (s *Server) ingestProviderName(w http.ResponseWriter, r *http.Request, providerName string) {
 	body, ok := readLimitedBody(w, r, maxIngressBodyBytes)
 	if !ok {
 		return
 	}
-	providerName := chi.URLParam(r, "provider")
 	result, err := s.cfg.Ingest.IngestProviderPath(r.Context(), providerName, chi.URLParam(r, "source_id"), app.IngestRequest{
 		Provider:    providerName,
 		RawBody:     body,
@@ -1376,6 +1383,15 @@ func (s *Server) ingestProvider(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	s.writeIngestResult(w, r, result, err)
+}
+
+func documentedProviderPath(providerName string) bool {
+	switch strings.ToLower(providerName) {
+	case "stripe", "github", "shopify", "slack", "cloudevents", "generic-jwt":
+		return true
+	default:
+		return false
+	}
 }
 
 func slackChallenge(raw []byte) string {

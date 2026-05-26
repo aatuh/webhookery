@@ -363,6 +363,36 @@ func TestIngressRejectsTooManyHeadersBeforeCapture(t *testing.T) {
 	}
 }
 
+func TestIngestRouteDispatchesTenantAndProviderAliases(t *testing.T) {
+	store := &routeDispatchIngestStore{}
+	server := NewServer(ServerConfig{
+		Control: NewNoopControl(),
+		Ingest:  app.NewIngestService(store, app.SystemClock{}),
+		OpenAPI: []byte("openapi: 3.1.0\n"),
+	})
+
+	generic := httptest.NewRecorder()
+	genericReq := httptest.NewRequest(http.MethodPost, "/v1/ingest/ten_route/src_route", strings.NewReader(`{"specversion":"1.0","id":"evt_1","type":"thing.created","source":"tests"}`))
+	server.Routes().ServeHTTP(generic, genericReq)
+	if generic.Code != http.StatusOK {
+		t.Fatalf("expected generic tenant ingest to succeed, got %d body=%s", generic.Code, generic.Body.String())
+	}
+	if store.lastTenantID != "ten_route" || store.lastSourceID != "src_route" || store.providerLookupCalled {
+		t.Fatalf("generic route used wrong lookup path: %+v", store)
+	}
+
+	store.providerLookupCalled = false
+	provider := httptest.NewRecorder()
+	providerReq := httptest.NewRequest(http.MethodPost, "/v1/ingest/cloudevents/src_route", strings.NewReader(`{"specversion":"1.0","id":"evt_2","type":"thing.created","source":"tests"}`))
+	server.Routes().ServeHTTP(provider, providerReq)
+	if provider.Code != http.StatusOK {
+		t.Fatalf("expected provider alias ingest to succeed, got %d body=%s", provider.Code, provider.Body.String())
+	}
+	if !store.providerLookupCalled || store.lastProvider != "cloudevents" || store.lastProviderSourceID != "src_route" {
+		t.Fatalf("provider alias route used wrong lookup path: %+v", store)
+	}
+}
+
 func TestAuditExportWithRawRequiresRawScope(t *testing.T) {
 	server := testServerWithActor(authz.Actor{ID: "usr_1", TenantID: "ten_1", Role: authz.RoleAdmin, Scopes: []string{"audit:read"}})
 	rec := httptest.NewRecorder()
@@ -630,6 +660,31 @@ func (f *acceptingIngestStore) FindSourceByProviderPath(context.Context, string,
 }
 func (f *acceptingIngestStore) CaptureInbound(context.Context, app.CaptureInboundInput) (app.CaptureInboundResult, error) {
 	f.called = true
+	return app.CaptureInboundResult{EventID: "evt_1", ReceiptID: "rcp_1", RawPayloadID: "raw_1", DedupeStatus: domain.DedupeUnique}, nil
+}
+
+type routeDispatchIngestStore struct {
+	providerLookupCalled bool
+	lastTenantID         string
+	lastSourceID         string
+	lastProvider         string
+	lastProviderSourceID string
+}
+
+func (f *routeDispatchIngestStore) FindSource(_ context.Context, tenantID, sourceID string) (domain.Source, error) {
+	f.lastTenantID = tenantID
+	f.lastSourceID = sourceID
+	return domain.Source{ID: sourceID, TenantID: tenantID, Provider: "cloudevents", Adapter: "cloudevents", State: domain.StateActive}, nil
+}
+
+func (f *routeDispatchIngestStore) FindSourceByProviderPath(_ context.Context, provider, sourceID string) (domain.Source, error) {
+	f.providerLookupCalled = true
+	f.lastProvider = provider
+	f.lastProviderSourceID = sourceID
+	return domain.Source{ID: sourceID, TenantID: "ten_provider", Provider: provider, Adapter: provider, State: domain.StateActive}, nil
+}
+
+func (f *routeDispatchIngestStore) CaptureInbound(context.Context, app.CaptureInboundInput) (app.CaptureInboundResult, error) {
 	return app.CaptureInboundResult{EventID: "evt_1", ReceiptID: "rcp_1", RawPayloadID: "raw_1", DedupeStatus: domain.DedupeUnique}, nil
 }
 
