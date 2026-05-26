@@ -56,3 +56,30 @@ Prefer official provider documentation over blog posts, memory, generated
 answers, SDK behavior, or third-party examples. When official docs conflict
 with implementation behavior, describe the gap as a current limitation rather
 than rewriting the docs to imply support.
+
+## Documentation Review Checklist
+
+Use this checklist for documentation-only changes and for code changes that
+alter docs, examples, contracts, deployment profiles, or release evidence.
+
+- Audience: name the reader and task the changed doc serves.
+- Doc type: classify the change as entry point, reference, runbook, policy,
+  contract, deployment profile, generated artifact, or archive.
+- Source of truth: update the owning canonical file first and link from
+  secondary docs instead of duplicating long tables or command catalogs.
+- Implemented vs intended: do not describe planned behavior as current unless
+  code, OpenAPI, migrations, deployment profiles, or scripts prove it.
+- Examples: use placeholders only; do not include real credentials, raw
+  signatures, raw payload bodies, private keys, customer data, or production
+  database URLs.
+- Commands: run the narrow relevant command, usually `make docs-check`, and
+  record skipped checks with the reason.
+- Provider and security claims: refresh provider-specific claims through the
+  freshness rule above and link to official sources when behavior changed.
+- Non-claims: keep durable capture, at-least-once delivery, no exactly-once,
+  no provider-side completeness, no compliance certification, and no live-
+  provider acceptance language aligned with `docs/security-promise.md`.
+- Generated artifacts: keep `openapi.yaml`, `sdk/openapi.yaml`, SDK docs, and
+  collections aligned when contracts or examples change.
+- Evidence: do not edit audit artifacts except explicit remediation checkmarks
+  or requested evidence updates.
