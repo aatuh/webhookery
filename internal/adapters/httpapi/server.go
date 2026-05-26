@@ -3,6 +3,7 @@ package httpapi
 import (
 	"context"
 	"net/http"
+	"net/netip"
 
 	"github.com/go-chi/chi/v5"
 
@@ -28,6 +29,7 @@ type ServerConfig struct {
 	OpenAPI             []byte
 	EnableUI            bool
 	SessionCookieSecure bool
+	TrustedProxyCIDRs   []netip.Prefix
 	Health              func(context.Context) error
 }
 

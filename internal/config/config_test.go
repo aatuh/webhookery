@@ -1,6 +1,9 @@
 package config
 
-import "testing"
+import (
+	"net/netip"
+	"testing"
+)
 
 func TestLoadDefaultsRawStorageToPostgres(t *testing.T) {
 	t.Setenv("WEBHOOKERY_DATABASE_URL", "postgres://example")
@@ -90,5 +93,33 @@ func TestLoadRequiresTLSFilesForProducerMTLSCA(t *testing.T) {
 
 	if _, err := Load(); err == nil {
 		t.Fatal("expected producer mTLS CA to require API TLS certificate and key files")
+	}
+}
+
+func TestLoadParsesTrustedProxyCIDRs(t *testing.T) {
+	t.Setenv("WEBHOOKERY_DATABASE_URL", "postgres://example")
+	t.Setenv("WEBHOOKERY_TRUSTED_PROXY_CIDRS", "10.0.0.0/8,2001:db8::/32")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	expected := []netip.Prefix{netip.MustParsePrefix("10.0.0.0/8"), netip.MustParsePrefix("2001:db8::/32")}
+	if len(cfg.TrustedProxyCIDRs) != len(expected) {
+		t.Fatalf("trusted proxy CIDRs=%v want %v", cfg.TrustedProxyCIDRs, expected)
+	}
+	for i := range expected {
+		if cfg.TrustedProxyCIDRs[i] != expected[i] {
+			t.Fatalf("trusted proxy CIDR[%d]=%v want %v", i, cfg.TrustedProxyCIDRs[i], expected[i])
+		}
+	}
+}
+
+func TestLoadRejectsInvalidTrustedProxyCIDR(t *testing.T) {
+	t.Setenv("WEBHOOKERY_DATABASE_URL", "postgres://example")
+	t.Setenv("WEBHOOKERY_TRUSTED_PROXY_CIDRS", "not-a-cidr")
+
+	if _, err := Load(); err == nil {
+		t.Fatal("expected invalid trusted proxy CIDR error")
 	}
 }

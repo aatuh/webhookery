@@ -157,7 +157,7 @@ func (s *Server) oidcCallback(w http.ResponseWriter, r *http.Request) {
 		writeProblem(w, problem.Unauthorized(requestID(r)))
 		return
 	}
-	result, err := s.cfg.Control.CompleteOIDCCallback(r.Context(), state, r.URL.Query().Get("code"), r.UserAgent(), remoteAddr(r))
+	result, err := s.cfg.Control.CompleteOIDCCallback(r.Context(), state, r.URL.Query().Get("code"), r.UserAgent(), s.remoteAddr(r))
 	if err != nil {
 		s.writeError(w, r, err)
 		return

@@ -3,8 +3,10 @@ package config
 import (
 	"encoding/base64"
 	"fmt"
+	"net/netip"
 	"os"
 	"strconv"
+	"strings"
 )
 
 type Config struct {
@@ -34,6 +36,7 @@ type Config struct {
 	BootstrapTenantID        string
 	BootstrapAPIKeyHash      string
 	BootstrapAPIKeyPrefix    string
+	TrustedProxyCIDRs        []netip.Prefix
 }
 
 func Load() (Config, error) {
@@ -63,6 +66,11 @@ func Load() (Config, error) {
 		BootstrapAPIKeyHash:      os.Getenv("WEBHOOKERY_BOOTSTRAP_API_KEY_HASH"),
 		BootstrapAPIKeyPrefix:    os.Getenv("WEBHOOKERY_BOOTSTRAP_API_KEY_PREFIX"),
 	}
+	trustedProxyCIDRs, err := parseTrustedProxyCIDRs(os.Getenv("WEBHOOKERY_TRUSTED_PROXY_CIDRS"))
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.TrustedProxyCIDRs = trustedProxyCIDRs
 	enableUI, err := strconv.ParseBool(envDefault("WEBHOOKERY_ENABLE_UI", "false"))
 	if err != nil {
 		return Config{}, fmt.Errorf("WEBHOOKERY_ENABLE_UI must be boolean: %w", err)
@@ -117,4 +125,25 @@ func envDefault(name, fallback string) string {
 		return value
 	}
 	return fallback
+}
+
+func parseTrustedProxyCIDRs(raw string) ([]netip.Prefix, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil, nil
+	}
+	parts := strings.Split(raw, ",")
+	out := make([]netip.Prefix, 0, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		prefix, err := netip.ParsePrefix(part)
+		if err != nil {
+			return nil, fmt.Errorf("WEBHOOKERY_TRUSTED_PROXY_CIDRS contains invalid CIDR %q: %w", part, err)
+		}
+		out = append(out, prefix.Masked())
+	}
+	return out, nil
 }

@@ -835,6 +835,12 @@ provider. Security operators can list and revoke tenant sessions through
 `/v1/auth/sessions`; session token hashes are never returned. SAML assertion
 processing is not implemented in this slice.
 
+OIDC session IP metadata defaults to the direct `RemoteAddr` peer. If the API
+is behind a trusted reverse proxy, set `WEBHOOKERY_TRUSTED_PROXY_CIDRS` to a
+comma-separated CIDR allowlist for the immediate proxy peers; only then is the
+first `X-Forwarded-For` address used for session metadata. Invalid or untrusted
+forwarded values fall back to `RemoteAddr`.
+
 SCIM provisioning is available at `/v1/scim/v2/Users` and
 `/v1/scim/v2/Groups`. SCIM bearer tokens are created through
 `/v1/scim-tokens` or `whcp scim-tokens create`, returned exactly once, and
@@ -889,9 +895,9 @@ To require app-side certificate verification, configure
 `WEBHOOKERY_TLS_CERT_FILE`, `WEBHOOKERY_TLS_KEY_FILE`, and
 `WEBHOOKERY_PRODUCER_MTLS_CLIENT_CA_FILE`. The server verifies peer
 certificates against that CA before matching the fingerprint. This slice does
-not trust proxy-supplied mTLS headers; deployments that terminate TLS before
-the API process must use API-key or OAuth producer credentials until a future
-trusted-proxy design is implemented.
+not trust proxy-supplied mTLS or authentication identity headers; deployments
+that terminate producer mTLS before the API process must use API-key or OAuth
+producer credentials.
 
 ## SSRF Protection
 

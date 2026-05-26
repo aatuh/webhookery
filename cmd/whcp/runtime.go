@@ -62,6 +62,7 @@ func runAPI() error {
 		OpenAPI:             openAPI,
 		EnableUI:            cfg.EnableUI,
 		SessionCookieSecure: cfg.Environment == "production",
+		TrustedProxyCIDRs:   cfg.TrustedProxyCIDRs,
 		Health:              store.Health,
 	})
 	tlsConfig, err := serverTLSConfig(cfg)
