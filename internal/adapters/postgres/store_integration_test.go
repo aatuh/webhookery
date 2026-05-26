@@ -19,9 +19,9 @@ import (
 )
 
 func TestPostgresMigrationAndAPIKeyAuthentication(t *testing.T) {
-	databaseURL := os.Getenv("RANDONNEE_TEST_DATABASE_URL")
+	databaseURL := os.Getenv("WEBHOOKERY_TEST_DATABASE_URL")
 	if databaseURL == "" {
-		t.Skip("RANDONNEE_TEST_DATABASE_URL is required")
+		t.Skip("WEBHOOKERY_TEST_DATABASE_URL is required")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -168,9 +168,9 @@ func TestPostgresWorkerLeaseRecoveryAndLivePriority(t *testing.T) {
 
 func openPostgresIntegrationStore(t *testing.T) (context.Context, *Store, authz.Actor) {
 	t.Helper()
-	databaseURL := os.Getenv("RANDONNEE_TEST_DATABASE_URL")
+	databaseURL := os.Getenv("WEBHOOKERY_TEST_DATABASE_URL")
 	if databaseURL == "" {
-		t.Skip("RANDONNEE_TEST_DATABASE_URL is required")
+		t.Skip("WEBHOOKERY_TEST_DATABASE_URL is required")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	t.Cleanup(cancel)

@@ -230,7 +230,7 @@ self-hosted release candidate. Before promoting a deployment:
    fixed before promotion.
 2. Run `make finalize`; all unit, contract, SDK, vulnerability, gosec, and race
    checks must pass.
-3. Run `RANDONNEE_TEST_DATABASE_URL=postgres://... make rc-check` against a
+3. Run `WEBHOOKERY_TEST_DATABASE_URL=postgres://... make rc-check` against a
    disposable PostgreSQL database; it should end with
    `release-candidate acceptance checks passed`.
 4. Run the restore drill with a separate disposable restore database by setting

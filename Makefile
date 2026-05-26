@@ -162,11 +162,11 @@ migrate: ## Run Postgres migrations using DATABASE_URL
 	@$(GO) run ./cmd/whcp migrate -dir migrations up
 
 postgres-integration-test: ## Run live Postgres migration and store integration tests
-	@test -n "$$RANDONNEE_TEST_DATABASE_URL" || (printf '%s\n' "RANDONNEE_TEST_DATABASE_URL is required; start postgres with docker compose up -d postgres" >&2; exit 2)
+	@test -n "$$WEBHOOKERY_TEST_DATABASE_URL" || (printf '%s\n' "WEBHOOKERY_TEST_DATABASE_URL is required; start postgres with docker compose up -d postgres" >&2; exit 2)
 	@$(GO) test ./internal/adapters/postgres -run 'TestPostgres|TestMigration' -count=1
 
 redis-integration-test: ## Run live Redis edge-store integration tests
-	@test -n "$$RANDONNEE_TEST_REDIS_ADDR" || (printf '%s\n' "RANDONNEE_TEST_REDIS_ADDR is required; start redis with docker compose up -d redis" >&2; exit 2)
+	@test -n "$$WEBHOOKERY_TEST_REDIS_ADDR" || (printf '%s\n' "WEBHOOKERY_TEST_REDIS_ADDR is required; start redis with docker compose up -d redis" >&2; exit 2)
 	@$(GO) test ./internal/adapters/redisstore -run 'TestRedisStoreIntegration' -count=1
 
 fast-check: ## Run non-mutating checks

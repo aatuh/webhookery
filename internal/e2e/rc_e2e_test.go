@@ -592,10 +592,10 @@ func TestRCE2EStorageFailureDrillsRejectInboundSuccess(t *testing.T) {
 }
 
 func TestRCRestoreDrill(t *testing.T) {
-	sourceDatabaseURL := os.Getenv("RANDONNEE_TEST_DATABASE_URL")
+	sourceDatabaseURL := os.Getenv("WEBHOOKERY_TEST_DATABASE_URL")
 	restoreDatabaseURL := os.Getenv("WEBHOOKERY_RESTORE_DRILL_DATABASE_URL")
 	if sourceDatabaseURL == "" || restoreDatabaseURL == "" {
-		t.Skip("RANDONNEE_TEST_DATABASE_URL and WEBHOOKERY_RESTORE_DRILL_DATABASE_URL are required")
+		t.Skip("WEBHOOKERY_TEST_DATABASE_URL and WEBHOOKERY_RESTORE_DRILL_DATABASE_URL are required")
 	}
 	if sourceDatabaseURL == restoreDatabaseURL {
 		t.Fatal("restore drill database URL must point to a separate disposable database")
@@ -691,9 +691,9 @@ func openRCStore(t *testing.T) (context.Context, *postgres.Store, authz.Actor) {
 
 func openRCStoreWithOptions(t *testing.T, opts postgres.StoreOptions) (context.Context, *postgres.Store, authz.Actor) {
 	t.Helper()
-	databaseURL := os.Getenv("RANDONNEE_TEST_DATABASE_URL")
+	databaseURL := os.Getenv("WEBHOOKERY_TEST_DATABASE_URL")
 	if databaseURL == "" {
-		t.Skip("RANDONNEE_TEST_DATABASE_URL is required for RC E2E tests")
+		t.Skip("WEBHOOKERY_TEST_DATABASE_URL is required for RC E2E tests")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	t.Cleanup(cancel)

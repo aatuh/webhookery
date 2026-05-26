@@ -141,7 +141,7 @@ Before promotion, complete this checklist:
 - `make finalize` passes on the release candidate commit.
 - `make rc-check` passes without live third-party provider, AWS, Vault, Slack,
   PagerDuty, SIEM, or customer receiver calls.
-- `RANDONNEE_TEST_DATABASE_URL=postgres://... make rc-check` passes against a
+- `WEBHOOKERY_TEST_DATABASE_URL=postgres://... make rc-check` passes against a
   disposable PostgreSQL database. This runs migrations, Postgres integration,
   and DB-backed RC E2E flows serially.
 - `WEBHOOKERY_RC_RESTORE_DATABASE_URL=postgres://...` is set to a separate
@@ -159,7 +159,7 @@ Expected local RC command sequence:
 
 ```bash
 docker compose up -d postgres
-RANDONNEE_TEST_DATABASE_URL=postgres://webhookery:change-me@localhost:5432/webhookery?sslmode=disable make rc-check
+WEBHOOKERY_TEST_DATABASE_URL=postgres://webhookery:change-me@localhost:5432/webhookery?sslmode=disable make rc-check
 ```
 
 A successful run ends with:
@@ -172,7 +172,7 @@ Restore drills require a separate disposable restore database URL. The source
 and restore URLs must not point at the same database:
 
 ```bash
-RANDONNEE_TEST_DATABASE_URL=postgres://webhookery:change-me@localhost:5432/webhookery?sslmode=disable \
+WEBHOOKERY_TEST_DATABASE_URL=postgres://webhookery:change-me@localhost:5432/webhookery?sslmode=disable \
 WEBHOOKERY_RC_RESTORE_DATABASE_URL=postgres://webhookery_restore:change-me@localhost:5433/webhookery_restore?sslmode=disable \
 make rc-check
 ```

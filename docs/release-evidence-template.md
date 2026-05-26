@@ -30,8 +30,8 @@ as failures or explicit accepted-risk exceptions.
 | `make finalize` |  |  |
 | `make release-acceptance` |  |  |
 | `make rc-check` |  |  |
-| `make postgres-integration-test` with `RANDONNEE_TEST_DATABASE_URL` |  |  |
-| DB-backed `make rc-check` with `RANDONNEE_TEST_DATABASE_URL` |  |  |
+| `make postgres-integration-test` with `WEBHOOKERY_TEST_DATABASE_URL` |  |  |
+| DB-backed `make rc-check` with `WEBHOOKERY_TEST_DATABASE_URL` |  |  |
 | backup/restore drill with explicit restore database |  |  |
 | `docker build -t webhookery:local .` |  |  |
 | `docker compose up --build -d` |  |  |

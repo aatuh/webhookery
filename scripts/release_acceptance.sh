@@ -62,7 +62,7 @@ grep -q "Explicit Non-Goals" docs/operations.md
 grep -q "Production RC Readiness" README.md
 grep -q "make rc-check" README.md
 
-if [ -n "${RANDONNEE_TEST_DATABASE_URL:-}" ]; then
+if [ -n "${WEBHOOKERY_TEST_DATABASE_URL:-}" ]; then
   make postgres-integration-test
 fi
 

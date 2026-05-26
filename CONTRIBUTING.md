@@ -48,7 +48,7 @@ make release-acceptance
 make rc-check
 ```
 
-Database-backed checks require `RANDONNEE_TEST_DATABASE_URL`. Do not point test
+Database-backed checks require `WEBHOOKERY_TEST_DATABASE_URL`. Do not point test
 commands at production databases or live provider accounts.
 
 Do not include API keys, webhook secrets, bearer tokens, session tokens, private

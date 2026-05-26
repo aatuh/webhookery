@@ -36,21 +36,21 @@ require_executable scripts/backup_postgres.sh
 require_executable scripts/restore_postgres.sh
 
 say "running fast repository checks"
-env -u RANDONNEE_TEST_DATABASE_URL make fast-check
+env -u WEBHOOKERY_TEST_DATABASE_URL make fast-check
 
 say "running release acceptance evidence checks"
-env -u RANDONNEE_TEST_DATABASE_URL make release-acceptance
+env -u WEBHOOKERY_TEST_DATABASE_URL make release-acceptance
 
 say "running targeted production-core tests"
 go test ./cmd/whcp ./internal/adapters/httpapi ./internal/adapters/postgres ./internal/app ./internal/worker ./internal/provider ./internal/ssrf ./internal/evidence ./pkg/client ./pkg/verifier
 
-if [ -n "${RANDONNEE_TEST_DATABASE_URL:-}" ]; then
+if [ -n "${WEBHOOKERY_TEST_DATABASE_URL:-}" ]; then
   say "running postgres integration checks"
   make postgres-integration-test
   say "running db-backed rc e2e checks"
   go test ./internal/e2e -run TestRCE2E -count=1
 else
-  say "RANDONNEE_TEST_DATABASE_URL is not set; skipping db-backed rc e2e checks"
+  say "WEBHOOKERY_TEST_DATABASE_URL is not set; skipping db-backed rc e2e checks"
 fi
 
 if [ -n "${WEBHOOKERY_RC_RESTORE_DATABASE_URL:-}" ]; then
