@@ -90,6 +90,7 @@ commits, issues, support requests, or audit artifacts.
 - `docs/release-evidence-template.md`: canonical release evidence template.
 - `docs/cli.md`: CLI command reference and moved command catalog.
 - `sdk/README.md`: committed SDK artifact guidance.
+- `collections/README.md`: Postman and Bruno smoke request usage.
 - `deploy/kubernetes/README.md`, `deploy/helm/webhookery/README.md`, and
   `deploy/terraform/webhookery-helm/README.md`: deployment profile notes.
 - `SECURITY.md`, `CONTRIBUTING.md`, `GOVERNANCE.md`, `SUPPORT.md`,

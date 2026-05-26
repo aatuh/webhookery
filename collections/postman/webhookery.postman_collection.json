@@ -34,7 +34,7 @@
         "method": "POST",
         "header": [
           {"key": "Content-Type", "value": "application/json"},
-          {"key": "X-Webhookery-Signature", "value": "t=replace,v1=replace"}
+          {"key": "Webhook-Signature", "value": "sha256=replace-with-hmac-sha256-hex"}
         ],
         "body": {
           "mode": "raw",
