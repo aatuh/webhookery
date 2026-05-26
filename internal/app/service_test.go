@@ -225,10 +225,19 @@ func TestIngestCloudEventsStructuredMetadata(t *testing.T) {
 		t.Fatal(err)
 	}
 	if !res.Accepted {
-		t.Fatal("structured CloudEvents request should be accepted after capture")
+		t.Fatal("structured unsigned CloudEvents request should be accepted after evidence capture")
+	}
+	if store.last.VerificationOK || store.last.Event.Verified {
+		t.Fatalf("unsigned CloudEvents must not be marked verified: %+v", store.last.Event)
+	}
+	if store.last.VerifyReason != "unsigned_cloudevents" {
+		t.Fatalf("expected unsigned CloudEvents verification reason, got %q", store.last.VerifyReason)
 	}
 	if store.last.Event.ProviderID != "evt_cloud" || store.last.Event.Type != "customer.created" {
 		t.Fatalf("unexpected CloudEvents metadata: %+v", store.last.Event)
+	}
+	if len(store.last.Normalized.Envelope) != 0 {
+		t.Fatal("unsigned CloudEvents must not create a trusted normalized envelope")
 	}
 }
 

@@ -85,14 +85,14 @@ func TestProviderSignatureVectors(t *testing.T) {
 	}
 }
 
-func TestCloudEventsAdapterAcceptsStructuredMode(t *testing.T) {
+func TestCloudEventsAdapterDoesNotVerifyUnsignedStructuredMode(t *testing.T) {
 	adapter := CloudEventsAdapter{}
 	result := adapter.Verify(VerifyInput{
 		Headers: map[string][]string{"content-type": {"application/cloudevents+json"}},
 		RawBody: []byte(`{"specversion":"1.0","id":"evt_1","type":"invoice.paid","source":"tests"}`),
 	})
-	if !result.Verified {
-		t.Fatalf("structured CloudEvents request should verify as a trusted envelope, got %+v", result)
+	if result.Verified || result.Reason != "unsigned_cloudevents" {
+		t.Fatalf("structured CloudEvents validity must not imply trust, got %+v", result)
 	}
 }
 
