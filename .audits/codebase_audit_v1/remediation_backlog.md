@@ -148,7 +148,7 @@ Implementation rules:
 - update the ticket checkmark from `[ ]` to `[x]` only after the ticket is actually complete
 - update the epic checkmark from `[ ]` to `[x]` only when all child tickets are complete
 
-### Ticket E3-T3 - Move Reconciliation Orchestration Out Of Postgres Store [ ]
+### Ticket E3-T3 - Move Reconciliation Orchestration Out Of Postgres Store [x]
 
 Description: Move provider scan, lookup, redelivery, and recovered-event orchestration into an application reconciliation service.
 
