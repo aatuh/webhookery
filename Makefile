@@ -8,7 +8,7 @@ GOSEC_VERSION ?= v2.25.0
 GOVULNCHECK_VERSION ?= v1.2.0
 FUZZTIME ?= 5s
 
-.PHONY: help tools fmt lint vuln gosec test test-race coverage openapi-check test-vectors-check crypto-inventory deployment-profile-check collections-check meta-files-check fuzz-smoke sdk-generate sdk-check docs-check release-acceptance rc-check compose-up compose-down migrate live-postgres-check postgres-integration-test redis-integration-test fast-check finalize clean
+.PHONY: help tools fmt lint vuln gosec test test-race coverage openapi-check test-vectors-check crypto-inventory deployment-profile-check collections-check documentation-structure-check meta-files-check fuzz-smoke sdk-generate sdk-check docs-check release-acceptance rc-check compose-up compose-down migrate live-postgres-check postgres-integration-test redis-integration-test fast-check finalize clean
 
 help: ## Show help
 	@awk 'BEGIN {FS=":.*## "}; /^[a-zA-Z0-9_.-]+:.*## / { printf "  %-16s %s\n", $$1, $$2 }' $(MAKEFILE_LIST)
@@ -55,6 +55,7 @@ crypto-inventory: ## Check crypto inventory evidence exists
 deployment-profile-check: ## Check deployment profile evidence and non-claims
 	@grep -q "/readyz" openapi.yaml
 	@grep -q "no FIPS/NIST/CMVP certification" docs/operations.md
+	@test -f docs/deployment.md
 	@test -f deploy/kubernetes/kustomization.yaml
 	@test -f deploy/kubernetes/secret.example.yaml
 	@test -f deploy/helm/webhookery/Chart.yaml
@@ -67,6 +68,9 @@ deployment-profile-check: ## Check deployment profile evidence and non-claims
 	@grep -q "WEBHOOKERY_DATABASE_URL" deploy/kubernetes/secret.example.yaml
 	@grep -q "WEBHOOKERY_DATABASE_URL" deploy/helm/webhookery/values.yaml
 	@grep -q "helm_release" deploy/terraform/webhookery-helm/main.tf
+	@grep -q "docs/deployment.md" deploy/kubernetes/README.md
+	@grep -q "docs/deployment.md" deploy/helm/webhookery/README.md
+	@grep -q "docs/deployment.md" deploy/terraform/webhookery-helm/README.md
 	@grep -q "not accepted as module variables" deploy/terraform/webhookery-helm/README.md
 	@test -x scripts/release_acceptance.sh
 	@test -x scripts/backup_postgres.sh
@@ -75,11 +79,37 @@ deployment-profile-check: ## Check deployment profile evidence and non-claims
 	@grep -q "restore_postgres.sh" docs/operations.md
 
 collections-check: ## Check committed API client collections
+	@test -f collections/README.md
 	@test -f collections/postman/webhookery.postman_collection.json
 	@test -f collections/bruno/Webhookery/bruno.json
+	@grep -q "Postman" collections/README.md
+	@grep -q "Bruno" collections/README.md
+	@grep -q "Webhook-Signature" collections/README.md
 	@grep -q "collection/v2.1.0/collection.json" collections/postman/webhookery.postman_collection.json
 	@grep -q "/v1/events" collections/bruno/Webhookery/events-list.bru
 	@grep -q "/v1/audit-chain:verify" collections/bruno/Webhookery/audit-chain-verify.bru
+
+documentation-structure-check: ## Check canonical documentation structure
+	@test -f docs/index.md
+	@test -f docs/configuration.md
+	@test -f docs/feature-behavior.md
+	@test -f docs/security-promise.md
+	@test -f docs/documentation-maintenance.md
+	@test -f docs/cli.md
+	@test -f docs/deployment.md
+	@test -f docs/schema-migrations.md
+	@test -f docs/security-review-package.md
+	@test -f docs/release-evidence-template.md
+	@grep -q "Documentation Map" docs/index.md
+	@grep -q "Configuration Reference" docs/configuration.md
+	@grep -q "Feature Behavior Reference" docs/feature-behavior.md
+	@grep -q "Security Promise" docs/security-promise.md
+	@grep -q "Provider Claim Freshness" docs/documentation-maintenance.md
+	@grep -q "Documentation Review Checklist" docs/documentation-maintenance.md
+	@grep -q "CLI" docs/cli.md
+	@grep -q "Deployment Posture" docs/deployment.md
+	@grep -q "Schema And Migration Operations" docs/schema-migrations.md
+	@grep -q "docs/security-promise.md" docs/documentation-maintenance.md
 
 meta-files-check: ## Check governance, licensing, and release-evidence metadata
 	@test -f LICENSE
@@ -153,6 +183,7 @@ docs-check: ## Run non-mutating documentation-adjacent checks
 	@$(MAKE) crypto-inventory
 	@$(MAKE) deployment-profile-check
 	@$(MAKE) collections-check
+	@$(MAKE) documentation-structure-check
 	@$(MAKE) meta-files-check
 
 compose-up: ## Start local dependencies and API
@@ -181,6 +212,7 @@ fast-check: ## Run non-mutating checks
 	@$(MAKE) crypto-inventory
 	@$(MAKE) deployment-profile-check
 	@$(MAKE) collections-check
+	@$(MAKE) documentation-structure-check
 	@$(MAKE) meta-files-check
 	@$(MAKE) sdk-check
 
@@ -196,6 +228,7 @@ finalize: ## Thorough validity check
 	@$(MAKE) crypto-inventory
 	@$(MAKE) deployment-profile-check
 	@$(MAKE) collections-check
+	@$(MAKE) documentation-structure-check
 	@$(MAKE) meta-files-check
 	@$(MAKE) sdk-check
 
