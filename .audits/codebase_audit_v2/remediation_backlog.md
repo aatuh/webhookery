@@ -7,7 +7,7 @@ Status legend:
 - [ ] not done
 - [x] done
 
-## Epic E1 - Ingress Trust Semantics [ ]
+## Epic E1 - Ingress Trust Semantics [x]
 
 Description: Ensure public provider ingress never turns structural payload validity into trusted side-effecting work without cryptographic verification or an explicit unsafe policy.
 
@@ -30,7 +30,7 @@ Notes:
 - Cover `internal/provider/provider.go`, `internal/app/service.go`, and `internal/app/delivery_fanout.go`.
 - Preserve durable capture for malformed or unsigned CloudEvents where current ack policy allows evidence capture.
 
-### Ticket E1-T2 - Add Explicit Unsafe Routing Policy Tests [ ]
+### Ticket E1-T2 - Add Explicit Unsafe Routing Policy Tests [x]
 
 Description: Add negative tests proving unsigned CloudEvents do not create deliveries, plus policy tests for any intentionally allowed unsafe/archive-only routing mode.
 
