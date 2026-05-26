@@ -174,6 +174,8 @@ The restore target is destructive. The restore script refuses to run without
 
 Back up PostgreSQL before upgrading, changing retention policies, rotating
 master-key material, changing secret custody mode, or enabling object storage.
+Use `docs/schema-migrations.md` for schema ordering, evidence-authority tables,
+and restore compatibility review.
 
 1. Stop API, worker, and scheduler processes for the restore target.
 2. Create a PostgreSQL custom-format dump:
