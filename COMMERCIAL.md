@@ -38,10 +38,9 @@ Commercial terms can cover:
 - self-hosted deployment review,
 - operational runbook review.
 
-Commercial terms do not imply exactly-once delivery, provider-side event
-completeness, compliance certification, external timestamping, legal/regulatory
-approval, managed-service availability, or recovery guarantees beyond the
-written agreement.
+Commercial terms do not broaden the canonical non-claims in
+`docs/security-promise.md` unless the written agreement explicitly narrows
+scope for that customer, deployment, or engagement.
 
 ## Contact
 

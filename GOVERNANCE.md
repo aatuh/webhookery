@@ -21,7 +21,8 @@ The maintainer has final decision authority over:
 - contribution acceptance,
 - release evidence requirements,
 - trademark and naming permission,
-- claims and non-claims,
+- claims and non-claims, with `docs/security-promise.md` as the canonical
+  reference,
 - provider support boundaries.
 
 Large changes should preserve the project’s core invariants:
@@ -36,7 +37,8 @@ Large changes should preserve the project’s core invariants:
 - customer endpoint URLs are hostile input until validated and revalidated,
 - secrets, raw payloads, bearer/session tokens, provider credentials, private
   keys, and unnecessary PII are not logged or exported,
-- compliance and legal-evidence language stays conservative.
+- compliance and legal-evidence language stays conservative and aligned with
+  `docs/security-promise.md`.
 
 ## Commercial Boundary
 
@@ -45,6 +47,6 @@ exceptions, support agreements, release evidence packages, and self-hosted
 support packages are handled outside the public issue tracker unless the
 maintainer explicitly chooses otherwise.
 
-Commercial work does not imply exactly-once delivery, provider-side event
-completeness, compliance certification, legal evidentiary certification,
-external timestamping, or managed-service availability.
+Commercial work does not broaden the canonical non-claims in
+`docs/security-promise.md` unless a signed agreement explicitly narrows scope
+for that engagement.

@@ -65,18 +65,9 @@ production-style use.
 
 ## Security Promise And Non-Claims
 
-Inbound success means Webhookery durably captured raw request evidence and
-verification metadata according to the configured storage mode. It does not
-mean downstream business processing succeeded.
-
-Webhookery does not claim:
-
-- exactly-once delivery
-- provider-side event completeness
-- multi-region active-active operation
-- external timestamping
-- compliance certification
-- live third-party provider recovery guarantees
+See `docs/security-promise.md` for the canonical promise and non-claims.
+In short: inbound success means durable capture and verification metadata were
+recorded; it does not mean downstream business processing succeeded.
 
 Examples in this repository use placeholders or local development values. Do
 not put real API keys, provider credentials, webhook secrets, bearer tokens,
@@ -93,6 +84,8 @@ commits, issues, support requests, or audit artifacts.
 - `docs/feature-behavior.md`: behavior reference for capture, routing,
   delivery, replay, reconciliation, retention, identity, producer trust, and
   SSRF.
+- `docs/security-promise.md`: canonical durable-capture promise and
+  non-claims.
 - `docs/security-review-package.md`: security reviewer artifact map.
 - `docs/release-evidence-template.md`: canonical release evidence template.
 - `docs/cli.md`: CLI command reference and moved command catalog.

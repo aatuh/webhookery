@@ -35,6 +35,6 @@ Contact Aatu Harju through LinkedIn:
 
 <https://www.linkedin.com/in/aatu-harju>
 
-Do not rely on an SLA, warranty, provider-side recovery guarantee, legal
-evidence certification, regulated-use approval, or compliance certification
-unless it is explicitly included in a signed agreement.
+Do not rely on an SLA, warranty, provider-side recovery guarantee, regulated-
+use approval, or any claim broader than `docs/security-promise.md` unless it is
+explicitly included in a signed agreement.
