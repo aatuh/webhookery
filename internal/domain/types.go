@@ -67,6 +67,7 @@ const (
 	ReconciliationOutcomeUnrecoverable       = "unrecoverable"
 	ReconciliationOutcomeFailed              = "failed"
 	VerificationReasonProviderAPIReconcile   = "provider_api_reconciliation"
+	VerificationReasonUnsignedCloudEvents    = "unsigned_cloudevents"
 	ProviderAPIEvidenceStorageStatusStored   = "stored"
 	ProviderAPIEvidenceStorageStatusDeleted  = "deleted"
 	ProviderAPIEvidenceStorageStatusMetadata = "metadata_only"

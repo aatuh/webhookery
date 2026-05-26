@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"webhookery/internal/domain"
 	"webhookery/pkg/verifier"
 )
 
@@ -230,7 +231,7 @@ func (CloudEventsAdapter) Name() string { return "cloudevents" }
 
 func (CloudEventsAdapter) Verify(input VerifyInput) VerifyResult {
 	if firstHeader(input.Headers, "ce-id") != "" && firstHeader(input.Headers, "ce-type") != "" {
-		return result("cloudevents", true, verifier.ReasonOK)
+		return result("cloudevents", false, domain.VerificationReasonUnsignedCloudEvents)
 	}
 	contentType := strings.ToLower(firstHeader(input.Headers, "content-type"))
 	if strings.HasPrefix(contentType, "application/cloudevents+json") {
@@ -244,7 +245,7 @@ func (CloudEventsAdapter) Verify(input VerifyInput) VerifyResult {
 			return result("cloudevents", false, verifier.ReasonMalformedHeader)
 		}
 		if envelope.SpecVersion != "" && envelope.ID != "" && envelope.Type != "" && envelope.Source != "" {
-			return result("cloudevents", true, verifier.ReasonOK)
+			return result("cloudevents", false, domain.VerificationReasonUnsignedCloudEvents)
 		}
 		return result("cloudevents", false, "missing_cloudevents_headers")
 	}
