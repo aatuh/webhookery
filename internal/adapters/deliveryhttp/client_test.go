@@ -2,10 +2,12 @@ package deliveryhttp
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
+	"strings"
 	"testing"
 	"time"
 
@@ -47,6 +49,31 @@ func TestClientDoesNotFollowRedirects(t *testing.T) {
 	err := client.CheckRedirect(nil, []*http.Request{{}})
 	if err == nil {
 		t.Fatal("redirects must be disabled by default")
+	}
+}
+
+func TestHTTPClientUsesPinnedEgressTransport(t *testing.T) {
+	client := HTTPClient(2*time.Second, ssrf.StaticResolver{
+		"customer.example.com": {netip.MustParseAddr("10.0.0.10")},
+	})
+	transport, ok := client.Transport.(*http.Transport)
+	if !ok {
+		t.Fatalf("expected pinned HTTP transport, got %T", client.Transport)
+	}
+	_, err := transport.DialContext(context.Background(), "tcp", "customer.example.com:443")
+	var policyErr ssrf.PolicyError
+	if !errors.As(err, &policyErr) {
+		t.Fatalf("expected dial-time SSRF policy error, got %v", err)
+	}
+}
+
+func TestSafeDoErrorDoesNotLeakCustomerURLTokens(t *testing.T) {
+	failureClass, err := safeDoError(errors.New(`Post "https://customer.example/hook?token=secret-token": dial tcp 203.0.113.10:443: connect: refused`))
+	if failureClass != "network_error" {
+		t.Fatalf("expected network_error, got %q", failureClass)
+	}
+	if err == nil || strings.Contains(err.Error(), "secret-token") || strings.Contains(err.Error(), "customer.example") {
+		t.Fatalf("network error leaked customer URL detail: %v", err)
 	}
 }
 

@@ -32,9 +32,16 @@ type Result struct {
 	FailureClass      string
 }
 
-func HTTPClient(timeout time.Duration) *http.Client {
+var errUnsafeCustomTransport = errors.New("custom HTTP transport cannot enforce pinned egress")
+
+func HTTPClient(timeout time.Duration, resolvers ...ssrf.Resolver) *http.Client {
+	var resolver ssrf.Resolver
+	if len(resolvers) > 0 {
+		resolver = resolvers[0]
+	}
 	return &http.Client{
-		Timeout: timeout,
+		Timeout:   timeout,
+		Transport: ssrf.NewPinnedTransport(nil, resolver, ssrf.DefaultPolicy()),
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			return http.ErrUseLastResponse
 		},
@@ -77,11 +84,16 @@ func (c Client) Deliver(ctx context.Context, rawURL string, body []byte) (Result
 	}
 	httpClient, err := c.httpClient()
 	if err != nil {
-		return Result{FailureClass: "client_certificate_error"}, err
+		failureClass := "client_certificate_error"
+		if errors.Is(err, errUnsafeCustomTransport) {
+			failureClass = "client_configuration_error"
+		}
+		return Result{FailureClass: failureClass}, err
 	}
 	resp, err := httpClient.Do(req)
 	if err != nil {
-		return Result{FailureClass: "network_error"}, err
+		failureClass, safeErr := safeDoError(err)
+		return Result{FailureClass: failureClass}, safeErr
 	}
 	defer func() { _ = resp.Body.Close() }()
 	bodyBytes, err := readTruncated(resp.Body, 16<<10)
@@ -97,11 +109,12 @@ func (c Client) Deliver(ctx context.Context, rawURL string, body []byte) (Result
 }
 
 func (c Client) httpClient() (*http.Client, error) {
+	base, err := safeHTTPClient(c.HTTP, 10*time.Second, c.SSRF.Resolver)
+	if err != nil {
+		return nil, err
+	}
 	if len(c.MTLSClientCertPEM) == 0 && len(c.MTLSClientKeyPEM) == 0 {
-		if c.HTTP != nil {
-			return c.HTTP, nil
-		}
-		return HTTPClient(10 * time.Second), nil
+		return base, nil
 	}
 	if len(c.MTLSClientCertPEM) == 0 || len(c.MTLSClientKeyPEM) == 0 {
 		return nil, errors.New("mTLS client certificate and key are required together")
@@ -110,22 +123,11 @@ func (c Client) httpClient() (*http.Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	base := HTTPClient(10 * time.Second)
-	if c.HTTP != nil {
-		copy := *c.HTTP
-		base = &copy
-		if base.CheckRedirect == nil {
-			base.CheckRedirect = func(req *http.Request, via []*http.Request) error {
-				return http.ErrUseLastResponse
-			}
-		}
+	transport, ok := base.Transport.(*http.Transport)
+	if !ok {
+		return nil, errUnsafeCustomTransport
 	}
-	transport := http.DefaultTransport.(*http.Transport).Clone()
-	if base.Transport != nil {
-		if typed, ok := base.Transport.(*http.Transport); ok {
-			transport = typed.Clone()
-		}
-	}
+	transport = ssrf.NewPinnedTransport(transport, c.SSRF.Resolver, ssrf.DefaultPolicy())
 	tlsConfig := &tls.Config{MinVersion: tls.VersionTLS12}
 	if transport.TLSClientConfig != nil {
 		tlsConfig = transport.TLSClientConfig.Clone()
@@ -137,6 +139,35 @@ func (c Client) httpClient() (*http.Client, error) {
 	transport.TLSClientConfig = tlsConfig
 	base.Transport = transport
 	return base, nil
+}
+
+func safeHTTPClient(base *http.Client, timeout time.Duration, resolver ssrf.Resolver) (*http.Client, error) {
+	if base == nil {
+		return HTTPClient(timeout, resolver), nil
+	}
+	copy := *base
+	if copy.CheckRedirect == nil {
+		copy.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+			return http.ErrUseLastResponse
+		}
+	}
+	switch transport := copy.Transport.(type) {
+	case nil:
+		copy.Transport = ssrf.NewPinnedTransport(nil, resolver, ssrf.DefaultPolicy())
+	case *http.Transport:
+		copy.Transport = ssrf.NewPinnedTransport(transport, resolver, ssrf.DefaultPolicy())
+	default:
+		return nil, errUnsafeCustomTransport
+	}
+	return &copy, nil
+}
+
+func safeDoError(err error) (string, error) {
+	var policyErr ssrf.PolicyError
+	if errors.As(err, &policyErr) {
+		return "policy_blocked", policyErr
+	}
+	return "network_error", errors.New("delivery network error")
 }
 
 func readTruncated(body io.Reader, max int64) ([]byte, error) {

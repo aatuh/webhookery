@@ -3,6 +3,7 @@ package signalhttp
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -25,9 +26,16 @@ type Result struct {
 	FailureClass      string
 }
 
-func HTTPClient(timeout time.Duration) *http.Client {
+var errUnsafeCustomTransport = errors.New("custom HTTP transport cannot enforce pinned egress")
+
+func HTTPClient(timeout time.Duration, resolvers ...ssrf.Resolver) *http.Client {
+	var resolver ssrf.Resolver
+	if len(resolvers) > 0 {
+		resolver = resolvers[0]
+	}
 	return &http.Client{
-		Timeout: timeout,
+		Timeout:   timeout,
+		Transport: ssrf.NewPinnedTransport(nil, resolver, ssrf.DefaultPolicy()),
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			return http.ErrUseLastResponse
 		},
@@ -61,19 +69,14 @@ func (c Client) Deliver(ctx context.Context, rawURL string, body []byte, secret 
 	if err != nil {
 		return Result{FailureClass: "policy_blocked"}, err
 	}
-	httpClient := c.HTTP
-	if httpClient == nil {
-		httpClient = HTTPClient(10 * time.Second)
-	} else if httpClient.CheckRedirect == nil {
-		copy := *httpClient
-		copy.CheckRedirect = func(req *http.Request, via []*http.Request) error {
-			return http.ErrUseLastResponse
-		}
-		httpClient = &copy
+	httpClient, err := c.httpClient()
+	if err != nil {
+		return Result{FailureClass: "client_configuration_error"}, err
 	}
 	resp, err := httpClient.Do(req)
 	if err != nil {
-		return Result{FailureClass: "network_error"}, err
+		failureClass, safeErr := safeDoError(err)
+		return Result{FailureClass: failureClass}, safeErr
 	}
 	defer func() { _ = resp.Body.Close() }()
 	bodyBytes, err := readTruncated(resp.Body, 16<<10)
@@ -86,6 +89,35 @@ func (c Client) Deliver(ctx context.Context, rawURL string, body []byte, secret 
 		ResponseTruncated: len(bodyBytes) == 16<<10,
 		FailureClass:      classify(resp.StatusCode),
 	}, nil
+}
+
+func (c Client) httpClient() (*http.Client, error) {
+	if c.HTTP == nil {
+		return HTTPClient(10*time.Second, c.SSRF.Resolver), nil
+	}
+	copy := *c.HTTP
+	if copy.CheckRedirect == nil {
+		copy.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+			return http.ErrUseLastResponse
+		}
+	}
+	switch transport := copy.Transport.(type) {
+	case nil:
+		copy.Transport = ssrf.NewPinnedTransport(nil, c.SSRF.Resolver, ssrf.DefaultPolicy())
+	case *http.Transport:
+		copy.Transport = ssrf.NewPinnedTransport(transport, c.SSRF.Resolver, ssrf.DefaultPolicy())
+	default:
+		return nil, errUnsafeCustomTransport
+	}
+	return &copy, nil
+}
+
+func safeDoError(err error) (string, error) {
+	var policyErr ssrf.PolicyError
+	if errors.As(err, &policyErr) {
+		return "policy_blocked", policyErr
+	}
+	return "network_error", errors.New("signal network error")
 }
 
 func readTruncated(body io.Reader, max int64) ([]byte, error) {
