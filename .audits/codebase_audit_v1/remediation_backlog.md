@@ -252,7 +252,7 @@ Implementation rules:
 - update the ticket checkmark from `[ ]` to `[x]` only after the ticket is actually complete
 - update the epic checkmark from `[ ]` to `[x]` only when all child tickets are complete
 
-### Ticket E5-T2 - Add Migration Upgrade And Idempotence Tests [ ]
+### Ticket E5-T2 - Add Migration Upgrade And Idempotence Tests [x]
 
 Description: Add integration tests that migrate a clean database, re-run migrations, and validate key constraints/indexes through SQL behavior.
 
