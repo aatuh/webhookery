@@ -49,7 +49,7 @@ Notes:
 - Include provider-level, ingest-service, and delivery-fanout coverage.
 - Update OpenAPI/docs only if the public contract changes.
 
-## Epic E2 - SSRF-Safe Egress Dialing [ ]
+## Epic E2 - SSRF-Safe Egress Dialing [x]
 
 Description: Bind SSRF validation to the actual outbound connection for customer-controlled endpoint, notification, and SIEM URLs.
 
@@ -72,7 +72,7 @@ Notes:
 - Keep redirects disabled or revalidate every redirect target before following it.
 - Include DNS rebinding, private CIDR, metadata IP, IPv4-mapped IPv6, and IDNA cases.
 
-### Ticket E2-T2 - Use Shared Safe Egress In Delivery And Signal Clients [ ]
+### Ticket E2-T2 - Use Shared Safe Egress In Delivery And Signal Clients [x]
 
 Description: Wire the pinned egress transport into `deliveryhttp` and `signalhttp`, including worker runtime construction.
 
