@@ -101,10 +101,6 @@ func NewWithOptions(ctx context.Context, databaseURL string, box SecretBox, opts
 		objectStore:    opts.ObjectStore,
 		objectBucket:   strings.TrimSpace(opts.ObjectBucket),
 	}
-	if err := store.BackfillAuditChain(ctx); err != nil {
-		pool.Close()
-		return nil, err
-	}
 	return store, nil
 }
 
@@ -116,40 +112,96 @@ func (s *Store) Health(ctx context.Context) error {
 	return s.pool.Ping(ctx)
 }
 
-func (s *Store) BackfillAuditChain(ctx context.Context) error {
+const (
+	auditChainBackfillLeaseID = "audit-chain-backfill"
+	auditChainBackfillMax     = 1000
+)
+
+func (s *Store) BackfillAuditChain(ctx context.Context, workerID string, limit int) (worker.AuditChainBackfillResult, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+	if limit > auditChainBackfillMax {
+		limit = auditChainBackfillMax
+	}
+	result := worker.AuditChainBackfillResult{}
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return result, err
+	}
+	defer rollback(ctx, tx)
 	var exists bool
-	if err := s.pool.QueryRow(ctx, "SELECT to_regclass('audit_chain_entries') IS NOT NULL").Scan(&exists); err != nil {
-		return err
+	if err := tx.QueryRow(ctx, "SELECT to_regclass('audit_chain_entries') IS NOT NULL").Scan(&exists); err != nil {
+		return result, err
 	}
 	if !exists {
-		return nil
+		return result, tx.Commit(ctx)
 	}
-	rows, err := s.pool.Query(ctx, `SELECT DISTINCT tenant_id FROM audit_events ORDER BY tenant_id`)
+	acquired, err := tryAcquireWorkerLease(ctx, tx, auditChainBackfillLeaseID, workerID, time.Minute)
 	if err != nil {
-		return err
+		return result, err
 	}
+	result.LeaseAcquired = acquired
+	if !acquired {
+		return result, tx.Commit(ctx)
+	}
+	rows, err := tx.Query(ctx, `
+		SELECT a.tenant_id
+		FROM audit_events a
+		WHERE NOT EXISTS (
+		      SELECT 1 FROM audit_chain_entries c
+		      WHERE c.tenant_id=a.tenant_id AND c.audit_event_id=a.id
+		)
+		GROUP BY a.tenant_id
+		ORDER BY min(a.occurred_at) ASC, min(a.id) ASC, a.tenant_id ASC
+		LIMIT $1`, limit)
+	if err != nil {
+		return result, err
+	}
+	var tenantIDs []string
 	defer rows.Close()
 	for rows.Next() {
 		var tenantID string
 		if err := rows.Scan(&tenantID); err != nil {
-			return err
+			return result, err
 		}
-		if err := s.backfillTenantAuditChain(ctx, tenantID); err != nil {
-			return err
-		}
+		tenantIDs = append(tenantIDs, tenantID)
 	}
-	return rows.Err()
+	if err := rows.Err(); err != nil {
+		return result, err
+	}
+	remaining := limit
+	now := time.Now().UTC()
+	for _, tenantID := range tenantIDs {
+		if remaining <= 0 {
+			break
+		}
+		backfilled, err := s.backfillTenantAuditChain(ctx, tx, tenantID, remaining, now)
+		if err != nil {
+			return result, err
+		}
+		result.TenantsScanned++
+		result.EventsBackfilled += backfilled
+		remaining -= backfilled
+	}
+	if err := tx.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1
+			FROM audit_events a
+			WHERE NOT EXISTS (
+			      SELECT 1 FROM audit_chain_entries c
+			      WHERE c.tenant_id=a.tenant_id AND c.audit_event_id=a.id
+			)
+		)`).Scan(&result.More); err != nil {
+		return result, err
+	}
+	return result, tx.Commit(ctx)
 }
 
-func (s *Store) backfillTenantAuditChain(ctx context.Context, tenantID string) error {
-	tx, err := s.pool.Begin(ctx)
-	if err != nil {
-		return err
-	}
-	defer rollback(ctx, tx)
+func (s *Store) backfillTenantAuditChain(ctx context.Context, tx pgx.Tx, tenantID string, limit int, now time.Time) (int, error) {
 	sequence, previousHash, err := ensureAuditChainHead(ctx, tx, tenantID)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	rows, err := tx.Query(ctx, `
 		SELECT a.id, a.tenant_id, a.actor_id, a.action, a.resource, a.resource_id, a.reason, a.occurred_at
@@ -159,38 +211,40 @@ func (s *Store) backfillTenantAuditChain(ctx context.Context, tenantID string) e
 		      SELECT 1 FROM audit_chain_entries c
 		      WHERE c.tenant_id=a.tenant_id AND c.audit_event_id=a.id
 		  )
-		ORDER BY a.occurred_at ASC, a.id ASC`, tenantID)
+		ORDER BY a.occurred_at ASC, a.id ASC
+		LIMIT $2`, tenantID, limit)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	defer rows.Close()
-	now := time.Now().UTC()
 	lastAuditEventID := ""
+	backfilled := 0
 	for rows.Next() {
 		var event domain.AuditEvent
 		if err := rows.Scan(&event.ID, &event.TenantID, &event.ActorID, &event.Action, &event.Resource, &event.ResourceID, &event.Reason, &event.OccurredAt); err != nil {
-			return err
+			return 0, err
 		}
 		sequence++
 		entry, err := auditchain.ComputeEntry(mustID("ace"), event, sequence, previousHash, domain.AuditChainEntrySourceBackfill, now)
 		if err != nil {
-			return err
+			return 0, err
 		}
 		if err := insertAuditChainEntry(ctx, tx, entry); err != nil {
-			return err
+			return 0, err
 		}
 		previousHash = entry.ChainHash
 		lastAuditEventID = event.ID
+		backfilled++
 	}
 	if err := rows.Err(); err != nil {
-		return err
+		return 0, err
 	}
 	if lastAuditEventID != "" {
 		if _, err := tx.Exec(ctx, `UPDATE audit_chain_heads SET sequence=$2, chain_hash=$3, last_audit_event_id=$4, updated_at=now() WHERE tenant_id=$1`, tenantID, sequence, previousHash, lastAuditEventID); err != nil {
-			return err
+			return 0, err
 		}
 	}
-	return tx.Commit(ctx)
+	return backfilled, nil
 }
 
 func ensureAuditChainHead(ctx context.Context, tx pgx.Tx, tenantID string) (int64, string, error) {
@@ -8550,6 +8604,35 @@ func upsertWorkerLease(ctx context.Context, tx pgx.Tx, workerID string) error {
 	return err
 }
 
+func tryAcquireWorkerLease(ctx context.Context, tx pgx.Tx, leaseID, workerID string, ttl time.Duration) (bool, error) {
+	leaseID = strings.TrimSpace(leaseID)
+	if leaseID == "" {
+		leaseID = "worker"
+	}
+	workerID = strings.TrimSpace(workerID)
+	if workerID == "" {
+		workerID = "worker"
+	}
+	seconds := int64(ttl.Seconds())
+	if seconds <= 0 {
+		seconds = 60
+	}
+	var acquired bool
+	err := tx.QueryRow(ctx, `
+		WITH acquired AS (
+			INSERT INTO worker_leases(id, worker_id, expires_at)
+			VALUES($1,$2,now() + ($3 * interval '1 second'))
+			ON CONFLICT (id) DO UPDATE
+			SET worker_id=EXCLUDED.worker_id, expires_at=EXCLUDED.expires_at, updated_at=now()
+			WHERE worker_leases.expires_at <= now() OR worker_leases.worker_id=EXCLUDED.worker_id
+			RETURNING 1
+		)
+		SELECT EXISTS(SELECT 1 FROM acquired)`,
+		leaseID, workerID, seconds,
+	).Scan(&acquired)
+	return acquired, err
+}
+
 func mustID(prefix string) string {
 	id, err := random.Token(prefix, 18)
 	if err != nil {
@@ -8566,4 +8649,5 @@ var _ app.APIKeyLookup = (*Store)(nil)
 var _ worker.OutboxStore = (*Store)(nil)
 var _ worker.DeliveryStore = (*Store)(nil)
 var _ worker.RetentionStore = (*Store)(nil)
+var _ worker.AuditChainBackfillStore = (*Store)(nil)
 var _ = time.Now

@@ -99,16 +99,28 @@ type AlertStore interface {
 	EvaluateAlertRules(ctx context.Context, workerID string, limit int) error
 }
 
+type AuditChainBackfillResult struct {
+	LeaseAcquired    bool
+	TenantsScanned   int
+	EventsBackfilled int
+	More             bool
+}
+
+type AuditChainBackfillStore interface {
+	BackfillAuditChain(ctx context.Context, workerID string, limit int) (AuditChainBackfillResult, error)
+}
+
 type Phase string
 
 const (
-	PhaseOutbox       Phase = "outbox"
-	PhaseDelivery     Phase = "delivery"
-	PhaseRetention    Phase = "retention"
-	PhaseMetrics      Phase = "metrics"
-	PhaseAlerts       Phase = "alerts"
-	PhaseNotification Phase = "notification"
-	PhaseSIEM         Phase = "siem"
+	PhaseOutbox             Phase = "outbox"
+	PhaseDelivery           Phase = "delivery"
+	PhaseRetention          Phase = "retention"
+	PhaseMetrics            Phase = "metrics"
+	PhaseAlerts             Phase = "alerts"
+	PhaseAuditChainBackfill Phase = "audit_chain_backfill"
+	PhaseNotification       Phase = "notification"
+	PhaseSIEM               Phase = "siem"
 )
 
 type PhaseResult struct {
@@ -169,6 +181,7 @@ type Worker struct {
 	RetentionStore            RetentionStore
 	MetricsStore              MetricsStore
 	AlertStore                AlertStore
+	AuditChainBackfillStore   AuditChainBackfillStore
 	WorkerID                  string
 	Limit                     int
 }
@@ -211,6 +224,13 @@ func (w Worker) RunOnceReport(ctx context.Context) RunReport {
 	if w.AlertStore != nil {
 		err := w.AlertStore.EvaluateAlertRules(ctx, w.WorkerID, limit)
 		report.add(PhaseAlerts, err)
+		if stopAfterPhase(err) {
+			return report
+		}
+	}
+	if w.AuditChainBackfillStore != nil {
+		_, err := w.AuditChainBackfillStore.BackfillAuditChain(ctx, w.WorkerID, limit)
+		report.add(PhaseAuditChainBackfill, err)
 		if stopAfterPhase(err) {
 			return report
 		}

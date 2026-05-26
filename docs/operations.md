@@ -444,8 +444,10 @@ match the exact raw request body captured by Webhookery.
 
 The worker claims durable outbox rows with database leases, evaluates active
 subscriptions and routes, creates delivery jobs, then claims scheduled
-deliveries. Delivery attempts are signed, recorded, retried on retryable
-failures, and moved to the dead-letter table after terminal failure.
+deliveries. It also runs bounded operational phases for retention, metrics,
+alerts, audit-chain backfill, notification delivery, and SIEM delivery.
+Delivery attempts are signed, recorded, retried on retryable failures, and
+moved to the dead-letter table after terminal failure.
 Worker leases are refreshed in PostgreSQL when outbox or delivery work is
 claimed. Outbox and delivery claim batches use a tenant-fair ordering in
 PostgreSQL: live route work is selected before replay and reconciliation work,
@@ -709,10 +711,19 @@ entries store the audit event hash, previous chain hash, current chain hash,
 canonicalization version, source, state, and tombstone metadata. They do not
 duplicate raw payloads, credentials, or payload bodies.
 
-Existing audit rows are backfilled into deterministic per-tenant chains ordered
-by `occurred_at, id` during store startup. Backfilled chains prove continuity
-from the current database state; they cannot prove history from before the
-chain feature existed.
+Existing unchained audit rows are backfilled explicitly, not during API or
+worker store startup. The scheduler worker runs a bounded leased backfill phase,
+and operators can run the same bounded path after migrations or during
+maintenance:
+
+```bash
+go run ./cmd/whcp migrate --limit 100 --worker-id audit-backfill-operator audit-chain-backfill
+```
+
+Backfill processes deterministic per-tenant batches ordered by `occurred_at, id`
+and reports whether more work remains. Backfilled chains prove continuity from
+the current database state; they cannot prove history from before the chain
+feature existed.
 
 Operators can inspect and verify the chain through:
 

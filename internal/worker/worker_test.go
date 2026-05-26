@@ -109,6 +109,22 @@ func TestRunOnceEnqueuesAndDeliversClaimedSIEMSignal(t *testing.T) {
 	}
 }
 
+func TestRunOnceRunsAuditChainBackfillPhase(t *testing.T) {
+	store := &fakeWorkerStore{auditBackfillResult: AuditChainBackfillResult{LeaseAcquired: true, EventsBackfilled: 3, More: true}}
+	w := Worker{Store: store, AuditChainBackfillStore: store, WorkerID: "worker_1", Limit: 8}
+	report := w.RunOnceReport(context.Background())
+	if err := report.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if store.auditBackfillWorkerID != "worker_1" || store.auditBackfillLimit != 8 {
+		t.Fatalf("expected audit-chain backfill to run with worker id and limit, got worker=%q limit=%d", store.auditBackfillWorkerID, store.auditBackfillLimit)
+	}
+	result, ok := report.Result(PhaseAuditChainBackfill)
+	if !ok || result.Err != nil {
+		t.Fatalf("expected successful audit-chain backfill phase result, got result=%+v ok=%v", result, ok)
+	}
+}
+
 func TestRunOnceContinuesAcrossIndependentPhaseFailures(t *testing.T) {
 	deliveryErr := errors.New("delivery claim failed")
 	retentionErr := errors.New("retention failed")
@@ -201,6 +217,10 @@ type fakeWorkerStore struct {
 	siemRecorded           string
 	siemEnqueueWorkerID    string
 	siemClaimed            bool
+	auditBackfillWorkerID  string
+	auditBackfillLimit     int
+	auditBackfillResult    AuditChainBackfillResult
+	auditBackfillErr       error
 }
 
 func (f *fakeWorkerStore) ClaimOutbox(context.Context, string, int) ([]OutboxItem, error) {
@@ -258,6 +278,11 @@ func (f *fakeWorkerStore) ClaimSIEMDeliveries(context.Context, string, int) ([]S
 func (f *fakeWorkerStore) RecordSIEMDeliveryAttempt(_ context.Context, item SignalDeliveryItem, _ SignalDeliveryResult, _ error) error {
 	f.siemRecorded = item.ID
 	return nil
+}
+func (f *fakeWorkerStore) BackfillAuditChain(_ context.Context, workerID string, limit int) (AuditChainBackfillResult, error) {
+	f.auditBackfillWorkerID = workerID
+	f.auditBackfillLimit = limit
+	return f.auditBackfillResult, f.auditBackfillErr
 }
 
 type fakeDeliveryClient struct {
