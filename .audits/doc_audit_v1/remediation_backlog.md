@@ -239,7 +239,7 @@ Notes:
 
 Description: Make the self-hosted RC posture clearer across Compose, Kubernetes, Helm, Terraform, release evidence, and restore workflows.
 
-### Ticket E4-T1 - Write Common Deployment Posture Guidance [ ]
+### Ticket E4-T1 - Write Common Deployment Posture Guidance [x]
 
 Description: Add or designate one common deployment guide that explains external dependencies, TLS/ingress, secret custody, object storage, network policy, readiness, backup/restore, upgrade, and rollback expectations.
 
