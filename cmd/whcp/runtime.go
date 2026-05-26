@@ -148,15 +148,17 @@ func runWorker(args []string) error {
 	fanout := apppkg.NewDeliveryFanoutService(store, apppkg.SystemClock{})
 	reconciliation := apppkg.NewReconciliationService(store, nil)
 	processor := apppkg.NewOutboxProcessorService(fanout, reconciliation)
+	egressResolver := ssrf.NetResolver{}
+	egressValidator := ssrf.Validator{Resolver: egressResolver}
 	w := worker.Worker{
 		Store:                     store,
 		Processor:                 processor,
 		DeliveryStore:             store,
-		DeliveryClient:            deliveryAdapter{client: deliveryhttp.Client{SSRF: ssrf.Validator{}}},
+		DeliveryClient:            deliveryAdapter{client: deliveryhttp.Client{HTTP: deliveryhttp.HTTPClient(10*time.Second, egressResolver), SSRF: egressValidator}},
 		NotificationDeliveryStore: store,
-		NotificationClient:        signalAdapter{client: signalhttp.Client{SSRF: ssrf.Validator{}}},
+		NotificationClient:        signalAdapter{client: signalhttp.Client{HTTP: signalhttp.HTTPClient(10*time.Second, egressResolver), SSRF: egressValidator}},
 		SIEMDeliveryStore:         store,
-		SIEMClient:                signalAdapter{client: signalhttp.Client{SSRF: ssrf.Validator{}}},
+		SIEMClient:                signalAdapter{client: signalhttp.Client{HTTP: signalhttp.HTTPClient(10*time.Second, egressResolver), SSRF: egressValidator}},
 		RetentionStore:            store,
 		MetricsStore:              store,
 		AlertStore:                store,
