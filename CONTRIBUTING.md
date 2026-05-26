@@ -32,6 +32,9 @@ Before opening a change:
 4. Do not introduce claims broader than `docs/security-promise.md`, live-
    provider acceptance-test dependencies, or arbitrary transformation scripting.
 
+For documentation changes, use the checklist in
+`docs/documentation-maintenance.md` before opening a pull request.
+
 Useful checks:
 
 ```sh

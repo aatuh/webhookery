@@ -86,6 +86,8 @@ commits, issues, support requests, or audit artifacts.
   SSRF.
 - `docs/security-promise.md`: canonical durable-capture promise and
   non-claims.
+- `docs/documentation-maintenance.md`: provider freshness and documentation
+  review checklist.
 - `docs/deployment.md`: common self-hosted deployment posture.
 - `docs/schema-migrations.md`: schema review, migration ordering, and restore
   compatibility guidance.
