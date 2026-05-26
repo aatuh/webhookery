@@ -200,7 +200,7 @@ Implementation rules:
 - update the ticket checkmark from `[ ]` to `[x]` only after the ticket is actually complete
 - update the epic checkmark from `[ ]` to `[x]` only when all child tickets are complete
 
-### Ticket E4-T2 - Make Audit Chain Backfill Explicit And Bounded [ ]
+### Ticket E4-T2 - Make Audit Chain Backfill Explicit And Bounded [x]
 
 Description: Move audit-chain backfill out of automatic store construction into an explicit migration/admin/scheduler path with leases and bounded progress.
 
