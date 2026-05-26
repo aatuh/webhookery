@@ -469,6 +469,92 @@ func TestPostgresEvidenceExportIncludesBodyArtifactsAndProofs(t *testing.T) {
 	}
 }
 
+func TestPostgresAuditChainBackfillIsBoundedAndIdempotent(t *testing.T) {
+	ctx, store, _ := openPostgresIntegrationStore(t)
+	defer store.Close()
+
+	suffix := time.Now().UTC().Format("150405.000000000")
+	tenantID := "ten_it_backfill_" + suffix
+	base := time.Date(2026, 5, 26, 18, 0, 0, 0, time.UTC)
+	if _, err := store.pool.Exec(ctx, `INSERT INTO tenants(id, name) VALUES($1, 'backfill integration') ON CONFLICT (id) DO NOTHING`, tenantID); err != nil {
+		t.Fatal(err)
+	}
+	events := []struct {
+		id         string
+		occurredAt time.Time
+	}{
+		{id: "aud_it_backfill_b_" + suffix, occurredAt: base},
+		{id: "aud_it_backfill_a_" + suffix, occurredAt: base},
+		{id: "aud_it_backfill_c_" + suffix, occurredAt: base.Add(time.Second)},
+	}
+	for _, event := range events {
+		if _, err := store.pool.Exec(ctx, `
+			INSERT INTO audit_events(id, tenant_id, actor_id, action, resource, resource_id, reason, occurred_at)
+			VALUES($1,$2,'usr_it','integration.backfill','test',$1,'backfill integration',$3)`,
+			event.id, tenantID, event.occurredAt); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	first, err := store.BackfillAuditChain(ctx, "it-backfill", 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !first.LeaseAcquired || first.EventsBackfilled != 2 || !first.More {
+		t.Fatalf("expected first bounded backfill to claim two events and report more work, got %+v", first)
+	}
+	second, err := store.BackfillAuditChain(ctx, "it-backfill", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !second.LeaseAcquired || second.EventsBackfilled != 1 || second.More {
+		t.Fatalf("expected second backfill to finish remaining event, got %+v", second)
+	}
+	third, err := store.BackfillAuditChain(ctx, "it-backfill", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !third.LeaseAcquired || third.EventsBackfilled != 0 || third.More {
+		t.Fatalf("expected idempotent empty backfill, got %+v", third)
+	}
+
+	rows, err := store.pool.Query(ctx, `
+		SELECT audit_event_id, sequence, source
+		FROM audit_chain_entries
+		WHERE tenant_id=$1
+		ORDER BY sequence ASC`, tenantID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	var orderedIDs []string
+	var sequences []int64
+	var sources []string
+	for rows.Next() {
+		var id, source string
+		var sequence int64
+		if err := rows.Scan(&id, &sequence, &source); err != nil {
+			t.Fatal(err)
+		}
+		orderedIDs = append(orderedIDs, id)
+		sequences = append(sequences, sequence)
+		sources = append(sources, source)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	expectedOrder := []string{events[1].id, events[0].id, events[2].id}
+	if strings.Join(orderedIDs, ",") != strings.Join(expectedOrder, ",") {
+		t.Fatalf("expected deterministic occurred_at/id order %v, got %v", expectedOrder, orderedIDs)
+	}
+	if strings.Join(sources, ",") != "backfill,backfill,backfill" {
+		t.Fatalf("expected backfill chain entry sources, got %v", sources)
+	}
+	if len(sequences) != 3 || sequences[0] != 1 || sequences[1] != 2 || sequences[2] != 3 {
+		t.Fatalf("expected sequential chain entries, got %v", sequences)
+	}
+}
+
 func openPostgresIntegrationStore(t *testing.T) (context.Context, *Store, authz.Actor) {
 	t.Helper()
 	databaseURL := os.Getenv("WEBHOOKERY_TEST_DATABASE_URL")

@@ -94,17 +94,36 @@ func runAPI() error {
 func runMigrate(args []string) error {
 	fs := flag.NewFlagSet("migrate", flag.ContinueOnError)
 	dir := fs.String("dir", "migrations", "migration directory")
+	limit := fs.Int("limit", 100, "maximum audit-chain events to backfill")
+	workerID := fs.String("worker-id", "whcp-migrate", "worker id for operational leases")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	if fs.NArg() != 1 || fs.Arg(0) != "up" {
-		return fmt.Errorf("usage: whcp migrate [--dir migrations] up")
+	if fs.NArg() != 1 {
+		return fmt.Errorf("usage: whcp migrate [--dir migrations] [--limit 100] [--worker-id whcp-migrate] <up|audit-chain-backfill>")
 	}
 	cfg, err := config.Load()
 	if err != nil {
 		return err
 	}
-	return postgres.MigrateUp(context.Background(), cfg.DatabaseURL, *dir)
+	switch fs.Arg(0) {
+	case "up":
+		return postgres.MigrateUp(context.Background(), cfg.DatabaseURL, *dir)
+	case "audit-chain-backfill":
+		store, err := openStore(context.Background(), cfg)
+		if err != nil {
+			return err
+		}
+		defer store.Close()
+		result, err := store.BackfillAuditChain(context.Background(), *workerID, *limit)
+		if err != nil {
+			return err
+		}
+		fmt.Fprintf(os.Stdout, "audit_chain_backfill lease_acquired=%t tenants_scanned=%d events_backfilled=%d more=%t\n", result.LeaseAcquired, result.TenantsScanned, result.EventsBackfilled, result.More)
+		return nil
+	default:
+		return fmt.Errorf("usage: whcp migrate [--dir migrations] [--limit 100] [--worker-id whcp-migrate] <up|audit-chain-backfill>")
+	}
 }
 
 func runWorker(args []string) error {
@@ -140,6 +159,7 @@ func runWorker(args []string) error {
 		RetentionStore:            store,
 		MetricsStore:              store,
 		AlertStore:                store,
+		AuditChainBackfillStore:   store,
 		WorkerID:                  "worker-" + time.Now().UTC().Format("20060102150405"),
 		Limit:                     10,
 	}
