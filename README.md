@@ -85,6 +85,8 @@ commits, issues, support requests, or audit artifacts.
 
 ## Primary Docs
 
+- `docs/index.md`: canonical documentation map by audience, purpose, and
+  source-of-truth boundary.
 - `docs/operations.md`: operator runbooks and production RC procedures.
 - `docs/security-review-package.md`: security reviewer artifact map.
 - `docs/release-evidence-template.md`: canonical release evidence template.
