@@ -92,6 +92,7 @@ func TestPostgresWorkerLeaseRecoveryAndLivePriority(t *testing.T) {
 		t.Fatalf("clear prior integration delivery work: %v", err)
 	}
 	control := app.NewControlService(store, ssrf.Validator{Resolver: ssrf.StaticResolver{"receiver.example.com": {netip.MustParseAddr("93.184.216.34")}}})
+	fanout := app.NewDeliveryFanoutService(store, app.SystemClock{})
 	source, _ := createPostgresIntegrationRoute(t, ctx, control, actor, "invoice.created")
 	first := ingestPostgresIntegrationEvent(t, ctx, store, actor, source.ID, "invoice.created", "evt_it_recovery_"+time.Now().UTC().Format("150405.000000000"), now)
 
@@ -112,7 +113,7 @@ func TestPostgresWorkerLeaseRecoveryAndLivePriority(t *testing.T) {
 	if len(recoveredOutbox) != 1 || recoveredOutbox[0].ID != stuckOutbox[0].ID {
 		t.Fatalf("expected expired outbox to be reclaimed, got %+v", recoveredOutbox)
 	}
-	if err := store.ProcessOutbox(ctx, recoveredOutbox[0]); err != nil {
+	if err := fanout.ProcessOutbox(ctx, recoveredOutbox[0]); err != nil {
 		t.Fatalf("process recovered outbox: %v", err)
 	}
 	if err := store.CompleteOutbox(ctx, recoveredOutbox[0].ID); err != nil {
@@ -152,7 +153,7 @@ func TestPostgresWorkerLeaseRecoveryAndLivePriority(t *testing.T) {
 		t.Fatalf("expected live and replay outbox work, got %+v", outboxItems)
 	}
 	for _, item := range outboxItems {
-		if err := store.ProcessOutbox(ctx, item); err != nil {
+		if err := fanout.ProcessOutbox(ctx, item); err != nil {
 			t.Fatalf("process priority outbox item %+v: %v", item, err)
 		}
 		if err := store.CompleteOutbox(ctx, item.ID); err != nil {
@@ -333,7 +334,8 @@ func TestPostgresEvidenceExportIncludesBodyArtifactsAndProofs(t *testing.T) {
 	if duplicate.EventID != first.EventID || duplicate.DedupeStatus != domain.DedupeDuplicateSuppressed {
 		t.Fatalf("expected duplicate evidence linked to %s, got %+v", first.EventID, duplicate)
 	}
-	if created, err := store.createDeliveriesForEvent(ctx, actor.TenantID, first.EventID); err != nil {
+	fanout := app.NewDeliveryFanoutService(store, app.SystemClock{})
+	if created, err := fanout.CreateDeliveriesForEvent(ctx, actor.TenantID, first.EventID, app.DeliveryFanoutOptions{}); err != nil {
 		t.Fatal(err)
 	} else if created == 0 {
 		t.Fatal("expected route fanout to create a delivery payload")

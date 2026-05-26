@@ -230,9 +230,10 @@ func runWorker(args []string) error {
 		return err
 	}
 	defer store.Close()
+	fanout := apppkg.NewDeliveryFanoutService(store, apppkg.SystemClock{})
 	w := worker.Worker{
 		Store:                     store,
-		Processor:                 store,
+		Processor:                 fanout,
 		DeliveryStore:             store,
 		DeliveryClient:            deliveryAdapter{client: deliveryhttp.Client{SSRF: ssrf.Validator{}}},
 		NotificationDeliveryStore: store,
