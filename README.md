@@ -90,6 +90,9 @@ commits, issues, support requests, or audit artifacts.
 - `docs/configuration.md`: canonical environment variable and secret handling
   reference.
 - `docs/operations.md`: operator runbooks and production RC procedures.
+- `docs/feature-behavior.md`: behavior reference for capture, routing,
+  delivery, replay, reconciliation, retention, identity, producer trust, and
+  SSRF.
 - `docs/security-review-package.md`: security reviewer artifact map.
 - `docs/release-evidence-template.md`: canonical release evidence template.
 - `docs/cli.md`: CLI command reference and moved command catalog.
