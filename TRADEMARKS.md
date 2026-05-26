@@ -16,11 +16,8 @@ You may not use the Webhookery name or project identity to imply:
 - endorsement by the project maintainer,
 - official release status for modified builds,
 - commercial support coverage,
-- exactly-once delivery,
-- provider-side event completeness,
-- compliance approval,
-- legal evidentiary certification,
-- external timestamping or third-party audit certification.
+- claims broader than the canonical Webhookery non-claims in
+  `docs/security-promise.md`.
 
 Modified distributions should use a clear name such as "Webhookery fork" or
 "based on Webhookery" and should not present themselves as official releases.

@@ -89,9 +89,10 @@ Attach or link sanitized artifacts:
 
 ## Non-Claims
 
-This release evidence does not claim exactly-once delivery, provider-side event
-completeness, recovery of every provider-side event, compliance certification,
-legal evidentiary certification, external timestamping, managed-service
-availability, or live third-party provider acceptance. Acceptance tests must
-use local fake providers and receivers unless a separate commercial engagement
-explicitly records live-provider scope and risk.
+The canonical non-claims are in `docs/security-promise.md`. For this release
+evidence: no exactly-once delivery, no provider-side event completeness,
+no recovery of every provider-side event, no compliance certification, no legal
+evidentiary certification, no external timestamping, no managed-service
+availability, and no live third-party provider acceptance. Acceptance tests
+must use local fake providers and receivers unless a separate commercial
+engagement explicitly records live-provider scope and risk.

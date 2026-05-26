@@ -18,15 +18,10 @@ Use these canonical references with this runbook:
 
 ## Operating Promise
 
-Inbound success means Webhookery durably captured raw request evidence and
-verification metadata according to the configured storage mode. It does not
-mean downstream business processing succeeded.
-
-The implemented core product does not claim exactly-once delivery, provider-
-side event completeness, multi-region active-active coordination, external
-timestamping, HSM/PKCS#11 custody, FIPS/NIST/CMVP certification, compliance
-certification, live third-party provider recovery guarantees, or Kafka/NATS/
-Redis/object storage as the authority for accepted event evidence.
+See `docs/security-promise.md` for the canonical durable-capture promise and
+non-claims. Operationally, inbound success means Webhookery durably captured
+raw request evidence and verification metadata according to the configured
+storage mode. It does not mean downstream business processing succeeded.
 
 Release evidence and deployment profile checks intentionally preserve this
 phrase: no FIPS/NIST/CMVP certification.

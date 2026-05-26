@@ -76,7 +76,5 @@ Broad production-readiness language should wait until review findings are fixed
 or recorded as accepted risks with owner, severity, expiry, and mitigation in
 the release evidence.
 
-This repository still makes no exactly-once delivery claim, no provider-side
-event completeness guarantee, no compliance certification claim, no legal
-evidentiary certification claim, no external timestamping claim, and no
-managed-service availability claim.
+Review exit criteria use `docs/security-promise.md` as the canonical
+security-promise and non-claims reference.

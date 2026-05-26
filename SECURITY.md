@@ -45,9 +45,7 @@ Out of scope:
   channels,
 - reports that rely on live third-party provider abuse rather than local
   reproduction or responsible provider disclosure,
-- claims that Webhookery provides exactly-once delivery, provider-side event
-  completeness, compliance certification, external timestamping, or legal
-  evidentiary certification.
+- claims broader than the canonical non-claims in `docs/security-promise.md`.
 
 ## Disclosure
 

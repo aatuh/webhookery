@@ -25,7 +25,8 @@ image digests, SBOMs, vulnerability scan outputs, OpenAPI checksums, migration
 checks, acceptance evidence, support notes, deployment hardening notes, and
 upgrade guidance.
 
-Release evidence is not a certification. It makes no exactly-once delivery
-claim, no provider-side event completeness guarantee, no compliance
-certification claim, no external timestamping claim, no managed-service
-availability claim, and no legal evidentiary certification claim.
+Release evidence is not a certification. The canonical non-claims are in
+[`docs/security-promise.md`](docs/security-promise.md): no exactly-once delivery,
+no provider-side event completeness guarantee, no compliance certification, no
+external timestamping, no managed-service availability, and no legal
+evidentiary certification.

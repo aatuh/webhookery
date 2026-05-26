@@ -29,9 +29,8 @@ Before opening a change:
 3. Preserve durable-capture-before-success semantics, exact raw-byte provider
    verification, tenant isolation, replay auditability, SSRF-safe endpoint
    handling, secret redaction, and at-least-once delivery language.
-4. Do not introduce exactly-once delivery claims, provider-side event
-   completeness guarantees, compliance certification claims, live-provider
-   acceptance-test dependencies, or arbitrary transformation scripting.
+4. Do not introduce claims broader than `docs/security-promise.md`, live-
+   provider acceptance-test dependencies, or arbitrary transformation scripting.
 
 Useful checks:
 
