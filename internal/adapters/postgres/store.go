@@ -2425,9 +2425,6 @@ func (s *Store) CaptureInbound(ctx context.Context, input app.CaptureInboundInpu
 		); err != nil {
 			return app.CaptureInboundResult{}, err
 		}
-		if _, err := tx.Exec(ctx, `UPDATE raw_payloads SET event_id=$1 WHERE id=$2`, eventID, rawID); err != nil {
-			return app.CaptureInboundResult{}, err
-		}
 		if len(input.Normalized.Envelope) > 0 {
 			adapterVersionID, err := s.lookupAdapterVersionID(ctx, tx, firstNonEmpty(input.Source.Adapter, input.Source.Provider))
 			if err != nil {
@@ -2450,6 +2447,10 @@ func (s *Store) CaptureInbound(ctx context.Context, input app.CaptureInboundInpu
 		if _, err := tx.Exec(ctx, `INSERT INTO outbox(id, tenant_id, kind, resource_id, payload) VALUES($1,$2,$3,$4,$5)`, outboxID, input.Source.TenantID, "route_event", eventID, payload); err != nil {
 			return app.CaptureInboundResult{}, err
 		}
+	}
+
+	if _, err := tx.Exec(ctx, `UPDATE raw_payloads SET event_id=$1 WHERE id=$2`, eventID, rawID); err != nil {
+		return app.CaptureInboundResult{}, err
 	}
 
 	headersJSON, err := json.Marshal(input.Receipt.RawHeaders)
@@ -2703,6 +2704,19 @@ func (s *Store) ListEventTimeline(ctx context.Context, tenantID, eventID string,
 			UNION ALL
 			SELECT 'receipt' AS kind, id AS ref_id, CASE WHEN verification_ok THEN 'verified' ELSE 'rejected' END AS state, verification_reason AS detail, received_at AS occurred_at
 			FROM provider_receipts WHERE tenant_id=$1 AND event_id=$2
+			UNION ALL
+			SELECT 'raw_payload' AS kind, rp.id AS ref_id, rp.storage_status AS state,
+			       'sha256=' || rp.sha256 ||
+			       ' size_bytes=' || rp.size_bytes::text ||
+			       ' receipts=' || COALESCE(NULLIF(receipts.receipt_ids,''),'none') AS detail,
+			       rp.created_at AS occurred_at
+			FROM raw_payloads rp
+			LEFT JOIN LATERAL (
+				SELECT string_agg(pr.id, ',' ORDER BY pr.received_at ASC, pr.id ASC) AS receipt_ids
+				FROM provider_receipts pr
+				WHERE pr.tenant_id=rp.tenant_id AND pr.raw_payload_id=rp.id
+			) receipts ON true
+			WHERE rp.tenant_id=$1 AND rp.event_id=$2
 			UNION ALL
 			SELECT 'normalized' AS kind, id AS ref_id, storage_status AS state,
 			       'adapter_version=' || COALESCE(NULLIF(adapter_version_id,''),'none') ||
@@ -7352,22 +7366,30 @@ func (s *Store) timelineJSONLForExport(ctx context.Context, tenantID string, fro
 
 func (s *Store) rawPayloadsJSONLForExport(ctx context.Context, tenantID string, from, to time.Time) ([]byte, error) {
 	query := `
-		SELECT rp.id, rp.tenant_id, rp.event_id, rp.sha256, rp.content_type, rp.size_bytes, rp.body,
+		SELECT rp.id, rp.tenant_id, COALESCE(rp.event_id, ''), rp.sha256, rp.content_type, rp.size_bytes, rp.body,
 			rp.storage_backend, rp.object_bucket, rp.object_key, rp.storage_status,
-			COALESCE(rp.storage_deleted_at, 'epoch'::timestamptz), rp.created_at
+			COALESCE(rp.storage_deleted_at, 'epoch'::timestamptz), rp.created_at,
+			COALESCE(ev.received_at, receipts.first_received_at, rp.created_at) AS evidence_received_at,
+			COALESCE(receipts.receipt_ids, ARRAY[]::text[]) AS receipt_ids
 		FROM raw_payloads rp
-		JOIN events ev ON ev.tenant_id=rp.tenant_id AND ev.raw_payload_id=rp.id
-		WHERE rp.tenant_id=$1`
+		LEFT JOIN events ev ON ev.tenant_id=rp.tenant_id AND ev.id=rp.event_id
+		LEFT JOIN LATERAL (
+			SELECT min(pr.received_at) AS first_received_at, array_agg(pr.id ORDER BY pr.received_at ASC, pr.id ASC) AS receipt_ids
+			FROM provider_receipts pr
+			WHERE pr.tenant_id=rp.tenant_id AND pr.raw_payload_id=rp.id
+		) receipts ON true
+		WHERE rp.tenant_id=$1
+			AND (rp.event_id IS NOT NULL OR COALESCE(array_length(receipts.receipt_ids, 1), 0) > 0)`
 	args := []any{tenantID}
 	if !from.IsZero() {
 		args = append(args, from)
-		query += fmt.Sprintf(" AND ev.received_at >= $%d", len(args))
+		query += fmt.Sprintf(" AND COALESCE(ev.received_at, receipts.first_received_at, rp.created_at) >= $%d", len(args))
 	}
 	if !to.IsZero() {
 		args = append(args, to)
-		query += fmt.Sprintf(" AND ev.received_at <= $%d", len(args))
+		query += fmt.Sprintf(" AND COALESCE(ev.received_at, receipts.first_received_at, rp.created_at) <= $%d", len(args))
 	}
-	query += " ORDER BY ev.received_at ASC, rp.id ASC"
+	query += " ORDER BY evidence_received_at ASC, rp.id ASC"
 	rows, err := s.pool.Query(ctx, query, args...)
 	if err != nil {
 		return nil, err
@@ -7376,8 +7398,11 @@ func (s *Store) rawPayloadsJSONLForExport(ctx context.Context, tenantID string, 
 	var lines []any
 	for rows.Next() {
 		var raw domain.RawPayload
+		var evidenceReceivedAt time.Time
+		var receiptIDs []string
 		if err := rows.Scan(&raw.ID, &raw.TenantID, &raw.EventID, &raw.SHA256, &raw.ContentType, &raw.SizeBytes, &raw.Body,
-			&raw.StorageBackend, &raw.ObjectBucket, &raw.ObjectKey, &raw.StorageStatus, &raw.StorageDeletedAt, &raw.CreatedAt); err != nil {
+			&raw.StorageBackend, &raw.ObjectBucket, &raw.ObjectKey, &raw.StorageStatus, &raw.StorageDeletedAt, &raw.CreatedAt,
+			&evidenceReceivedAt, &receiptIDs); err != nil {
 			return nil, err
 		}
 		bodyAvailable := raw.StorageStatus != domain.StorageStatusDeleted
@@ -7406,6 +7431,8 @@ func (s *Store) rawPayloadsJSONLForExport(ctx context.Context, tenantID string, 
 			"storage_status":  raw.StorageStatus,
 			"body_available":  bodyAvailable,
 			"created_at":      raw.CreatedAt,
+			"received_at":     evidenceReceivedAt,
+			"receipt_ids":     receiptIDs,
 		}
 		if bodyAvailable {
 			item["body_base64"] = base64.StdEncoding.EncodeToString(raw.Body)

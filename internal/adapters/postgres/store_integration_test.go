@@ -1,11 +1,17 @@
 package postgres
 
 import (
+	"archive/tar"
+	"bytes"
+	"compress/gzip"
 	"context"
 	"encoding/base64"
+	"encoding/json"
+	"io"
 	"net/netip"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -166,6 +172,150 @@ func TestPostgresWorkerLeaseRecoveryAndLivePriority(t *testing.T) {
 	}
 }
 
+func TestPostgresDuplicateRawPayloadEvidenceRemainsLinkedAndExported(t *testing.T) {
+	ctx, store, actor := openPostgresIntegrationStore(t)
+	defer store.Close()
+
+	now := time.Now().UTC().Truncate(time.Second)
+	control := app.NewControlService(store, ssrf.Validator{Resolver: ssrf.StaticResolver{"receiver.example.com": {netip.MustParseAddr("93.184.216.34")}}})
+	source, _ := createPostgresIntegrationRoute(t, ctx, control, actor, "invoice.duplicate")
+	providerID := "evt_it_duplicate_" + now.Format("150405.000000000")
+
+	first := ingestPostgresIntegrationEvent(t, ctx, store, actor, source.ID, "invoice.duplicate", providerID, now)
+	second := ingestPostgresIntegrationEvent(t, ctx, store, actor, source.ID, "invoice.duplicate", providerID, now.Add(time.Second))
+	if second.EventID != first.EventID {
+		t.Fatalf("duplicate receipt must link to original event: first=%s second=%s", first.EventID, second.EventID)
+	}
+	if second.DedupeStatus != domain.DedupeDuplicateSuppressed {
+		t.Fatalf("expected duplicate_suppressed, got %s", second.DedupeStatus)
+	}
+
+	rows, err := store.pool.Query(ctx, `
+		SELECT rp.id, rp.event_id, pr.id
+		FROM raw_payloads rp
+		JOIN provider_receipts pr ON pr.tenant_id=rp.tenant_id AND pr.raw_payload_id=rp.id
+		WHERE rp.tenant_id=$1 AND rp.event_id=$2
+		ORDER BY rp.created_at ASC, rp.id ASC`, actor.TenantID, first.EventID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	rawIDsByReceipt := map[string]string{}
+	for rows.Next() {
+		var rawID, eventID, receiptID string
+		if err := rows.Scan(&rawID, &eventID, &receiptID); err != nil {
+			t.Fatal(err)
+		}
+		if eventID != first.EventID {
+			t.Fatalf("raw payload %s linked to %s, want %s", rawID, eventID, first.EventID)
+		}
+		rawIDsByReceipt[receiptID] = rawID
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if len(rawIDsByReceipt) != 2 {
+		t.Fatalf("expected two receipt-linked raw payloads, got %+v", rawIDsByReceipt)
+	}
+
+	timeline, err := store.ListEventTimeline(ctx, actor.TenantID, first.EventID, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rawTimelineByID := map[string]string{}
+	for _, item := range timeline {
+		if item["kind"] == "raw_payload" {
+			rawTimelineByID[item["ref_id"].(string)] = item["detail"].(string)
+		}
+	}
+	if len(rawTimelineByID) != 2 {
+		t.Fatalf("expected duplicate raw payloads in timeline, got %+v", rawTimelineByID)
+	}
+	for receiptID, rawID := range rawIDsByReceipt {
+		if !strings.Contains(rawTimelineByID[rawID], receiptID) {
+			t.Fatalf("timeline detail for raw payload %s did not reference receipt %s: %q", rawID, receiptID, rawTimelineByID[rawID])
+		}
+	}
+
+	export, err := store.CreateAuditExport(ctx, actor.TenantID, actor.ID, app.CreateAuditExportRequest{
+		From:               now.Add(-time.Minute),
+		To:                 now.Add(time.Minute),
+		IncludeRawPayloads: true,
+		IncludeTimelines:   true,
+		Reason:             "duplicate raw evidence regression",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	download, err := store.DownloadAuditExport(ctx, actor.TenantID, export.ID, actor.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	files := readTestTarGzipFiles(t, download.Body)
+	rawEntries := decodeTestJSONLines(t, files["raw_payloads.jsonl"])
+	rawExportCount := 0
+	for _, entry := range rawEntries {
+		if entry["event_id"] != first.EventID {
+			continue
+		}
+		rawExportCount++
+		body, ok := entry["body_base64"].(string)
+		if !ok || body == "" {
+			t.Fatalf("raw payload export omitted body for %+v", entry)
+		}
+		receiptIDs, ok := entry["receipt_ids"].([]any)
+		if !ok || len(receiptIDs) != 1 {
+			t.Fatalf("raw payload export must include receipt_ids, got %+v", entry["receipt_ids"])
+		}
+	}
+	if rawExportCount != 2 {
+		t.Fatalf("expected two raw payload export rows for duplicate event, got %d from %+v", rawExportCount, rawEntries)
+	}
+
+	timelineEntries := decodeTestJSONLines(t, files["timelines.jsonl"])
+	rawTimelineExportCount := 0
+	for _, entry := range timelineEntries {
+		if entry["event_id"] != first.EventID {
+			continue
+		}
+		for _, item := range entry["timeline"].([]any) {
+			timelineItem := item.(map[string]any)
+			if timelineItem["kind"] == "raw_payload" {
+				rawTimelineExportCount++
+			}
+		}
+	}
+	if rawTimelineExportCount != 2 {
+		t.Fatalf("expected two raw payload timeline export rows, got %d", rawTimelineExportCount)
+	}
+
+	if _, err := store.pool.Exec(ctx, `UPDATE raw_payloads SET created_at=now() - interval '48 hours' WHERE tenant_id=$1 AND event_id=$2`, actor.TenantID, first.EventID); err != nil {
+		t.Fatal(err)
+	}
+	policy, err := store.CreateRetentionPolicy(ctx, actor.TenantID, actor.ID, app.CreateRetentionPolicyRequest{
+		ResourceType:  domain.RetentionResourceRawPayload,
+		SourceID:      source.ID,
+		RetentionDays: 1,
+		State:         domain.StateActive,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.applyRetentionPolicy(ctx, "worker_it", policy); err != nil {
+		t.Fatal(err)
+	}
+	var retainedBodies int
+	if err := store.pool.QueryRow(ctx, `
+		SELECT count(*)
+		FROM raw_payloads
+		WHERE tenant_id=$1 AND event_id=$2 AND storage_status='stored'`, actor.TenantID, first.EventID).Scan(&retainedBodies); err != nil {
+		t.Fatal(err)
+	}
+	if retainedBodies != 0 {
+		t.Fatalf("source-scoped retention left %d duplicate raw payload bodies stored", retainedBodies)
+	}
+}
+
 func openPostgresIntegrationStore(t *testing.T) (context.Context, *Store, authz.Actor) {
 	t.Helper()
 	databaseURL := os.Getenv("WEBHOOKERY_TEST_DATABASE_URL")
@@ -235,4 +385,51 @@ type fixedIntegrationClock struct {
 
 func (c fixedIntegrationClock) Now() time.Time {
 	return c.now
+}
+
+func readTestTarGzipFiles(t *testing.T, body []byte) map[string][]byte {
+	t.Helper()
+	gz, err := gzip.NewReader(bytes.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = gz.Close() }()
+	tr := tar.NewReader(gz)
+	files := map[string][]byte{}
+	for {
+		header, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		if header.Typeflag != tar.TypeReg {
+			continue
+		}
+		data, err := io.ReadAll(tr)
+		if err != nil {
+			t.Fatal(err)
+		}
+		files[header.Name] = data
+	}
+	return files
+}
+
+func decodeTestJSONLines(t *testing.T, body []byte) []map[string]any {
+	t.Helper()
+	dec := json.NewDecoder(bytes.NewReader(body))
+	var out []map[string]any
+	for {
+		var item map[string]any
+		err := dec.Decode(&item)
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		out = append(out, item)
+	}
+	return out
 }
