@@ -241,6 +241,47 @@ func TestIngestCloudEventsStructuredMetadata(t *testing.T) {
 	}
 }
 
+func TestIngestCloudEventsBinaryModeIsEvidenceOnly(t *testing.T) {
+	store := &fakeStore{source: domain.Source{
+		ID:                 "src_cloud",
+		TenantID:           "ten_123",
+		Provider:           "cloudevents",
+		Adapter:            "cloudevents",
+		State:              domain.StateActive,
+		VerificationSecret: []byte("unused"),
+	}}
+	svc := NewIngestService(store, fixedClock(time.Unix(1_700_000_000, 0)))
+
+	res, err := svc.Ingest(context.Background(), IngestRequest{
+		TenantID:    "ten_123",
+		SourceID:    "src_cloud",
+		Provider:    "cloudevents",
+		ContentType: "application/json",
+		RawBody:     []byte(`{"amount":42}`),
+		Headers: []domain.HeaderPair{
+			{Name: "Ce-Id", Value: "evt_binary"},
+			{Name: "Ce-Type", Value: "customer.updated"},
+			{Name: "Ce-Source", Value: "tests"},
+			{Name: "Ce-Specversion", Value: "1.0"},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !res.Accepted || !store.captured {
+		t.Fatalf("unsigned binary CloudEvents should be captured and acknowledged as evidence, result=%+v captured=%v", res, store.captured)
+	}
+	if store.last.VerificationOK || store.last.Event.Verified {
+		t.Fatalf("unsigned binary CloudEvents must not be marked verified: %+v", store.last.Event)
+	}
+	if store.last.Event.ProviderID != "evt_binary" || store.last.Event.Type != "customer.updated" {
+		t.Fatalf("unexpected binary CloudEvents metadata: %+v", store.last.Event)
+	}
+	if len(store.last.Normalized.Envelope) != 0 {
+		t.Fatal("unsigned binary CloudEvents must not create a trusted normalized envelope")
+	}
+}
+
 type fakeStore struct {
 	source        domain.Source
 	activeAdapter domain.AdapterVersion

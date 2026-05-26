@@ -62,6 +62,32 @@ func TestDeliveryFanoutSkipsUnverifiedEventsUnlessRecovered(t *testing.T) {
 	}
 }
 
+func TestDeliveryFanoutSkipsUnsignedCloudEventsEvenWithRecoveredOption(t *testing.T) {
+	now := time.Date(2026, 5, 26, 12, 0, 0, 0, time.UTC)
+	store := &fakeDeliveryFanoutStore{
+		event: domain.Event{
+			ID:           "evt_cloud",
+			TenantID:     "ten_1",
+			SourceID:     "src_cloud",
+			Type:         "customer.created",
+			Verified:     false,
+			VerifyReason: domain.VerificationReasonUnsignedCloudEvents,
+		},
+		targets: []DeliveryFanoutTarget{{
+			EndpointID: "end_1", RouteID: "rte_1", RouteVersionID: "rv_1",
+		}},
+	}
+	svc := NewDeliveryFanoutService(store, fixedFanoutClock{now: now})
+
+	created, err := svc.CreateDeliveriesForEvent(context.Background(), "ten_1", "evt_cloud", DeliveryFanoutOptions{AllowRecovered: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if created != 0 || len(store.creates) != 0 {
+		t.Fatalf("unsigned CloudEvents must remain evidence-only by default, created=%d requests=%d", created, len(store.creates))
+	}
+}
+
 func TestDeliveryFanoutCreatesSubscriptionThenRouteSnapshots(t *testing.T) {
 	now := time.Date(2026, 5, 26, 12, 0, 0, 0, time.UTC)
 	store := &fakeDeliveryFanoutStore{
