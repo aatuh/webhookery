@@ -29,7 +29,7 @@ Notes:
 
 - Audit evidence: `AGENTS.md:20-24` and `AGENTS.md:103-110` are stale.
 
-### Ticket E1-T2 - Rewrite README As The Primary Entry Point [ ]
+### Ticket E1-T2 - Rewrite README As The Primary Entry Point [x]
 
 Description: Reduce `README.md` to product framing, implementation status, local quickstart, shortest smoke path, security promise, and links to canonical docs.
 
