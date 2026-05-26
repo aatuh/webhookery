@@ -5,7 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"net/netip"
 	"strconv"
 	"strings"
 
@@ -141,12 +143,41 @@ func scimListResponse[T any](items []T) map[string]any {
 	}
 }
 
-func remoteAddr(r *http.Request) string {
+func (s *Server) remoteAddr(r *http.Request) string {
+	peer, ok := parseRemoteAddrIP(r.RemoteAddr)
+	if !ok || !s.trustsProxy(peer) {
+		return r.RemoteAddr
+	}
 	if forwarded := strings.TrimSpace(r.Header.Get("X-Forwarded-For")); forwarded != "" {
 		first, _, _ := strings.Cut(forwarded, ",")
-		return strings.TrimSpace(first)
+		addr, err := netip.ParseAddr(strings.TrimSpace(first))
+		if err == nil {
+			return addr.Unmap().String()
+		}
 	}
 	return r.RemoteAddr
+}
+
+func (s *Server) trustsProxy(addr netip.Addr) bool {
+	addr = addr.Unmap()
+	for _, prefix := range s.cfg.TrustedProxyCIDRs {
+		if prefix.Contains(addr) {
+			return true
+		}
+	}
+	return false
+}
+
+func parseRemoteAddrIP(raw string) (netip.Addr, bool) {
+	host, _, err := net.SplitHostPort(raw)
+	if err != nil {
+		host = raw
+	}
+	addr, err := netip.ParseAddr(strings.Trim(host, "[]"))
+	if err != nil {
+		return netip.Addr{}, false
+	}
+	return addr.Unmap(), true
 }
 
 func formatPrometheus(metrics domain.OpsMetrics) string {
