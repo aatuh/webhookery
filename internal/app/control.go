@@ -168,14 +168,15 @@ type ControlService struct {
 	store         ControlStore
 	ssrfValidator ssrf.Validator
 	runtimeConfig domain.OpsConfig
+	authorizer    AuthorizationService
 }
 
 func NewControlService(store ControlStore, validator ssrf.Validator) *ControlService {
-	return &ControlService{store: store, ssrfValidator: validator}
+	return &ControlService{store: store, ssrfValidator: validator, authorizer: NewAuthorizationService(store)}
 }
 
 func NewControlServiceWithRuntimeConfig(store ControlStore, validator ssrf.Validator, runtimeConfig domain.OpsConfig) *ControlService {
-	return &ControlService{store: store, ssrfValidator: validator, runtimeConfig: runtimeConfig}
+	return &ControlService{store: store, ssrfValidator: validator, runtimeConfig: runtimeConfig, authorizer: NewAuthorizationService(store)}
 }
 
 type CreateSourceRequest struct {

@@ -835,21 +835,14 @@ func (s *ControlService) ExplainAuthorization(ctx context.Context, actor authz.A
 }
 
 func (s *ControlService) authorized(ctx context.Context, actor authz.Actor, action, resourceFamily, resourceID, environment string) bool {
-	if actor.TenantID == "" {
-		return false
-	}
-	if store, ok := s.store.(EnterpriseIdentityStore); ok {
-		decision, err := store.ExplainAuthorization(ctx, actor.TenantID, actor.ID, AuthzExplainRequest{
-			Action:         action,
-			ResourceFamily: resourceFamily,
-			ResourceID:     resourceID,
-			Environment:    environment,
-		})
-		if err == nil {
-			return decision.Allowed && actorScopesAllow(actor, action)
-		}
-	}
-	return authz.Can(actor, action, actor.TenantID)
+	return s.authorizer.Authorize(ctx, AuthorizationRequest{
+		Actor:          actor,
+		TenantID:       actor.TenantID,
+		Action:         action,
+		ResourceFamily: resourceFamily,
+		ResourceID:     resourceID,
+		Environment:    environment,
+	}).Allowed
 }
 
 func actorScopesAllow(actor authz.Actor, action string) bool {
