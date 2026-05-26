@@ -116,7 +116,7 @@ Implementation rules:
 
 Description: Reduce the blast radius of core changes by moving orchestration out of infrastructure adapters and splitting god files into cohesive modules.
 
-### Ticket E3-T1 - Split Store Ports By Use Case [ ]
+### Ticket E3-T1 - Split Store Ports By Use Case [x]
 
 Description: Replace the monolithic `ControlStore` shape with smaller interfaces for source, endpoint, route, event, delivery, replay, audit, identity, ops, signal, and reconciliation use cases.
 
