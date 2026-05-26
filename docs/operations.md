@@ -8,6 +8,9 @@ Use these canonical references with this runbook:
 
 - `docs/configuration.md`: environment variables, defaults, safe production
   values, and secret sensitivity.
+- `docs/feature-behavior.md`: capture, auth, routing, delivery, replay,
+  reconciliation, transformations, retention, identity, producer trust, and
+  SSRF behavior.
 - `docs/cli.md`: `whcp` command catalog.
 - `openapi.yaml`: REST API contract.
 - `docs/release-evidence-template.md`: release evidence checklist.

@@ -15,6 +15,7 @@ owner document for a topic and linking to it from secondary docs.
 | `Makefile` | Contributors, CI maintainers, release operators | Project-owned commands and validation gates. | Command names and check composition. Confirm with `make help`. |
 | `docs/configuration.md` | Operators, deployment maintainers, contributors | Environment variables, defaults, safe production values, secret sensitivity, and process applicability. | Canonical configuration reference. Keep env examples and deployment profile references aligned here. |
 | `docs/operations.md` | Self-hosted operators and SREs | Production doctor, RC checks, backup/restore, incident triage, audit verification, and recovery guidance. | Operator runbooks. Avoid moving API reference or command catalogs back into this file. |
+| `docs/feature-behavior.md` | Maintainers, API reviewers, security reviewers, operators | Implemented behavior reference for capture, auth, routing, delivery, replay, reconciliation, transformations, retention, identity, producer trust, and SSRF. | Behavior summary. Code, OpenAPI, and migrations remain exact. |
 | `docs/cli.md` | Operators and developers using `whcp` | CLI command reference and moved README command catalog. | Human CLI reference. `cmd/whcp` remains exact behavior. |
 | `sdk/README.md` | SDK users and maintainers | Committed SDK artifact guidance. | SDK usage and artifact expectations. |
 | `collections/` | API evaluators, operators | Postman and Bruno smoke request examples. | Smoke examples, not full API coverage. |
