@@ -642,7 +642,7 @@ type EvidenceExportDownload struct {
 }
 
 func (s *ControlService) CreateAPIKey(ctx context.Context, actor authz.Actor, req CreateAPIKeyRequest) (APIKeyCreated, error) {
-	if !authz.Can(actor, "api_keys:write", actor.TenantID) {
+	if !s.authorized(ctx, actor, "api_keys:write", "api_key", "", "") {
 		return APIKeyCreated{}, ErrForbidden
 	}
 	if strings.TrimSpace(req.Name) == "" {
@@ -690,7 +690,7 @@ func (s *ControlService) CreateAPIKey(ctx context.Context, actor authz.Actor, re
 }
 
 func (s *ControlService) ListAPIKeys(ctx context.Context, actor authz.Actor, limit int) ([]domain.APIKey, error) {
-	if !authz.Can(actor, "api_keys:read", actor.TenantID) {
+	if !s.authorized(ctx, actor, "api_keys:read", "api_key", "", "") {
 		return nil, ErrForbidden
 	}
 	keys, err := s.store.ListAPIKeys(ctx, actor.TenantID, normalizeLimit(limit))
@@ -704,7 +704,7 @@ func (s *ControlService) ListAPIKeys(ctx context.Context, actor authz.Actor, lim
 }
 
 func (s *ControlService) RevokeAPIKey(ctx context.Context, actor authz.Actor, apiKeyID string, req RevokeAPIKeyRequest) (domain.APIKey, error) {
-	if !authz.Can(actor, "api_keys:write", actor.TenantID) {
+	if !s.authorized(ctx, actor, "api_keys:write", "api_key", apiKeyID, "") {
 		return domain.APIKey{}, ErrForbidden
 	}
 	if strings.TrimSpace(req.Reason) == "" {
@@ -759,7 +759,7 @@ func (s *ControlService) IssueProducerToken(ctx context.Context, clientID, clien
 }
 
 func (s *ControlService) CreateProducerClient(ctx context.Context, actor authz.Actor, req CreateProducerClientRequest) (ProducerClientCreated, error) {
-	if !authz.Can(actor, "security:write", actor.TenantID) {
+	if !s.authorized(ctx, actor, "security:write", "producer_client", "", "") {
 		return ProducerClientCreated{}, ErrForbidden
 	}
 	store, ok := s.store.(producerClientStore)
@@ -798,7 +798,7 @@ func (s *ControlService) CreateProducerClient(ctx context.Context, actor authz.A
 }
 
 func (s *ControlService) ListProducerClients(ctx context.Context, actor authz.Actor, limit int) ([]domain.ProducerClient, error) {
-	if !authz.Can(actor, "security:read", actor.TenantID) {
+	if !s.authorized(ctx, actor, "security:read", "producer_client", "", "") {
 		return nil, ErrForbidden
 	}
 	store, ok := s.store.(producerClientStore)
@@ -809,7 +809,7 @@ func (s *ControlService) ListProducerClients(ctx context.Context, actor authz.Ac
 }
 
 func (s *ControlService) GetProducerClient(ctx context.Context, actor authz.Actor, clientID string) (domain.ProducerClient, error) {
-	if !authz.Can(actor, "security:read", actor.TenantID) {
+	if !s.authorized(ctx, actor, "security:read", "producer_client", clientID, "") {
 		return domain.ProducerClient{}, ErrForbidden
 	}
 	if strings.TrimSpace(clientID) == "" {
@@ -823,7 +823,7 @@ func (s *ControlService) GetProducerClient(ctx context.Context, actor authz.Acto
 }
 
 func (s *ControlService) UpdateProducerClient(ctx context.Context, actor authz.Actor, clientID string, req UpdateProducerClientRequest) (domain.ProducerClient, error) {
-	if !authz.Can(actor, "security:write", actor.TenantID) {
+	if !s.authorized(ctx, actor, "security:write", "producer_client", clientID, "") {
 		return domain.ProducerClient{}, ErrForbidden
 	}
 	if strings.TrimSpace(clientID) == "" || strings.TrimSpace(req.Reason) == "" {
@@ -840,7 +840,7 @@ func (s *ControlService) UpdateProducerClient(ctx context.Context, actor authz.A
 }
 
 func (s *ControlService) DeleteProducerClient(ctx context.Context, actor authz.Actor, clientID string, req StateChangeRequest) (domain.ProducerClient, error) {
-	if !authz.Can(actor, "security:write", actor.TenantID) {
+	if !s.authorized(ctx, actor, "security:write", "producer_client", clientID, "") {
 		return domain.ProducerClient{}, ErrForbidden
 	}
 	if strings.TrimSpace(clientID) == "" || strings.TrimSpace(req.Reason) == "" {
@@ -854,7 +854,7 @@ func (s *ControlService) DeleteProducerClient(ctx context.Context, actor authz.A
 }
 
 func (s *ControlService) RotateProducerClientSecret(ctx context.Context, actor authz.Actor, clientID string, req RotateProducerClientSecretRequest) (ProducerClientSecretRotated, error) {
-	if !authz.Can(actor, "security:write", actor.TenantID) {
+	if !s.authorized(ctx, actor, "security:write", "producer_client", clientID, "") {
 		return ProducerClientSecretRotated{}, ErrForbidden
 	}
 	if strings.TrimSpace(clientID) == "" || strings.TrimSpace(req.Reason) == "" {
@@ -886,7 +886,7 @@ func (s *ControlService) RotateProducerClientSecret(ctx context.Context, actor a
 }
 
 func (s *ControlService) CreateProducerMTLSIdentity(ctx context.Context, actor authz.Actor, req CreateProducerMTLSIdentityRequest) (domain.ProducerMTLSIdentity, error) {
-	if !authz.Can(actor, "security:write", actor.TenantID) {
+	if !s.authorized(ctx, actor, "security:write", "producer_mtls_identity", "", "") {
 		return domain.ProducerMTLSIdentity{}, ErrForbidden
 	}
 	store, ok := s.store.(producerMTLSIdentityStore)
@@ -904,7 +904,7 @@ func (s *ControlService) CreateProducerMTLSIdentity(ctx context.Context, actor a
 }
 
 func (s *ControlService) ListProducerMTLSIdentities(ctx context.Context, actor authz.Actor, limit int) ([]domain.ProducerMTLSIdentity, error) {
-	if !authz.Can(actor, "security:read", actor.TenantID) {
+	if !s.authorized(ctx, actor, "security:read", "producer_mtls_identity", "", "") {
 		return nil, ErrForbidden
 	}
 	store, ok := s.store.(producerMTLSIdentityStore)
@@ -915,7 +915,7 @@ func (s *ControlService) ListProducerMTLSIdentities(ctx context.Context, actor a
 }
 
 func (s *ControlService) GetProducerMTLSIdentity(ctx context.Context, actor authz.Actor, identityID string) (domain.ProducerMTLSIdentity, error) {
-	if !authz.Can(actor, "security:read", actor.TenantID) {
+	if !s.authorized(ctx, actor, "security:read", "producer_mtls_identity", identityID, "") {
 		return domain.ProducerMTLSIdentity{}, ErrForbidden
 	}
 	if strings.TrimSpace(identityID) == "" {
@@ -929,7 +929,7 @@ func (s *ControlService) GetProducerMTLSIdentity(ctx context.Context, actor auth
 }
 
 func (s *ControlService) UpdateProducerMTLSIdentity(ctx context.Context, actor authz.Actor, identityID string, req UpdateProducerMTLSIdentityRequest) (domain.ProducerMTLSIdentity, error) {
-	if !authz.Can(actor, "security:write", actor.TenantID) {
+	if !s.authorized(ctx, actor, "security:write", "producer_mtls_identity", identityID, "") {
 		return domain.ProducerMTLSIdentity{}, ErrForbidden
 	}
 	if strings.TrimSpace(identityID) == "" || strings.TrimSpace(req.Reason) == "" {
@@ -946,7 +946,7 @@ func (s *ControlService) UpdateProducerMTLSIdentity(ctx context.Context, actor a
 }
 
 func (s *ControlService) DeleteProducerMTLSIdentity(ctx context.Context, actor authz.Actor, identityID string, req StateChangeRequest) (domain.ProducerMTLSIdentity, error) {
-	if !authz.Can(actor, "security:write", actor.TenantID) {
+	if !s.authorized(ctx, actor, "security:write", "producer_mtls_identity", identityID, "") {
 		return domain.ProducerMTLSIdentity{}, ErrForbidden
 	}
 	if strings.TrimSpace(identityID) == "" || strings.TrimSpace(req.Reason) == "" {
@@ -960,7 +960,7 @@ func (s *ControlService) DeleteProducerMTLSIdentity(ctx context.Context, actor a
 }
 
 func (s *ControlService) VerifyProducerMTLSIdentity(ctx context.Context, actor authz.Actor, identityID string, req VerifyProducerMTLSIdentityRequest) (ProducerMTLSIdentityVerification, error) {
-	if !authz.Can(actor, "security:write", actor.TenantID) {
+	if !s.authorized(ctx, actor, "security:write", "producer_mtls_identity", identityID, "") {
 		return ProducerMTLSIdentityVerification{}, ErrForbidden
 	}
 	store, ok := s.store.(producerMTLSIdentityStore)
@@ -980,7 +980,7 @@ func (s *ControlService) VerifyProducerMTLSIdentity(ctx context.Context, actor a
 }
 
 func (s *ControlService) CreateSource(ctx context.Context, actor authz.Actor, req CreateSourceRequest) (domain.Source, error) {
-	if !authz.Can(actor, "sources:write", actor.TenantID) {
+	if !s.authorized(ctx, actor, "sources:write", "source", "", "") {
 		return domain.Source{}, ErrForbidden
 	}
 	if req.Provider == "" || (req.Provider != "internal" && req.VerificationSecret == "") {
@@ -1002,14 +1002,14 @@ func (s *ControlService) CreateSource(ctx context.Context, actor authz.Actor, re
 }
 
 func (s *ControlService) ListSources(ctx context.Context, actor authz.Actor, limit int) ([]domain.Source, error) {
-	if !authz.Can(actor, "sources:read", actor.TenantID) {
+	if !s.authorized(ctx, actor, "sources:read", "source", "", "") {
 		return nil, ErrForbidden
 	}
 	return s.store.ListSources(ctx, actor.TenantID, normalizeLimit(limit))
 }
 
 func (s *ControlService) GetSource(ctx context.Context, actor authz.Actor, sourceID string) (domain.Source, error) {
-	if !authz.Can(actor, "sources:read", actor.TenantID) {
+	if !s.authorized(ctx, actor, "sources:read", "source", sourceID, "") {
 		return domain.Source{}, ErrForbidden
 	}
 	if strings.TrimSpace(sourceID) == "" {
@@ -1019,7 +1019,7 @@ func (s *ControlService) GetSource(ctx context.Context, actor authz.Actor, sourc
 }
 
 func (s *ControlService) UpdateSource(ctx context.Context, actor authz.Actor, sourceID string, req UpdateSourceRequest) (domain.Source, error) {
-	if !authz.Can(actor, "sources:write", actor.TenantID) {
+	if !s.authorized(ctx, actor, "sources:write", "source", sourceID, "") {
 		return domain.Source{}, ErrForbidden
 	}
 	if strings.TrimSpace(sourceID) == "" || strings.TrimSpace(req.Reason) == "" {
@@ -1046,7 +1046,7 @@ func (s *ControlService) UpdateSource(ctx context.Context, actor authz.Actor, so
 }
 
 func (s *ControlService) DeleteSource(ctx context.Context, actor authz.Actor, sourceID string, req StateChangeRequest) (domain.Source, error) {
-	if !authz.Can(actor, "sources:write", actor.TenantID) {
+	if !s.authorized(ctx, actor, "sources:write", "source", sourceID, "") {
 		return domain.Source{}, ErrForbidden
 	}
 	if strings.TrimSpace(sourceID) == "" || strings.TrimSpace(req.Reason) == "" {
@@ -1056,7 +1056,7 @@ func (s *ControlService) DeleteSource(ctx context.Context, actor authz.Actor, so
 }
 
 func (s *ControlService) CreateEndpoint(ctx context.Context, actor authz.Actor, req CreateEndpointRequest) (domain.Endpoint, ssrf.Result, error) {
-	if !authz.Can(actor, "endpoints:write", actor.TenantID) {
+	if !s.authorized(ctx, actor, "endpoints:write", "endpoint", "", "") {
 		return domain.Endpoint{}, ssrf.Result{}, ErrForbidden
 	}
 	if req.URL == "" {
@@ -1090,14 +1090,14 @@ func (s *ControlService) ValidateEndpointURL(ctx context.Context, rawURL string)
 }
 
 func (s *ControlService) ListEndpoints(ctx context.Context, actor authz.Actor, limit int) ([]domain.Endpoint, error) {
-	if !authz.Can(actor, "endpoints:read", actor.TenantID) {
+	if !s.authorized(ctx, actor, "endpoints:read", "endpoint", "", "") {
 		return nil, ErrForbidden
 	}
 	return s.store.ListEndpoints(ctx, actor.TenantID, normalizeLimit(limit))
 }
 
 func (s *ControlService) GetEndpoint(ctx context.Context, actor authz.Actor, endpointID string) (domain.Endpoint, error) {
-	if !authz.Can(actor, "endpoints:read", actor.TenantID) {
+	if !s.authorized(ctx, actor, "endpoints:read", "endpoint", endpointID, "") {
 		return domain.Endpoint{}, ErrForbidden
 	}
 	if strings.TrimSpace(endpointID) == "" {
@@ -1151,7 +1151,7 @@ func (s *ControlService) UpdateEndpoint(ctx context.Context, actor authz.Actor, 
 }
 
 func (s *ControlService) DeleteEndpoint(ctx context.Context, actor authz.Actor, endpointID string, req StateChangeRequest) (domain.Endpoint, error) {
-	if !authz.Can(actor, "endpoints:write", actor.TenantID) {
+	if !s.authorized(ctx, actor, "endpoints:write", "endpoint", endpointID, "") {
 		return domain.Endpoint{}, ErrForbidden
 	}
 	if strings.TrimSpace(endpointID) == "" || strings.TrimSpace(req.Reason) == "" {
@@ -1161,7 +1161,7 @@ func (s *ControlService) DeleteEndpoint(ctx context.Context, actor authz.Actor, 
 }
 
 func (s *ControlService) TestEndpoint(ctx context.Context, actor authz.Actor, endpointID string, req TestEndpointRequest) (domain.Delivery, error) {
-	if !authz.Can(actor, "endpoints:write", actor.TenantID) {
+	if !s.authorized(ctx, actor, "endpoints:write", "endpoint", endpointID, "") {
 		return domain.Delivery{}, ErrForbidden
 	}
 	if strings.TrimSpace(endpointID) == "" || strings.TrimSpace(req.Reason) == "" {
@@ -1171,7 +1171,7 @@ func (s *ControlService) TestEndpoint(ctx context.Context, actor authz.Actor, en
 }
 
 func (s *ControlService) CreateSubscription(ctx context.Context, actor authz.Actor, req CreateSubscriptionRequest) (domain.Subscription, error) {
-	if !authz.Can(actor, "subscriptions:write", actor.TenantID) {
+	if !s.authorized(ctx, actor, "subscriptions:write", "subscription", "", "") {
 		return domain.Subscription{}, ErrForbidden
 	}
 	eventTypes := normalizeEventTypes(req.EventTypes)
@@ -1193,14 +1193,14 @@ func (s *ControlService) CreateSubscription(ctx context.Context, actor authz.Act
 }
 
 func (s *ControlService) ListSubscriptions(ctx context.Context, actor authz.Actor, limit int) ([]domain.Subscription, error) {
-	if !authz.Can(actor, "subscriptions:read", actor.TenantID) {
+	if !s.authorized(ctx, actor, "subscriptions:read", "subscription", "", "") {
 		return nil, ErrForbidden
 	}
 	return s.store.ListSubscriptions(ctx, actor.TenantID, normalizeLimit(limit))
 }
 
 func (s *ControlService) GetSubscription(ctx context.Context, actor authz.Actor, subscriptionID string) (domain.Subscription, error) {
-	if !authz.Can(actor, "subscriptions:read", actor.TenantID) {
+	if !s.authorized(ctx, actor, "subscriptions:read", "subscription", subscriptionID, "") {
 		return domain.Subscription{}, ErrForbidden
 	}
 	if strings.TrimSpace(subscriptionID) == "" {
@@ -1210,7 +1210,7 @@ func (s *ControlService) GetSubscription(ctx context.Context, actor authz.Actor,
 }
 
 func (s *ControlService) UpdateSubscription(ctx context.Context, actor authz.Actor, subscriptionID string, req UpdateSubscriptionRequest) (domain.Subscription, error) {
-	if !authz.Can(actor, "subscriptions:write", actor.TenantID) {
+	if !s.authorized(ctx, actor, "subscriptions:write", "subscription", subscriptionID, "") {
 		return domain.Subscription{}, ErrForbidden
 	}
 	if strings.TrimSpace(subscriptionID) == "" || strings.TrimSpace(req.Reason) == "" {
@@ -1254,7 +1254,7 @@ func (s *ControlService) UpdateSubscription(ctx context.Context, actor authz.Act
 }
 
 func (s *ControlService) DeleteSubscription(ctx context.Context, actor authz.Actor, subscriptionID string, req StateChangeRequest) (domain.Subscription, error) {
-	if !authz.Can(actor, "subscriptions:write", actor.TenantID) {
+	if !s.authorized(ctx, actor, "subscriptions:write", "subscription", subscriptionID, "") {
 		return domain.Subscription{}, ErrForbidden
 	}
 	if strings.TrimSpace(subscriptionID) == "" || strings.TrimSpace(req.Reason) == "" {
@@ -1264,7 +1264,7 @@ func (s *ControlService) DeleteSubscription(ctx context.Context, actor authz.Act
 }
 
 func (s *ControlService) CreateRoute(ctx context.Context, actor authz.Actor, req CreateRouteRequest) (domain.Route, error) {
-	if !authz.Can(actor, "routes:write", actor.TenantID) {
+	if !s.authorized(ctx, actor, "routes:write", "route", "", "") {
 		return domain.Route{}, ErrForbidden
 	}
 	eventTypes := normalizeEventTypes(req.EventTypes)
@@ -1305,14 +1305,14 @@ func (s *ControlService) CreateRoute(ctx context.Context, actor authz.Actor, req
 }
 
 func (s *ControlService) ListRoutes(ctx context.Context, actor authz.Actor, limit int) ([]domain.Route, error) {
-	if !authz.Can(actor, "routes:read", actor.TenantID) {
+	if !s.authorized(ctx, actor, "routes:read", "route", "", "") {
 		return nil, ErrForbidden
 	}
 	return s.store.ListRoutes(ctx, actor.TenantID, normalizeLimit(limit))
 }
 
 func (s *ControlService) GetRoute(ctx context.Context, actor authz.Actor, routeID string) (domain.Route, error) {
-	if !authz.Can(actor, "routes:read", actor.TenantID) {
+	if !s.authorized(ctx, actor, "routes:read", "route", routeID, "") {
 		return domain.Route{}, ErrForbidden
 	}
 	if strings.TrimSpace(routeID) == "" {
@@ -1322,7 +1322,7 @@ func (s *ControlService) GetRoute(ctx context.Context, actor authz.Actor, routeI
 }
 
 func (s *ControlService) UpdateRoute(ctx context.Context, actor authz.Actor, routeID string, req UpdateRouteRequest) (domain.Route, error) {
-	if !authz.Can(actor, "routes:write", actor.TenantID) {
+	if !s.authorized(ctx, actor, "routes:write", "route", routeID, "") {
 		return domain.Route{}, ErrForbidden
 	}
 	if strings.TrimSpace(routeID) == "" || strings.TrimSpace(req.Reason) == "" {
@@ -1380,7 +1380,7 @@ func (s *ControlService) UpdateRoute(ctx context.Context, actor authz.Actor, rou
 }
 
 func (s *ControlService) DeleteRoute(ctx context.Context, actor authz.Actor, routeID string, req StateChangeRequest) (domain.Route, error) {
-	if !authz.Can(actor, "routes:write", actor.TenantID) {
+	if !s.authorized(ctx, actor, "routes:write", "route", routeID, "") {
 		return domain.Route{}, ErrForbidden
 	}
 	if strings.TrimSpace(routeID) == "" || strings.TrimSpace(req.Reason) == "" {
@@ -1390,7 +1390,7 @@ func (s *ControlService) DeleteRoute(ctx context.Context, actor authz.Actor, rou
 }
 
 func (s *ControlService) ListRouteVersions(ctx context.Context, actor authz.Actor, routeID string, limit int) ([]domain.RouteVersion, error) {
-	if !authz.Can(actor, "routes:read", actor.TenantID) {
+	if !s.authorized(ctx, actor, "routes:read", "route", routeID, "") {
 		return nil, ErrForbidden
 	}
 	if strings.TrimSpace(routeID) == "" {
@@ -1400,7 +1400,7 @@ func (s *ControlService) ListRouteVersions(ctx context.Context, actor authz.Acto
 }
 
 func (s *ControlService) ActivateRoute(ctx context.Context, actor authz.Actor, routeID, reason string) (domain.Route, error) {
-	if !authz.Can(actor, "routes:write", actor.TenantID) {
+	if !s.authorized(ctx, actor, "routes:write", "route", routeID, "") {
 		return domain.Route{}, ErrForbidden
 	}
 	if strings.TrimSpace(routeID) == "" || strings.TrimSpace(reason) == "" {
@@ -1410,7 +1410,7 @@ func (s *ControlService) ActivateRoute(ctx context.Context, actor authz.Actor, r
 }
 
 func (s *ControlService) DryRunRoute(ctx context.Context, actor authz.Actor, routeID, eventID string) (RouteDryRun, error) {
-	if !authz.Can(actor, "routes:read", actor.TenantID) {
+	if !s.authorized(ctx, actor, "routes:read", "route", routeID, "") {
 		return RouteDryRun{}, ErrForbidden
 	}
 	if strings.TrimSpace(routeID) == "" || strings.TrimSpace(eventID) == "" {
@@ -1420,7 +1420,7 @@ func (s *ControlService) DryRunRoute(ctx context.Context, actor authz.Actor, rou
 }
 
 func (s *ControlService) CreateRetryPolicy(ctx context.Context, actor authz.Actor, req CreateRetryPolicyRequest) (domain.RetryPolicy, error) {
-	if !authz.Can(actor, "routes:write", actor.TenantID) {
+	if !s.authorized(ctx, actor, "routes:write", "retry_policy", "", "") {
 		return domain.RetryPolicy{}, ErrForbidden
 	}
 	req.Name = strings.TrimSpace(req.Name)
@@ -1435,14 +1435,14 @@ func (s *ControlService) CreateRetryPolicy(ctx context.Context, actor authz.Acto
 }
 
 func (s *ControlService) ListRetryPolicies(ctx context.Context, actor authz.Actor, limit int) ([]domain.RetryPolicy, error) {
-	if !authz.Can(actor, "routes:read", actor.TenantID) {
+	if !s.authorized(ctx, actor, "routes:read", "retry_policy", "", "") {
 		return nil, ErrForbidden
 	}
 	return s.store.ListRetryPolicies(ctx, actor.TenantID, normalizeLimit(limit))
 }
 
 func (s *ControlService) GetRetryPolicy(ctx context.Context, actor authz.Actor, retryPolicyID string) (domain.RetryPolicy, error) {
-	if !authz.Can(actor, "routes:read", actor.TenantID) {
+	if !s.authorized(ctx, actor, "routes:read", "retry_policy", retryPolicyID, "") {
 		return domain.RetryPolicy{}, ErrForbidden
 	}
 	if strings.TrimSpace(retryPolicyID) == "" {
@@ -1452,7 +1452,7 @@ func (s *ControlService) GetRetryPolicy(ctx context.Context, actor authz.Actor, 
 }
 
 func (s *ControlService) UpdateRetryPolicy(ctx context.Context, actor authz.Actor, retryPolicyID string, req UpdateRetryPolicyRequest) (domain.RetryPolicy, error) {
-	if !authz.Can(actor, "routes:write", actor.TenantID) {
+	if !s.authorized(ctx, actor, "routes:write", "retry_policy", retryPolicyID, "") {
 		return domain.RetryPolicy{}, ErrForbidden
 	}
 	if strings.TrimSpace(retryPolicyID) == "" || strings.TrimSpace(req.Reason) == "" {
@@ -1497,7 +1497,7 @@ func (s *ControlService) UpdateRetryPolicy(ctx context.Context, actor authz.Acto
 }
 
 func (s *ControlService) DeleteRetryPolicy(ctx context.Context, actor authz.Actor, retryPolicyID string, req StateChangeRequest) (domain.RetryPolicy, error) {
-	if !authz.Can(actor, "routes:write", actor.TenantID) {
+	if !s.authorized(ctx, actor, "routes:write", "retry_policy", retryPolicyID, "") {
 		return domain.RetryPolicy{}, ErrForbidden
 	}
 	if strings.TrimSpace(retryPolicyID) == "" || strings.TrimSpace(req.Reason) == "" {
@@ -1507,7 +1507,7 @@ func (s *ControlService) DeleteRetryPolicy(ctx context.Context, actor authz.Acto
 }
 
 func (s *ControlService) CreateEventType(ctx context.Context, actor authz.Actor, req CreateEventTypeRequest) (domain.EventType, error) {
-	if !authz.Can(actor, "schemas:write", actor.TenantID) {
+	if !s.authorized(ctx, actor, "schemas:write", "event_type", "", "") {
 		return domain.EventType{}, ErrForbidden
 	}
 	req.Name = strings.TrimSpace(req.Name)
@@ -1524,14 +1524,14 @@ func (s *ControlService) CreateEventType(ctx context.Context, actor authz.Actor,
 }
 
 func (s *ControlService) ListEventTypes(ctx context.Context, actor authz.Actor, limit int) ([]domain.EventType, error) {
-	if !authz.Can(actor, "schemas:read", actor.TenantID) {
+	if !s.authorized(ctx, actor, "schemas:read", "event_type", "", "") {
 		return nil, ErrForbidden
 	}
 	return s.store.ListEventTypes(ctx, actor.TenantID, normalizeLimit(limit))
 }
 
 func (s *ControlService) GetEventType(ctx context.Context, actor authz.Actor, eventType string) (domain.EventType, error) {
-	if !authz.Can(actor, "schemas:read", actor.TenantID) {
+	if !s.authorized(ctx, actor, "schemas:read", "event_type", eventType, "") {
 		return domain.EventType{}, ErrForbidden
 	}
 	if strings.TrimSpace(eventType) == "" {
@@ -1541,7 +1541,7 @@ func (s *ControlService) GetEventType(ctx context.Context, actor authz.Actor, ev
 }
 
 func (s *ControlService) UpdateEventType(ctx context.Context, actor authz.Actor, eventType string, req UpdateEventTypeRequest) (domain.EventType, error) {
-	if !authz.Can(actor, "schemas:write", actor.TenantID) {
+	if !s.authorized(ctx, actor, "schemas:write", "event_type", eventType, "") {
 		return domain.EventType{}, ErrForbidden
 	}
 	if strings.TrimSpace(eventType) == "" || strings.TrimSpace(req.Reason) == "" {
@@ -1565,7 +1565,7 @@ func (s *ControlService) UpdateEventType(ctx context.Context, actor authz.Actor,
 }
 
 func (s *ControlService) DeleteEventType(ctx context.Context, actor authz.Actor, eventType string, req StateChangeRequest) (domain.EventType, error) {
-	if !authz.Can(actor, "schemas:write", actor.TenantID) {
+	if !s.authorized(ctx, actor, "schemas:write", "event_type", eventType, "") {
 		return domain.EventType{}, ErrForbidden
 	}
 	if strings.TrimSpace(eventType) == "" || strings.TrimSpace(req.Reason) == "" {
@@ -1575,7 +1575,7 @@ func (s *ControlService) DeleteEventType(ctx context.Context, actor authz.Actor,
 }
 
 func (s *ControlService) CreateEventSchema(ctx context.Context, actor authz.Actor, eventType string, req CreateEventSchemaRequest) (domain.EventSchema, error) {
-	if !authz.Can(actor, "schemas:write", actor.TenantID) {
+	if !s.authorized(ctx, actor, "schemas:write", "event_schema", eventType+":"+req.Version, "") {
 		return domain.EventSchema{}, ErrForbidden
 	}
 	if eventType == "" || req.Version == "" || req.Schema == "" {
@@ -1591,14 +1591,14 @@ func (s *ControlService) CreateEventSchema(ctx context.Context, actor authz.Acto
 }
 
 func (s *ControlService) ListEventSchemas(ctx context.Context, actor authz.Actor, eventType string, limit int) ([]domain.EventSchema, error) {
-	if !authz.Can(actor, "schemas:read", actor.TenantID) {
+	if !s.authorized(ctx, actor, "schemas:read", "event_schema", eventType, "") {
 		return nil, ErrForbidden
 	}
 	return s.store.ListEventSchemas(ctx, actor.TenantID, eventType, normalizeLimit(limit))
 }
 
 func (s *ControlService) GetEventSchema(ctx context.Context, actor authz.Actor, eventType, version string) (domain.EventSchema, error) {
-	if !authz.Can(actor, "schemas:read", actor.TenantID) {
+	if !s.authorized(ctx, actor, "schemas:read", "event_schema", eventType+":"+version, "") {
 		return domain.EventSchema{}, ErrForbidden
 	}
 	if strings.TrimSpace(eventType) == "" || strings.TrimSpace(version) == "" {
@@ -1608,7 +1608,7 @@ func (s *ControlService) GetEventSchema(ctx context.Context, actor authz.Actor, 
 }
 
 func (s *ControlService) UpdateEventSchema(ctx context.Context, actor authz.Actor, eventType, version string, req UpdateEventSchemaRequest) (domain.EventSchema, error) {
-	if !authz.Can(actor, "schemas:write", actor.TenantID) {
+	if !s.authorized(ctx, actor, "schemas:write", "event_schema", eventType+":"+version, "") {
 		return domain.EventSchema{}, ErrForbidden
 	}
 	if strings.TrimSpace(eventType) == "" || strings.TrimSpace(version) == "" || strings.TrimSpace(req.Reason) == "" {
@@ -1626,7 +1626,7 @@ func (s *ControlService) UpdateEventSchema(ctx context.Context, actor authz.Acto
 }
 
 func (s *ControlService) DeleteEventSchema(ctx context.Context, actor authz.Actor, eventType, version string, req StateChangeRequest) (domain.EventSchema, error) {
-	if !authz.Can(actor, "schemas:write", actor.TenantID) {
+	if !s.authorized(ctx, actor, "schemas:write", "event_schema", eventType+":"+version, "") {
 		return domain.EventSchema{}, ErrForbidden
 	}
 	if strings.TrimSpace(eventType) == "" || strings.TrimSpace(version) == "" || strings.TrimSpace(req.Reason) == "" {
@@ -1636,7 +1636,7 @@ func (s *ControlService) DeleteEventSchema(ctx context.Context, actor authz.Acto
 }
 
 func (s *ControlService) ValidateEventSchema(ctx context.Context, actor authz.Actor, eventType, version string, req ValidateSchemaRequest) (SchemaValidationResult, error) {
-	if !authz.Can(actor, "schemas:read", actor.TenantID) {
+	if !s.authorized(ctx, actor, "schemas:read", "event_schema", eventType+":"+version, "") {
 		return SchemaValidationResult{}, ErrForbidden
 	}
 	if strings.TrimSpace(eventType) == "" || strings.TrimSpace(version) == "" || strings.TrimSpace(req.Payload) == "" {
@@ -1650,7 +1650,7 @@ func (s *ControlService) ValidateEventSchema(ctx context.Context, actor authz.Ac
 }
 
 func (s *ControlService) CheckEventSchemaCompatibility(ctx context.Context, actor authz.Actor, eventType, baseVersion string, req CheckSchemaCompatibilityRequest) (SchemaCompatibilityResult, error) {
-	if !authz.Can(actor, "schemas:read", actor.TenantID) {
+	if !s.authorized(ctx, actor, "schemas:read", "event_schema", eventType+":"+baseVersion, "") {
 		return SchemaCompatibilityResult{}, ErrForbidden
 	}
 	if strings.TrimSpace(eventType) == "" || strings.TrimSpace(baseVersion) == "" || strings.TrimSpace(req.NewSchema) == "" {
@@ -1690,14 +1690,14 @@ func (s *ControlService) RotateEndpointSecret(ctx context.Context, actor authz.A
 }
 
 func (s *ControlService) ListEvents(ctx context.Context, actor authz.Actor, limit int) ([]domain.Event, error) {
-	if !authz.Can(actor, "events:read", actor.TenantID) {
+	if !s.authorized(ctx, actor, "events:read", "event", "", "") {
 		return nil, ErrForbidden
 	}
 	return s.store.ListEvents(ctx, actor.TenantID, normalizeLimit(limit))
 }
 
 func (s *ControlService) GetEvent(ctx context.Context, actor authz.Actor, eventID string) (domain.Event, error) {
-	if !authz.Can(actor, "events:read", actor.TenantID) {
+	if !s.authorized(ctx, actor, "events:read", "event", eventID, "") {
 		return domain.Event{}, ErrForbidden
 	}
 	return s.store.GetEvent(ctx, actor.TenantID, eventID)
@@ -1711,7 +1711,7 @@ func (s *ControlService) GetRawPayload(ctx context.Context, actor authz.Actor, e
 }
 
 func (s *ControlService) GetNormalizedEvent(ctx context.Context, actor authz.Actor, eventID string, includeData bool) (domain.NormalizedEnvelope, error) {
-	if !authz.Can(actor, "events:read", actor.TenantID) {
+	if !s.authorized(ctx, actor, "events:read", "event", eventID, "") {
 		return domain.NormalizedEnvelope{}, ErrForbidden
 	}
 	if includeData && !s.authorized(ctx, actor, "events:raw", "event", eventID, "") {
@@ -1721,35 +1721,35 @@ func (s *ControlService) GetNormalizedEvent(ctx context.Context, actor authz.Act
 }
 
 func (s *ControlService) ListEventTimeline(ctx context.Context, actor authz.Actor, eventID string, limit int) ([]map[string]any, error) {
-	if !authz.Can(actor, "events:read", actor.TenantID) {
+	if !s.authorized(ctx, actor, "events:read", "event", eventID, "") {
 		return nil, ErrForbidden
 	}
 	return s.store.ListEventTimeline(ctx, actor.TenantID, eventID, normalizeLimit(limit))
 }
 
 func (s *ControlService) ListDeliveries(ctx context.Context, actor authz.Actor, limit int) ([]domain.Delivery, error) {
-	if !authz.Can(actor, "deliveries:read", actor.TenantID) {
+	if !s.authorized(ctx, actor, "deliveries:read", "delivery", "", "") {
 		return nil, ErrForbidden
 	}
 	return s.store.ListDeliveries(ctx, actor.TenantID, normalizeLimit(limit))
 }
 
 func (s *ControlService) ListDeliveryAttempts(ctx context.Context, actor authz.Actor, deliveryID string, limit int) ([]domain.DeliveryAttempt, error) {
-	if !authz.Can(actor, "deliveries:read", actor.TenantID) {
+	if !s.authorized(ctx, actor, "deliveries:read", "delivery", deliveryID, "") {
 		return nil, ErrForbidden
 	}
 	return s.store.ListDeliveryAttempts(ctx, actor.TenantID, deliveryID, normalizeLimit(limit))
 }
 
 func (s *ControlService) GetDeliveryAttempt(ctx context.Context, actor authz.Actor, attemptID string) (domain.DeliveryAttempt, error) {
-	if !authz.Can(actor, "deliveries:read", actor.TenantID) {
+	if !s.authorized(ctx, actor, "deliveries:read", "delivery_attempt", attemptID, "") {
 		return domain.DeliveryAttempt{}, ErrForbidden
 	}
 	return s.store.GetDeliveryAttempt(ctx, actor.TenantID, attemptID)
 }
 
 func (s *ControlService) RetryDelivery(ctx context.Context, actor authz.Actor, deliveryID, reason string) (domain.Delivery, error) {
-	if !authz.Can(actor, "deliveries:retry", actor.TenantID) {
+	if !s.authorized(ctx, actor, "deliveries:retry", "delivery", deliveryID, "") {
 		return domain.Delivery{}, ErrForbidden
 	}
 	if reason == "" {
@@ -1759,7 +1759,7 @@ func (s *ControlService) RetryDelivery(ctx context.Context, actor authz.Actor, d
 }
 
 func (s *ControlService) CancelDelivery(ctx context.Context, actor authz.Actor, deliveryID string, req StateChangeRequest) (domain.Delivery, error) {
-	if !authz.Can(actor, "deliveries:retry", actor.TenantID) {
+	if !s.authorized(ctx, actor, "deliveries:retry", "delivery", deliveryID, "") {
 		return domain.Delivery{}, ErrForbidden
 	}
 	if strings.TrimSpace(req.Reason) == "" {
@@ -1769,14 +1769,14 @@ func (s *ControlService) CancelDelivery(ctx context.Context, actor authz.Actor, 
 }
 
 func (s *ControlService) ListEndpointHealth(ctx context.Context, actor authz.Actor, limit int) ([]domain.EndpointHealth, error) {
-	if !authz.Can(actor, "endpoints:read", actor.TenantID) {
+	if !s.authorized(ctx, actor, "endpoints:read", "endpoint_health", "", "") {
 		return nil, ErrForbidden
 	}
 	return s.store.ListEndpointHealth(ctx, actor.TenantID, normalizeLimit(limit))
 }
 
 func (s *ControlService) OpsMetrics(ctx context.Context, actor authz.Actor) (domain.OpsMetrics, error) {
-	if !authz.Can(actor, "ops:read", actor.TenantID) {
+	if !s.authorized(ctx, actor, "ops:read", "ops", "metrics", "") {
 		return domain.OpsMetrics{}, ErrForbidden
 	}
 	return s.store.OpsMetrics(ctx, actor.TenantID)
@@ -1787,14 +1787,14 @@ func (s *ControlService) PublicOpsMetrics(ctx context.Context) (domain.OpsMetric
 }
 
 func (s *ControlService) ListWorkers(ctx context.Context, actor authz.Actor, limit int) ([]domain.WorkerStatus, error) {
-	if !authz.Can(actor, "ops:read", actor.TenantID) {
+	if !s.authorized(ctx, actor, "ops:read", "worker", "", "") {
 		return nil, ErrForbidden
 	}
 	return s.store.ListWorkers(ctx, actor.TenantID, normalizeLimit(limit))
 }
 
 func (s *ControlService) GetWorker(ctx context.Context, actor authz.Actor, workerID string) (domain.WorkerStatus, error) {
-	if !authz.Can(actor, "ops:read", actor.TenantID) {
+	if !s.authorized(ctx, actor, "ops:read", "worker", workerID, "") {
 		return domain.WorkerStatus{}, ErrForbidden
 	}
 	if strings.TrimSpace(workerID) == "" {
@@ -1804,28 +1804,28 @@ func (s *ControlService) GetWorker(ctx context.Context, actor authz.Actor, worke
 }
 
 func (s *ControlService) ListQueues(ctx context.Context, actor authz.Actor) ([]domain.QueueStats, error) {
-	if !authz.Can(actor, "ops:read", actor.TenantID) {
+	if !s.authorized(ctx, actor, "ops:read", "queue", "", "") {
 		return nil, ErrForbidden
 	}
 	return s.store.ListQueues(ctx, actor.TenantID)
 }
 
 func (s *ControlService) OpsStorage(ctx context.Context, actor authz.Actor) (domain.OpsStorageStatus, error) {
-	if !authz.Can(actor, "ops:read", actor.TenantID) {
+	if !s.authorized(ctx, actor, "ops:read", "ops", "storage", "") {
 		return domain.OpsStorageStatus{}, ErrForbidden
 	}
 	return s.store.OpsStorage(ctx, actor.TenantID)
 }
 
 func (s *ControlService) OpsConfig(ctx context.Context, actor authz.Actor) (domain.OpsConfig, error) {
-	if !authz.Can(actor, "ops:read", actor.TenantID) {
+	if !s.authorized(ctx, actor, "ops:read", "ops", "config", "") {
 		return domain.OpsConfig{}, ErrForbidden
 	}
 	return s.runtimeConfig, nil
 }
 
 func (s *ControlService) ListMetricRollups(ctx context.Context, actor authz.Actor, metricName string, limit int) ([]domain.MetricRollup, error) {
-	if !authz.Can(actor, "ops:read", actor.TenantID) {
+	if !s.authorized(ctx, actor, "ops:read", "metric", metricName, "") {
 		return nil, ErrForbidden
 	}
 	metricName = strings.TrimSpace(metricName)
@@ -1836,7 +1836,7 @@ func (s *ControlService) ListMetricRollups(ctx context.Context, actor authz.Acto
 }
 
 func (s *ControlService) CreateAlertRule(ctx context.Context, actor authz.Actor, req CreateAlertRuleRequest) (domain.AlertRule, error) {
-	if !authz.Can(actor, "ops:write", actor.TenantID) {
+	if !s.authorized(ctx, actor, "ops:write", "alert_rule", "", "") {
 		return domain.AlertRule{}, ErrForbidden
 	}
 	if err := normalizeCreateAlertRule(&req); err != nil {
@@ -1846,14 +1846,14 @@ func (s *ControlService) CreateAlertRule(ctx context.Context, actor authz.Actor,
 }
 
 func (s *ControlService) ListAlertRules(ctx context.Context, actor authz.Actor, limit int) ([]domain.AlertRule, error) {
-	if !authz.Can(actor, "ops:read", actor.TenantID) {
+	if !s.authorized(ctx, actor, "ops:read", "alert_rule", "", "") {
 		return nil, ErrForbidden
 	}
 	return s.store.ListAlertRules(ctx, actor.TenantID, normalizeLimit(limit))
 }
 
 func (s *ControlService) GetAlertRule(ctx context.Context, actor authz.Actor, alertID string) (domain.AlertRule, error) {
-	if !authz.Can(actor, "ops:read", actor.TenantID) {
+	if !s.authorized(ctx, actor, "ops:read", "alert_rule", alertID, "") {
 		return domain.AlertRule{}, ErrForbidden
 	}
 	if strings.TrimSpace(alertID) == "" {
@@ -1863,7 +1863,7 @@ func (s *ControlService) GetAlertRule(ctx context.Context, actor authz.Actor, al
 }
 
 func (s *ControlService) UpdateAlertRule(ctx context.Context, actor authz.Actor, alertID string, req UpdateAlertRuleRequest) (domain.AlertRule, error) {
-	if !authz.Can(actor, "ops:write", actor.TenantID) {
+	if !s.authorized(ctx, actor, "ops:write", "alert_rule", alertID, "") {
 		return domain.AlertRule{}, ErrForbidden
 	}
 	if strings.TrimSpace(alertID) == "" || strings.TrimSpace(req.Reason) == "" {
@@ -1876,7 +1876,7 @@ func (s *ControlService) UpdateAlertRule(ctx context.Context, actor authz.Actor,
 }
 
 func (s *ControlService) DeleteAlertRule(ctx context.Context, actor authz.Actor, alertID string, req StateChangeRequest) (domain.AlertRule, error) {
-	if !authz.Can(actor, "ops:write", actor.TenantID) {
+	if !s.authorized(ctx, actor, "ops:write", "alert_rule", alertID, "") {
 		return domain.AlertRule{}, ErrForbidden
 	}
 	if strings.TrimSpace(alertID) == "" || strings.TrimSpace(req.Reason) == "" {
@@ -1886,7 +1886,7 @@ func (s *ControlService) DeleteAlertRule(ctx context.Context, actor authz.Actor,
 }
 
 func (s *ControlService) ListAlertFirings(ctx context.Context, actor authz.Actor, state string, limit int) ([]domain.AlertFiring, error) {
-	if !authz.Can(actor, "ops:read", actor.TenantID) {
+	if !s.authorized(ctx, actor, "ops:read", "alert_firing", "", "") {
 		return nil, ErrForbidden
 	}
 	state = strings.TrimSpace(state)
@@ -1897,7 +1897,7 @@ func (s *ControlService) ListAlertFirings(ctx context.Context, actor authz.Actor
 }
 
 func (s *ControlService) GetAlertFiring(ctx context.Context, actor authz.Actor, firingID string) (domain.AlertFiring, error) {
-	if !authz.Can(actor, "ops:read", actor.TenantID) {
+	if !s.authorized(ctx, actor, "ops:read", "alert_firing", firingID, "") {
 		return domain.AlertFiring{}, ErrForbidden
 	}
 	if strings.TrimSpace(firingID) == "" {
@@ -1907,7 +1907,7 @@ func (s *ControlService) GetAlertFiring(ctx context.Context, actor authz.Actor, 
 }
 
 func (s *ControlService) AcknowledgeAlertFiring(ctx context.Context, actor authz.Actor, firingID string, req StateChangeRequest) (domain.AlertFiring, error) {
-	if !authz.Can(actor, "ops:write", actor.TenantID) {
+	if !s.authorized(ctx, actor, "ops:write", "alert_firing", firingID, "") {
 		return domain.AlertFiring{}, ErrForbidden
 	}
 	if strings.TrimSpace(firingID) == "" || strings.TrimSpace(req.Reason) == "" {
@@ -1933,14 +1933,14 @@ func (s *ControlService) CreateNotificationChannel(ctx context.Context, actor au
 }
 
 func (s *ControlService) ListNotificationChannels(ctx context.Context, actor authz.Actor, limit int) ([]domain.NotificationChannel, error) {
-	if !authz.Can(actor, "ops:read", actor.TenantID) {
+	if !s.authorized(ctx, actor, "ops:read", "notification_channel", "", "") {
 		return nil, ErrForbidden
 	}
 	return s.store.ListNotificationChannels(ctx, actor.TenantID, normalizeLimit(limit))
 }
 
 func (s *ControlService) GetNotificationChannel(ctx context.Context, actor authz.Actor, channelID string) (domain.NotificationChannel, error) {
-	if !authz.Can(actor, "ops:read", actor.TenantID) {
+	if !s.authorized(ctx, actor, "ops:read", "notification_channel", channelID, "") {
 		return domain.NotificationChannel{}, ErrForbidden
 	}
 	if strings.TrimSpace(channelID) == "" {
@@ -2000,7 +2000,7 @@ func (s *ControlService) TestNotificationChannel(ctx context.Context, actor auth
 }
 
 func (s *ControlService) ListNotificationDeliveries(ctx context.Context, actor authz.Actor, state string, limit int) ([]domain.NotificationDelivery, error) {
-	if !authz.Can(actor, "ops:read", actor.TenantID) {
+	if !s.authorized(ctx, actor, "ops:read", "notification_delivery", "", "") {
 		return nil, ErrForbidden
 	}
 	state = strings.TrimSpace(state)
@@ -2011,7 +2011,7 @@ func (s *ControlService) ListNotificationDeliveries(ctx context.Context, actor a
 }
 
 func (s *ControlService) ListNotificationDeliveryAttempts(ctx context.Context, actor authz.Actor, deliveryID string, limit int) ([]domain.NotificationDeliveryAttempt, error) {
-	if !authz.Can(actor, "ops:read", actor.TenantID) {
+	if !s.authorized(ctx, actor, "ops:read", "notification_delivery", deliveryID, "") {
 		return nil, ErrForbidden
 	}
 	if strings.TrimSpace(deliveryID) == "" {
@@ -2021,7 +2021,7 @@ func (s *ControlService) ListNotificationDeliveryAttempts(ctx context.Context, a
 }
 
 func (s *ControlService) RetryNotificationDelivery(ctx context.Context, actor authz.Actor, deliveryID string, req StateChangeRequest) (domain.NotificationDelivery, error) {
-	if !authz.Can(actor, "ops:write", actor.TenantID) {
+	if !s.authorized(ctx, actor, "ops:write", "notification_delivery", deliveryID, "") {
 		return domain.NotificationDelivery{}, ErrForbidden
 	}
 	if strings.TrimSpace(deliveryID) == "" || strings.TrimSpace(req.Reason) == "" {
@@ -2047,14 +2047,14 @@ func (s *ControlService) CreateSIEMSink(ctx context.Context, actor authz.Actor, 
 }
 
 func (s *ControlService) ListSIEMSinks(ctx context.Context, actor authz.Actor, limit int) ([]domain.SIEMSink, error) {
-	if !authz.Can(actor, "audit:read", actor.TenantID) {
+	if !s.authorized(ctx, actor, "audit:read", "siem_sink", "", "") {
 		return nil, ErrForbidden
 	}
 	return s.store.ListSIEMSinks(ctx, actor.TenantID, normalizeLimit(limit))
 }
 
 func (s *ControlService) GetSIEMSink(ctx context.Context, actor authz.Actor, sinkID string) (domain.SIEMSink, error) {
-	if !authz.Can(actor, "audit:read", actor.TenantID) {
+	if !s.authorized(ctx, actor, "audit:read", "siem_sink", sinkID, "") {
 		return domain.SIEMSink{}, ErrForbidden
 	}
 	if strings.TrimSpace(sinkID) == "" {
@@ -2114,7 +2114,7 @@ func (s *ControlService) TestSIEMSink(ctx context.Context, actor authz.Actor, si
 }
 
 func (s *ControlService) ListSIEMDeliveries(ctx context.Context, actor authz.Actor, state string, limit int) ([]domain.SIEMDelivery, error) {
-	if !authz.Can(actor, "audit:read", actor.TenantID) {
+	if !s.authorized(ctx, actor, "audit:read", "siem_delivery", "", "") {
 		return nil, ErrForbidden
 	}
 	state = strings.TrimSpace(state)
@@ -2125,7 +2125,7 @@ func (s *ControlService) ListSIEMDeliveries(ctx context.Context, actor authz.Act
 }
 
 func (s *ControlService) ListSIEMDeliveryAttempts(ctx context.Context, actor authz.Actor, deliveryID string, limit int) ([]domain.SIEMDeliveryAttempt, error) {
-	if !authz.Can(actor, "audit:read", actor.TenantID) {
+	if !s.authorized(ctx, actor, "audit:read", "siem_delivery", deliveryID, "") {
 		return nil, ErrForbidden
 	}
 	if strings.TrimSpace(deliveryID) == "" {
@@ -2135,7 +2135,7 @@ func (s *ControlService) ListSIEMDeliveryAttempts(ctx context.Context, actor aut
 }
 
 func (s *ControlService) RetrySIEMDelivery(ctx context.Context, actor authz.Actor, deliveryID string, req StateChangeRequest) (domain.SIEMDelivery, error) {
-	if !authz.Can(actor, "security:write", actor.TenantID) {
+	if !s.authorized(ctx, actor, "security:write", "siem_delivery", deliveryID, "") {
 		return domain.SIEMDelivery{}, ErrForbidden
 	}
 	if strings.TrimSpace(deliveryID) == "" || strings.TrimSpace(req.Reason) == "" {
@@ -2145,7 +2145,7 @@ func (s *ControlService) RetrySIEMDelivery(ctx context.Context, actor authz.Acto
 }
 
 func (s *ControlService) DryRunReplay(ctx context.Context, actor authz.Actor, req ReplayRequest) (ReplayDryRun, error) {
-	if !authz.Can(actor, "replay:read", actor.TenantID) {
+	if !s.authorized(ctx, actor, "replay:read", "replay", req.EventID, "") {
 		return ReplayDryRun{}, ErrForbidden
 	}
 	if err := normalizeReplayRequest(&req, false); err != nil {
@@ -2169,7 +2169,7 @@ func (s *ControlService) CreateReplay(ctx context.Context, actor authz.Actor, re
 }
 
 func (s *ControlService) ListReplayJobs(ctx context.Context, actor authz.Actor, limit int) ([]ReplayJob, error) {
-	if !authz.Can(actor, "replay:read", actor.TenantID) {
+	if !s.authorized(ctx, actor, "replay:read", "replay", "", "") {
 		return nil, ErrForbidden
 	}
 	return s.store.ListReplayJobs(ctx, actor.TenantID, normalizeLimit(limit))
@@ -2192,7 +2192,7 @@ func (s *ControlService) CancelReplayJob(ctx context.Context, actor authz.Actor,
 }
 
 func (s *ControlService) changeReplayState(ctx context.Context, actor authz.Actor, replayJobID string, req StateChangeRequest, fn func(context.Context, string, string, string, string) (ReplayJob, error)) (ReplayJob, error) {
-	if !authz.Can(actor, "replay:write", actor.TenantID) {
+	if !s.authorized(ctx, actor, "replay:write", "replay", replayJobID, "") {
 		return ReplayJob{}, ErrForbidden
 	}
 	if strings.TrimSpace(req.Reason) == "" {
@@ -2202,21 +2202,21 @@ func (s *ControlService) changeReplayState(ctx context.Context, actor authz.Acto
 }
 
 func (s *ControlService) ListAuditEvents(ctx context.Context, actor authz.Actor, limit int) ([]domain.AuditEvent, error) {
-	if !authz.Can(actor, "audit:read", actor.TenantID) {
+	if !s.authorized(ctx, actor, "audit:read", "audit_event", "", "") {
 		return nil, ErrForbidden
 	}
 	return s.store.ListAuditEvents(ctx, actor.TenantID, normalizeLimit(limit))
 }
 
 func (s *ControlService) GetAuditChainHead(ctx context.Context, actor authz.Actor) (domain.AuditChainHead, error) {
-	if !authz.Can(actor, "audit:read", actor.TenantID) {
+	if !s.authorized(ctx, actor, "audit:read", "audit_chain", "", "") {
 		return domain.AuditChainHead{}, ErrForbidden
 	}
 	return s.store.GetAuditChainHead(ctx, actor.TenantID)
 }
 
 func (s *ControlService) VerifyAuditChain(ctx context.Context, actor authz.Actor, req AuditChainVerifyRequest) (domain.AuditChainVerification, error) {
-	if !authz.Can(actor, "audit:read", actor.TenantID) {
+	if !s.authorized(ctx, actor, "audit:read", "audit_chain", "", "") {
 		return domain.AuditChainVerification{}, ErrForbidden
 	}
 	if req.FromSequence < 0 || req.ToSequence < 0 {
@@ -2229,7 +2229,7 @@ func (s *ControlService) VerifyAuditChain(ctx context.Context, actor authz.Actor
 }
 
 func (s *ControlService) CreateAuditChainAnchor(ctx context.Context, actor authz.Actor, req AuditChainAnchorRequest) (domain.AuditChainAnchor, error) {
-	if !authz.Can(actor, "security:write", actor.TenantID) {
+	if !s.authorized(ctx, actor, "security:write", "audit_chain_anchor", "", "") {
 		return domain.AuditChainAnchor{}, ErrForbidden
 	}
 	req.Reason = strings.TrimSpace(req.Reason)
@@ -2246,14 +2246,14 @@ func (s *ControlService) CreateAuditChainAnchor(ctx context.Context, actor authz
 }
 
 func (s *ControlService) ListAuditChainAnchors(ctx context.Context, actor authz.Actor, limit int) ([]domain.AuditChainAnchor, error) {
-	if !authz.Can(actor, "audit:read", actor.TenantID) {
+	if !s.authorized(ctx, actor, "audit:read", "audit_chain_anchor", "", "") {
 		return nil, ErrForbidden
 	}
 	return s.store.ListAuditChainAnchors(ctx, actor.TenantID, normalizeLimit(limit))
 }
 
 func (s *ControlService) GetAuditChainAnchor(ctx context.Context, actor authz.Actor, anchorID string) (domain.AuditChainAnchor, error) {
-	if !authz.Can(actor, "audit:read", actor.TenantID) {
+	if !s.authorized(ctx, actor, "audit:read", "audit_chain_anchor", anchorID, "") {
 		return domain.AuditChainAnchor{}, ErrForbidden
 	}
 	if strings.TrimSpace(anchorID) == "" {
@@ -2263,14 +2263,14 @@ func (s *ControlService) GetAuditChainAnchor(ctx context.Context, actor authz.Ac
 }
 
 func (s *ControlService) ListRetentionPolicies(ctx context.Context, actor authz.Actor, limit int) ([]domain.RetentionPolicy, error) {
-	if !authz.Can(actor, "security:read", actor.TenantID) {
+	if !s.authorized(ctx, actor, "security:read", "retention_policy", "", "") {
 		return nil, ErrForbidden
 	}
 	return s.store.ListRetentionPolicies(ctx, actor.TenantID, normalizeLimit(limit))
 }
 
 func (s *ControlService) CreateRetentionPolicy(ctx context.Context, actor authz.Actor, req CreateRetentionPolicyRequest) (domain.RetentionPolicy, error) {
-	if !authz.Can(actor, "security:write", actor.TenantID) {
+	if !s.authorized(ctx, actor, "security:write", "retention_policy", "", "") {
 		return domain.RetentionPolicy{}, ErrForbidden
 	}
 	req.ResourceType = strings.TrimSpace(req.ResourceType)
@@ -2287,7 +2287,7 @@ func (s *ControlService) CreateRetentionPolicy(ctx context.Context, actor authz.
 }
 
 func (s *ControlService) UpdateRetentionPolicy(ctx context.Context, actor authz.Actor, policyID string, req UpdateRetentionPolicyRequest) (domain.RetentionPolicy, error) {
-	if !authz.Can(actor, "security:write", actor.TenantID) {
+	if !s.authorized(ctx, actor, "security:write", "retention_policy", policyID, "") {
 		return domain.RetentionPolicy{}, ErrForbidden
 	}
 	if strings.TrimSpace(policyID) == "" {
@@ -2315,7 +2315,7 @@ func (s *ControlService) UpdateRetentionPolicy(ctx context.Context, actor authz.
 }
 
 func (s *ControlService) CreateProviderConnection(ctx context.Context, actor authz.Actor, req CreateProviderConnectionRequest) (domain.ProviderConnection, error) {
-	if !authz.Can(actor, "sources:write", actor.TenantID) {
+	if !s.authorized(ctx, actor, "sources:write", "provider_connection", "", "") {
 		return domain.ProviderConnection{}, ErrForbidden
 	}
 	if err := validateProviderConnectionRequest(&req); err != nil {
@@ -2325,14 +2325,14 @@ func (s *ControlService) CreateProviderConnection(ctx context.Context, actor aut
 }
 
 func (s *ControlService) ListProviderConnections(ctx context.Context, actor authz.Actor, limit int) ([]domain.ProviderConnection, error) {
-	if !authz.Can(actor, "sources:read", actor.TenantID) {
+	if !s.authorized(ctx, actor, "sources:read", "provider_connection", "", "") {
 		return nil, ErrForbidden
 	}
 	return s.store.ListProviderConnections(ctx, actor.TenantID, normalizeLimit(limit))
 }
 
 func (s *ControlService) GetProviderConnection(ctx context.Context, actor authz.Actor, connectionID string) (domain.ProviderConnection, error) {
-	if !authz.Can(actor, "sources:read", actor.TenantID) {
+	if !s.authorized(ctx, actor, "sources:read", "provider_connection", connectionID, "") {
 		return domain.ProviderConnection{}, ErrForbidden
 	}
 	if strings.TrimSpace(connectionID) == "" {
@@ -2342,7 +2342,7 @@ func (s *ControlService) GetProviderConnection(ctx context.Context, actor authz.
 }
 
 func (s *ControlService) VerifyProviderConnection(ctx context.Context, actor authz.Actor, connectionID string, req ProviderConnectionStateRequest) (domain.ProviderConnection, error) {
-	if !authz.Can(actor, "sources:write", actor.TenantID) {
+	if !s.authorized(ctx, actor, "sources:write", "provider_connection", connectionID, "") {
 		return domain.ProviderConnection{}, ErrForbidden
 	}
 	if strings.TrimSpace(connectionID) == "" || strings.TrimSpace(req.Reason) == "" {
@@ -2352,7 +2352,7 @@ func (s *ControlService) VerifyProviderConnection(ctx context.Context, actor aut
 }
 
 func (s *ControlService) RevokeProviderConnection(ctx context.Context, actor authz.Actor, connectionID string, req ProviderConnectionStateRequest) (domain.ProviderConnection, error) {
-	if !authz.Can(actor, "sources:write", actor.TenantID) {
+	if !s.authorized(ctx, actor, "sources:write", "provider_connection", connectionID, "") {
 		return domain.ProviderConnection{}, ErrForbidden
 	}
 	if strings.TrimSpace(connectionID) == "" || strings.TrimSpace(req.Reason) == "" {
@@ -2362,7 +2362,7 @@ func (s *ControlService) RevokeProviderConnection(ctx context.Context, actor aut
 }
 
 func (s *ControlService) DryRunReconciliation(ctx context.Context, actor authz.Actor, req ReconciliationJobRequest) (domain.ReconciliationJob, error) {
-	if !authz.Can(actor, "replay:read", actor.TenantID) {
+	if !s.authorized(ctx, actor, "replay:read", "reconciliation_job", req.ConnectionID, "") {
 		return domain.ReconciliationJob{}, ErrForbidden
 	}
 	if err := validateReconciliationJobRequest(&req, false); err != nil {
@@ -2373,7 +2373,7 @@ func (s *ControlService) DryRunReconciliation(ctx context.Context, actor authz.A
 }
 
 func (s *ControlService) CreateReconciliationJob(ctx context.Context, actor authz.Actor, req ReconciliationJobRequest) (domain.ReconciliationJob, error) {
-	if !authz.Can(actor, "replay:write", actor.TenantID) {
+	if !s.authorized(ctx, actor, "replay:write", "reconciliation_job", req.ConnectionID, "") {
 		return domain.ReconciliationJob{}, ErrForbidden
 	}
 	if err := validateReconciliationJobRequest(&req, true); err != nil {
@@ -2383,14 +2383,14 @@ func (s *ControlService) CreateReconciliationJob(ctx context.Context, actor auth
 }
 
 func (s *ControlService) ListReconciliationJobs(ctx context.Context, actor authz.Actor, limit int) ([]domain.ReconciliationJob, error) {
-	if !authz.Can(actor, "replay:read", actor.TenantID) {
+	if !s.authorized(ctx, actor, "replay:read", "reconciliation_job", "", "") {
 		return nil, ErrForbidden
 	}
 	return s.store.ListReconciliationJobs(ctx, actor.TenantID, normalizeLimit(limit))
 }
 
 func (s *ControlService) GetReconciliationJob(ctx context.Context, actor authz.Actor, jobID string) (domain.ReconciliationJob, error) {
-	if !authz.Can(actor, "replay:read", actor.TenantID) {
+	if !s.authorized(ctx, actor, "replay:read", "reconciliation_job", jobID, "") {
 		return domain.ReconciliationJob{}, ErrForbidden
 	}
 	if strings.TrimSpace(jobID) == "" {
@@ -2400,7 +2400,7 @@ func (s *ControlService) GetReconciliationJob(ctx context.Context, actor authz.A
 }
 
 func (s *ControlService) ListReconciliationItems(ctx context.Context, actor authz.Actor, jobID string, limit int) ([]domain.ReconciliationItem, error) {
-	if !authz.Can(actor, "replay:read", actor.TenantID) {
+	if !s.authorized(ctx, actor, "replay:read", "reconciliation_job", jobID, "") {
 		return nil, ErrForbidden
 	}
 	if strings.TrimSpace(jobID) == "" {
@@ -2410,7 +2410,7 @@ func (s *ControlService) ListReconciliationItems(ctx context.Context, actor auth
 }
 
 func (s *ControlService) CancelReconciliationJob(ctx context.Context, actor authz.Actor, jobID string, req ProviderConnectionStateRequest) (domain.ReconciliationJob, error) {
-	if !authz.Can(actor, "replay:write", actor.TenantID) {
+	if !s.authorized(ctx, actor, "replay:write", "reconciliation_job", jobID, "") {
 		return domain.ReconciliationJob{}, ErrForbidden
 	}
 	if strings.TrimSpace(jobID) == "" || strings.TrimSpace(req.Reason) == "" {
@@ -2420,7 +2420,7 @@ func (s *ControlService) CancelReconciliationJob(ctx context.Context, actor auth
 }
 
 func (s *ControlService) CreateAuditExport(ctx context.Context, actor authz.Actor, req CreateAuditExportRequest) (domain.EvidenceExport, error) {
-	if !authz.Can(actor, "audit:read", actor.TenantID) {
+	if !s.authorized(ctx, actor, "audit:read", "audit_export", "", "") {
 		return domain.EvidenceExport{}, ErrForbidden
 	}
 	if (req.IncludeRawPayloads || req.IncludePayloadBodies) && !s.authorized(ctx, actor, "events:raw", "audit_export", "", "") {
@@ -2434,7 +2434,7 @@ func (s *ControlService) CreateAuditExport(ctx context.Context, actor authz.Acto
 }
 
 func (s *ControlService) CreateTransformation(ctx context.Context, actor authz.Actor, req CreateTransformationRequest) (domain.Transformation, error) {
-	if !authz.Can(actor, "routes:write", actor.TenantID) {
+	if !s.authorized(ctx, actor, "routes:write", "transformation", "", "") {
 		return domain.Transformation{}, ErrForbidden
 	}
 	req.Name = strings.TrimSpace(req.Name)
@@ -2450,21 +2450,21 @@ func (s *ControlService) CreateTransformation(ctx context.Context, actor authz.A
 }
 
 func (s *ControlService) ListTransformations(ctx context.Context, actor authz.Actor, limit int) ([]domain.Transformation, error) {
-	if !authz.Can(actor, "routes:read", actor.TenantID) {
+	if !s.authorized(ctx, actor, "routes:read", "transformation", "", "") {
 		return nil, ErrForbidden
 	}
 	return s.store.ListTransformations(ctx, actor.TenantID, normalizeLimit(limit))
 }
 
 func (s *ControlService) GetTransformation(ctx context.Context, actor authz.Actor, transformationID string) (domain.Transformation, error) {
-	if !authz.Can(actor, "routes:read", actor.TenantID) {
+	if !s.authorized(ctx, actor, "routes:read", "transformation", transformationID, "") {
 		return domain.Transformation{}, ErrForbidden
 	}
 	return s.store.GetTransformation(ctx, actor.TenantID, transformationID)
 }
 
 func (s *ControlService) CreateTransformationVersion(ctx context.Context, actor authz.Actor, transformationID string, req CreateTransformationVersionRequest) (domain.TransformationVersion, error) {
-	if !authz.Can(actor, "routes:write", actor.TenantID) {
+	if !s.authorized(ctx, actor, "routes:write", "transformation", transformationID, "") {
 		return domain.TransformationVersion{}, ErrForbidden
 	}
 	if strings.TrimSpace(transformationID) == "" || len(req.Operations) == 0 {
@@ -2477,14 +2477,14 @@ func (s *ControlService) CreateTransformationVersion(ctx context.Context, actor 
 }
 
 func (s *ControlService) ListTransformationVersions(ctx context.Context, actor authz.Actor, transformationID string, limit int) ([]domain.TransformationVersion, error) {
-	if !authz.Can(actor, "routes:read", actor.TenantID) {
+	if !s.authorized(ctx, actor, "routes:read", "transformation", transformationID, "") {
 		return nil, ErrForbidden
 	}
 	return s.store.ListTransformationVersions(ctx, actor.TenantID, transformationID, normalizeLimit(limit))
 }
 
 func (s *ControlService) ActivateTransformationVersion(ctx context.Context, actor authz.Actor, transformationID, versionID string, req ActivateTransformationVersionRequest) (domain.TransformationVersion, error) {
-	if !authz.Can(actor, "routes:write", actor.TenantID) {
+	if !s.authorized(ctx, actor, "routes:write", "transformation_version", versionID, "") {
 		return domain.TransformationVersion{}, ErrForbidden
 	}
 	if strings.TrimSpace(req.Reason) == "" {
@@ -2494,7 +2494,7 @@ func (s *ControlService) ActivateTransformationVersion(ctx context.Context, acto
 }
 
 func (s *ControlService) ListAuditExports(ctx context.Context, actor authz.Actor, limit int) ([]domain.EvidenceExport, error) {
-	if !authz.Can(actor, "audit:read", actor.TenantID) {
+	if !s.authorized(ctx, actor, "audit:read", "audit_export", "", "") {
 		return nil, ErrForbidden
 	}
 	exports, err := s.store.ListAuditExports(ctx, actor.TenantID, normalizeLimit(limit))
@@ -2514,7 +2514,7 @@ func (s *ControlService) ListAuditExports(ctx context.Context, actor authz.Actor
 }
 
 func (s *ControlService) GetAuditExport(ctx context.Context, actor authz.Actor, exportID string) (domain.EvidenceExport, error) {
-	if !authz.Can(actor, "audit:read", actor.TenantID) {
+	if !s.authorized(ctx, actor, "audit:read", "audit_export", exportID, "") {
 		return domain.EvidenceExport{}, ErrForbidden
 	}
 	export, err := s.store.GetAuditExport(ctx, actor.TenantID, exportID)
@@ -2528,7 +2528,7 @@ func (s *ControlService) GetAuditExport(ctx context.Context, actor authz.Actor, 
 }
 
 func (s *ControlService) DownloadAuditExport(ctx context.Context, actor authz.Actor, exportID string) (EvidenceExportDownload, error) {
-	if !authz.Can(actor, "audit:read", actor.TenantID) {
+	if !s.authorized(ctx, actor, "audit:read", "audit_export", exportID, "") {
 		return EvidenceExportDownload{}, ErrForbidden
 	}
 	export, err := s.store.GetAuditExport(ctx, actor.TenantID, exportID)
@@ -2546,14 +2546,14 @@ func (s *ControlService) DownloadAuditExport(ctx context.Context, actor authz.Ac
 }
 
 func (s *ControlService) ListDeadLetter(ctx context.Context, actor authz.Actor, limit int) ([]map[string]any, error) {
-	if !authz.Can(actor, "deliveries:read", actor.TenantID) {
+	if !s.authorized(ctx, actor, "deliveries:read", "dead_letter", "", "") {
 		return nil, ErrForbidden
 	}
 	return s.store.ListDeadLetter(ctx, actor.TenantID, normalizeLimit(limit))
 }
 
 func (s *ControlService) ReleaseDeadLetter(ctx context.Context, actor authz.Actor, entryID string, req DeadLetterReleaseRequest) (ReplayJob, error) {
-	if !authz.Can(actor, "deliveries:retry", actor.TenantID) {
+	if !s.authorized(ctx, actor, "deliveries:retry", "dead_letter", entryID, "") {
 		return ReplayJob{}, ErrForbidden
 	}
 	if req.Reason == "" {
@@ -2563,7 +2563,7 @@ func (s *ControlService) ReleaseDeadLetter(ctx context.Context, actor authz.Acto
 }
 
 func (s *ControlService) BulkReleaseDeadLetter(ctx context.Context, actor authz.Actor, req DeadLetterBulkReleaseRequest) ([]ReplayJob, error) {
-	if !authz.Can(actor, "deliveries:retry", actor.TenantID) {
+	if !s.authorized(ctx, actor, "deliveries:retry", "dead_letter", "", "") {
 		return nil, ErrForbidden
 	}
 	if strings.TrimSpace(req.Reason) == "" {
@@ -2573,14 +2573,14 @@ func (s *ControlService) BulkReleaseDeadLetter(ctx context.Context, actor authz.
 }
 
 func (s *ControlService) ListQuarantine(ctx context.Context, actor authz.Actor, limit int) ([]map[string]any, error) {
-	if !authz.Can(actor, "security:read", actor.TenantID) {
+	if !s.authorized(ctx, actor, "security:read", "quarantine", "", "") {
 		return nil, ErrForbidden
 	}
 	return s.store.ListQuarantine(ctx, actor.TenantID, normalizeLimit(limit))
 }
 
 func (s *ControlService) ApproveQuarantine(ctx context.Context, actor authz.Actor, entryID string, req QuarantineDecisionRequest) (map[string]any, error) {
-	if !authz.Can(actor, "security:write", actor.TenantID) {
+	if !s.authorized(ctx, actor, "security:write", "quarantine", entryID, "") {
 		return nil, ErrForbidden
 	}
 	if req.Reason == "" {
@@ -2590,7 +2590,7 @@ func (s *ControlService) ApproveQuarantine(ctx context.Context, actor authz.Acto
 }
 
 func (s *ControlService) RejectQuarantine(ctx context.Context, actor authz.Actor, entryID string, req QuarantineDecisionRequest) (map[string]any, error) {
-	if !authz.Can(actor, "security:write", actor.TenantID) {
+	if !s.authorized(ctx, actor, "security:write", "quarantine", entryID, "") {
 		return nil, ErrForbidden
 	}
 	if req.Reason == "" {

@@ -252,7 +252,7 @@ func (s *enterpriseFakeStore) DisableAccessPolicyRule(context.Context, string, s
 	return domain.AccessPolicyRule{}, nil
 }
 func (s *enterpriseFakeStore) ExplainAuthorization(context.Context, string, string, AuthzExplainRequest) (authz.Decision, error) {
-	return authz.Decision{}, nil
+	return authz.Decision{}, ErrNotFound
 }
 
 func newFakeOIDCIssuer(t *testing.T, clientID, nonce string) *httptest.Server {

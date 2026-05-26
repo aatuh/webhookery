@@ -113,6 +113,23 @@ func TestControlServiceScopesSourceReadsToActorTenant(t *testing.T) {
 	}
 }
 
+func TestControlServiceUsesCentralAuthorizationForSourceRead(t *testing.T) {
+	store := &policyDecisionStore{decision: authz.Decision{Allowed: false, Reason: "denied by access policy"}}
+	svc := NewControlService(store, ssrf.Validator{Resolver: ssrf.StaticResolver{}})
+	actor := authz.Actor{ID: "usr_1", TenantID: "ten_a", Role: authz.RoleOwner, Scopes: []string{"*"}}
+
+	_, err := svc.GetSource(context.Background(), actor, "src_123")
+	if !errors.Is(err, ErrForbidden) {
+		t.Fatalf("expected policy deny to forbid source read, got %v", err)
+	}
+	if store.sourceTenantID != "" {
+		t.Fatal("source store must not be called after policy deny")
+	}
+	if store.lastTenantID != "ten_a" || store.lastActorID != "usr_1" || store.lastReq.Action != "sources:read" || store.lastReq.ResourceFamily != "source" || store.lastReq.ResourceID != "src_123" {
+		t.Fatalf("unexpected authorization request: tenant=%q actor=%q req=%+v", store.lastTenantID, store.lastActorID, store.lastReq)
+	}
+}
+
 func TestControlServiceSourceMutationRequiresSourcesWrite(t *testing.T) {
 	store := &fakeControlStore{}
 	svc := NewControlService(store, ssrf.Validator{Resolver: ssrf.StaticResolver{}})
@@ -718,6 +735,23 @@ func TestControlServiceProducerClientsRequireSecurityWriteAndRedactSecrets(t *te
 	}
 	if rotated.ClientSecret == "" || rotated.Secret.Hash != "" || store.producerClientReason != "rotation" {
 		t.Fatalf("expected secret rotation metadata without hash, rotated=%+v reason=%q", rotated, store.producerClientReason)
+	}
+}
+
+func TestControlServiceUsesCentralAuthorizationForProducerSecretRotation(t *testing.T) {
+	store := &policyDecisionStore{decision: authz.Decision{Allowed: false, Reason: "denied by access policy"}}
+	svc := NewControlService(store, ssrf.Validator{Resolver: ssrf.StaticResolver{}})
+	actor := authz.Actor{ID: "usr_1", TenantID: "ten_a", Role: authz.RoleOwner, Scopes: []string{"*"}}
+
+	_, err := svc.RotateProducerClientSecret(context.Background(), actor, "pcl_1", RotateProducerClientSecretRequest{Reason: "rotate compromised secret"})
+	if !errors.Is(err, ErrForbidden) {
+		t.Fatalf("expected policy deny to forbid producer secret rotation, got %v", err)
+	}
+	if store.producerClientTenantID != "" || store.producerClientReason != "" {
+		t.Fatal("producer client store must not be called after policy deny")
+	}
+	if store.lastReq.Action != "security:write" || store.lastReq.ResourceFamily != "producer_client" || store.lastReq.ResourceID != "pcl_1" {
+		t.Fatalf("unexpected authorization request: %+v", store.lastReq)
 	}
 }
 
@@ -1343,6 +1377,25 @@ type fakeControlStore struct {
 	approveReplayActorID       string
 	approveReplayReason        string
 	endpoint                   domain.Endpoint
+}
+
+type policyDecisionStore struct {
+	enterpriseFakeStore
+	decision     authz.Decision
+	err          error
+	lastTenantID string
+	lastActorID  string
+	lastReq      AuthzExplainRequest
+}
+
+func (s *policyDecisionStore) ExplainAuthorization(_ context.Context, tenantID, actorID string, req AuthzExplainRequest) (authz.Decision, error) {
+	s.lastTenantID = tenantID
+	s.lastActorID = actorID
+	s.lastReq = req
+	if s.err != nil {
+		return authz.Decision{}, s.err
+	}
+	return s.decision, nil
 }
 
 func (f *fakeControlStore) CreateAPIKey(_ context.Context, input APIKeyCreateInput) (domain.APIKey, error) {
