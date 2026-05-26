@@ -80,7 +80,7 @@ Implementation rules:
 - update the ticket checkmark from `[ ]` to `[x]` only after the ticket is actually complete
 - update the epic checkmark from `[ ]` to `[x]` only when all child tickets are complete
 
-### Ticket E2-T2 - Wire Authorization Service Into Control Methods [ ]
+### Ticket E2-T2 - Wire Authorization Service Into Control Methods [x]
 
 Description: Replace direct `authz.Can` calls in management workflows with the central authorization service.
 
