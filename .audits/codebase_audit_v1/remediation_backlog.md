@@ -59,7 +59,7 @@ Implementation rules:
 - update the ticket checkmark from `[ ]` to `[x]` only after the ticket is actually complete
 - update the epic checkmark from `[ ]` to `[x]` only when all child tickets are complete
 
-## Epic E2 - Authorization Enforcement Consistency [ ]
+## Epic E2 - Authorization Enforcement Consistency [x]
 
 Description: Make resource-aware role bindings and access policies the enforcement path for sensitive workflows while preserving fixed-role compatibility.
 
@@ -96,7 +96,7 @@ Implementation rules:
 - update the ticket checkmark from `[ ]` to `[x]` only after the ticket is actually complete
 - update the epic checkmark from `[ ]` to `[x]` only when all child tickets are complete
 
-### Ticket E2-T3 - Add Resource Policy Regression Tests [ ]
+### Ticket E2-T3 - Add Resource Policy Regression Tests [x]
 
 Description: Add wrong-tenant, denied-policy, allowed-binding, and scope-limited tests for every sensitive resource family.
 
