@@ -5,7 +5,7 @@ out_dir="${1:-integration-evidence}"
 mkdir -p "$out_dir"
 
 migration_count="$(find migrations -type f -name '*.up.sql' | wc -l | tr -d ' ')"
-postgres_outcome="${POSTGRES_INTEGRATION_OUTCOME:-unknown}"
+live_postgres_outcome="${LIVE_POSTGRES_CHECK_OUTCOME:-${POSTGRES_INTEGRATION_OUTCOME:-unknown}}"
 rc_outcome="${RC_CHECK_OUTCOME:-unknown}"
 restore_status="${RESTORE_DRILL_STATUS:-skipped_not_configured}"
 
@@ -18,7 +18,7 @@ restore_status="${RESTORE_DRILL_STATUS:-skipped_not_configured}"
   printf '\n'
   printf '%s\n' "## Checks"
   printf '%s\n' "- Postgres migrations discovered: ${migration_count}"
-  printf '%s\n' "- make postgres-integration-test: ${postgres_outcome}"
+  printf '%s\n' "- make live-postgres-check: ${live_postgres_outcome}"
   printf '%s\n' "- DB-backed make rc-check: ${rc_outcome}"
   printf '%s\n' "- DB-backed RC E2E: covered by make rc-check when WEBHOOKERY_TEST_DATABASE_URL is set"
   printf '%s\n' "- Restore drill: ${restore_status}"

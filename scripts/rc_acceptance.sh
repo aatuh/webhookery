@@ -45,8 +45,8 @@ say "running targeted production-core tests"
 go test ./cmd/whcp ./internal/adapters/httpapi ./internal/adapters/postgres ./internal/app ./internal/worker ./internal/provider ./internal/ssrf ./internal/evidence ./pkg/client ./pkg/verifier
 
 if [ -n "${WEBHOOKERY_TEST_DATABASE_URL:-}" ]; then
-  say "running postgres integration checks"
-  make postgres-integration-test
+  say "running live postgres quality gate"
+  make live-postgres-check
   say "running db-backed rc e2e checks"
   go test ./internal/e2e -run TestRCE2E -count=1
 else
