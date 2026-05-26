@@ -831,7 +831,11 @@ func (s *ControlService) ExplainAuthorization(ctx context.Context, actor authz.A
 	if strings.TrimSpace(req.ActorID) != "" {
 		targetActorID = strings.TrimSpace(req.ActorID)
 	}
-	return store.ExplainAuthorization(ctx, actor.TenantID, targetActorID, req)
+	decision, err := store.ExplainAuthorization(ctx, actor.TenantID, targetActorID, req)
+	if err != nil {
+		return authz.Decision{}, err
+	}
+	return redactAuthorizationDecision(decision), nil
 }
 
 func (s *ControlService) authorized(ctx context.Context, actor authz.Actor, action, resourceFamily, resourceID, environment string) bool {

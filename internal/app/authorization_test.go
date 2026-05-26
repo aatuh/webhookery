@@ -48,6 +48,65 @@ func TestAuthorizationServiceDeniesIncompleteAndWrongTenantContext(t *testing.T)
 	}
 }
 
+func TestAuthorizationServiceDeniesWrongTenantForSensitiveResourceFamilies(t *testing.T) {
+	service := AuthorizationService{}
+	cases := []struct {
+		name   string
+		action string
+		family string
+		id     string
+	}{
+		{"api key", "api_keys:write", "api_key", "key_1"},
+		{"source", "sources:write", "source", "src_1"},
+		{"provider connection", "sources:write", "provider_connection", "pco_1"},
+		{"endpoint", "endpoints:write", "endpoint", "end_1"},
+		{"subscription", "subscriptions:write", "subscription", "sub_1"},
+		{"route", "routes:write", "route", "rou_1"},
+		{"retry policy", "routes:write", "retry_policy", "rtp_1"},
+		{"event type", "schemas:write", "event_type", "invoice.paid"},
+		{"event schema", "schemas:write", "event_schema", "invoice.paid:2026-05-01"},
+		{"event raw", "events:raw", "event", "evt_1"},
+		{"delivery", "deliveries:retry", "delivery", "del_1"},
+		{"replay", "replay:write", "replay", "rpl_1"},
+		{"audit event", "audit:read", "audit_event", "aud_1"},
+		{"audit export", "audit:read", "audit_export", "exp_1"},
+		{"audit anchor", "security:write", "audit_chain_anchor", "anc_1"},
+		{"retention policy", "security:write", "retention_policy", "ret_1"},
+		{"reconciliation", "replay:write", "reconciliation_job", "rec_1"},
+		{"transformation", "routes:write", "transformation", "trn_1"},
+		{"notification channel", "ops:write", "notification_channel", "nch_1"},
+		{"notification delivery", "ops:write", "notification_delivery", "ndl_1"},
+		{"siem sink", "security:write", "siem_sink", "snk_1"},
+		{"siem delivery", "security:write", "siem_delivery", "sdl_1"},
+		{"producer client", "security:write", "producer_client", "pcl_1"},
+		{"producer mtls", "security:write", "producer_mtls_identity", "pmi_1"},
+		{"identity provider", "security:write", "identity_provider", "idp_1"},
+		{"auth session", "security:write", "auth_session", "ses_1"},
+		{"scim token", "security:write", "scim_token", "scm_1"},
+		{"role binding", "security:write", "role_binding", "rbd_1"},
+		{"access policy", "security:write", "access_policy", "pol_1"},
+		{"provider adapter", "security:write", "provider_adapter", "pad_1"},
+		{"adapter version", "security:write", "adapter_version", "adv_1"},
+		{"dead letter", "deliveries:retry", "dead_letter", "dlq_1"},
+		{"quarantine", "security:write", "quarantine", "qua_1"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			decision := service.Authorize(context.Background(), AuthorizationRequest{
+				Actor:          authz.Actor{ID: "usr_1", TenantID: "ten_a", Role: authz.RoleOwner, Scopes: []string{"*"}},
+				TenantID:       "ten_b",
+				Action:         tc.action,
+				ResourceFamily: tc.family,
+				ResourceID:     tc.id,
+				Environment:    "production",
+			})
+			if decision.Allowed || decision.Reason != "actor tenant does not match resource tenant" {
+				t.Fatalf("expected wrong-tenant deny, got %+v", decision)
+			}
+		})
+	}
+}
+
 func TestAuthorizationServiceUsesEnterpriseExplainWithResourceContext(t *testing.T) {
 	store := &authorizationFakeStore{decision: authz.Decision{
 		Allowed:              true,

@@ -755,6 +755,149 @@ func TestControlServiceUsesCentralAuthorizationForProducerSecretRotation(t *test
 	}
 }
 
+func TestControlServiceResourcePoliciesDenySensitiveOperations(t *testing.T) {
+	cases := []struct {
+		name       string
+		run        func(*ControlService, authz.Actor) error
+		wantAction string
+		wantFamily string
+		wantID     string
+		wantEnv    string
+	}{
+		{
+			name: "raw payload read", wantAction: "events:raw", wantFamily: "event", wantID: "evt_raw",
+			run: func(svc *ControlService, actor authz.Actor) error {
+				_, err := svc.GetRawPayload(context.Background(), actor, "evt_raw")
+				return err
+			},
+		},
+		{
+			name: "replay creation", wantAction: "replay:write", wantFamily: "replay", wantID: "evt_replay",
+			run: func(svc *ControlService, actor authz.Actor) error {
+				_, err := svc.CreateReplay(context.Background(), actor, ReplayRequest{EventID: "evt_replay", Reason: "investigate"})
+				return err
+			},
+		},
+		{
+			name: "audit export payload inclusion", wantAction: "events:raw", wantFamily: "audit_export",
+			run: func(svc *ControlService, actor authz.Actor) error {
+				_, err := svc.CreateAuditExport(context.Background(), actor, CreateAuditExportRequest{IncludePayloadBodies: true, Reason: "export evidence"})
+				return err
+			},
+		},
+		{
+			name: "endpoint production change", wantAction: "endpoints:write", wantFamily: "endpoint", wantID: "end_prod", wantEnv: "production",
+			run: func(svc *ControlService, actor authz.Actor) error {
+				_, _, err := svc.UpdateEndpoint(context.Background(), actor, "end_prod", UpdateEndpointRequest{Name: ptrString("prod receiver"), Reason: "rename"})
+				return err
+			},
+		},
+		{
+			name: "notification mutation", wantAction: "ops:write", wantFamily: "notification_channel", wantID: "nch_1",
+			run: func(svc *ControlService, actor authz.Actor) error {
+				_, _, err := svc.UpdateNotificationChannel(context.Background(), actor, "nch_1", UpdateNotificationChannelRequest{Name: ptrString("ops"), Reason: "rename"})
+				return err
+			},
+		},
+		{
+			name: "siem mutation", wantAction: "security:write", wantFamily: "siem_sink", wantID: "snk_1",
+			run: func(svc *ControlService, actor authz.Actor) error {
+				_, _, err := svc.UpdateSIEMSink(context.Background(), actor, "snk_1", UpdateSIEMSinkRequest{Name: ptrString("siem"), Reason: "rename"})
+				return err
+			},
+		},
+		{
+			name: "secret rotation", wantAction: "security:write", wantFamily: "producer_client", wantID: "pcl_1",
+			run: func(svc *ControlService, actor authz.Actor) error {
+				_, err := svc.RotateProducerClientSecret(context.Background(), actor, "pcl_1", RotateProducerClientSecretRequest{Reason: "rotate"})
+				return err
+			},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			store := &policyDecisionStore{
+				decide: func(tenantID, _ string, req AuthzExplainRequest) (authz.Decision, error) {
+					return testAuthorizationDecision(tenantID, req, req.Action == "audit:read"), nil
+				},
+			}
+			svc := NewControlService(store, ssrf.Validator{Resolver: ssrf.StaticResolver{"receiver.example": {netip.MustParseAddr("93.184.216.34")}}})
+			actor := authz.Actor{ID: "usr_1", TenantID: "ten_a", Role: authz.RoleOwner, Scopes: []string{"*"}}
+
+			err := tc.run(svc, actor)
+			if !errors.Is(err, ErrForbidden) {
+				t.Fatalf("expected forbidden from policy deny, got %v", err)
+			}
+			if store.lastReq.Action != tc.wantAction || store.lastReq.ResourceFamily != tc.wantFamily || store.lastReq.ResourceID != tc.wantID || store.lastReq.Environment != tc.wantEnv {
+				t.Fatalf("unexpected authorization request: got %+v want action=%q family=%q id=%q env=%q", store.lastReq, tc.wantAction, tc.wantFamily, tc.wantID, tc.wantEnv)
+			}
+		})
+	}
+}
+
+func TestControlServiceResourcePolicyAllowsBindingAndPreservesScopeLimit(t *testing.T) {
+	store := &policyDecisionStore{
+		decide: func(tenantID, _ string, req AuthzExplainRequest) (authz.Decision, error) {
+			return testAuthorizationDecision(tenantID, req, true), nil
+		},
+	}
+	svc := NewControlService(store, ssrf.Validator{Resolver: ssrf.StaticResolver{"receiver.example": {netip.MustParseAddr("93.184.216.34")}}})
+	boundActor := authz.Actor{ID: "usr_binding", TenantID: "ten_a", Role: authz.RoleSupport, Scopes: []string{"endpoints:write"}}
+	rawURL := "https://receiver.example/hook"
+
+	_, result, err := svc.UpdateEndpoint(context.Background(), boundActor, "end_1", UpdateEndpointRequest{URL: &rawURL, Reason: "resource binding allows endpoint change"})
+	if err != nil {
+		t.Fatalf("expected resource binding allow, got %v", err)
+	}
+	if !result.Allowed || store.endpointTenantID != "ten_a" || store.endpointID != "end_1" {
+		t.Fatalf("expected tenant-scoped endpoint update after binding allow, result=%+v tenant=%q endpoint=%q", result, store.endpointTenantID, store.endpointID)
+	}
+
+	scopeLimited := authz.Actor{ID: "usr_limited", TenantID: "ten_a", Role: authz.RoleOwner, Scopes: []string{"events:read"}}
+	_, err = svc.GetRawPayload(context.Background(), scopeLimited, "evt_1")
+	if !errors.Is(err, ErrForbidden) {
+		t.Fatalf("expected actor scope to limit enterprise allow, got %v", err)
+	}
+}
+
+func TestControlServiceExplainAuthorizationOmitsSensitiveAttributes(t *testing.T) {
+	store := &policyDecisionStore{
+		decide: func(tenantID, _ string, req AuthzExplainRequest) (authz.Decision, error) {
+			decision := testAuthorizationDecision(tenantID, req, true)
+			decision.Resource.Attributes = req.Attributes
+			return decision, nil
+		},
+	}
+	svc := NewControlService(store, ssrf.Validator{Resolver: ssrf.StaticResolver{}})
+	actor := authz.Actor{ID: "usr_1", TenantID: "ten_a", Role: authz.RoleSecurity, Scopes: []string{"security:read"}}
+	decision, err := svc.ExplainAuthorization(context.Background(), actor, AuthzExplainRequest{
+		Action:         "events:raw",
+		ResourceFamily: "event",
+		ResourceID:     "evt_1",
+		Attributes: map[string]string{
+			"payload_body":   `{"token":"payload-secret-value"}`,
+			"session_token":  "sess_secret_value",
+			"provider_token": "ghp_secret_value",
+			"webhook_secret": "whsec_secret_value",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(decision.Resource.Attributes) != 0 {
+		t.Fatalf("expected explain response attributes to be omitted, got %+v", decision.Resource.Attributes)
+	}
+	raw, err := json.Marshal(decision)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, secret := range []string{"payload-secret-value", "sess_secret_value", "ghp_secret_value", "whsec_secret_value"} {
+		if strings.Contains(string(raw), secret) {
+			t.Fatalf("explain output leaked sensitive value %q: %s", secret, raw)
+		}
+	}
+}
+
 func TestControlServiceProducerMTLSIdentitiesValidateCertAndScopeTenant(t *testing.T) {
 	store := &fakeControlStore{}
 	svc := NewControlService(store, ssrf.Validator{Resolver: ssrf.StaticResolver{}})
@@ -1383,19 +1526,47 @@ type policyDecisionStore struct {
 	enterpriseFakeStore
 	decision     authz.Decision
 	err          error
+	decide       func(tenantID, actorID string, req AuthzExplainRequest) (authz.Decision, error)
 	lastTenantID string
 	lastActorID  string
 	lastReq      AuthzExplainRequest
+	calls        []AuthzExplainRequest
 }
 
 func (s *policyDecisionStore) ExplainAuthorization(_ context.Context, tenantID, actorID string, req AuthzExplainRequest) (authz.Decision, error) {
 	s.lastTenantID = tenantID
 	s.lastActorID = actorID
 	s.lastReq = req
+	s.calls = append(s.calls, req)
 	if s.err != nil {
 		return authz.Decision{}, s.err
 	}
+	if s.decide != nil {
+		return s.decide(tenantID, actorID, req)
+	}
 	return s.decision, nil
+}
+
+func testAuthorizationDecision(tenantID string, req AuthzExplainRequest, allowed bool) authz.Decision {
+	decision := authz.Decision{
+		Allowed: allowed,
+		Action:  req.Action,
+		Resource: authz.Resource{
+			TenantID:    tenantID,
+			Family:      req.ResourceFamily,
+			ID:          req.ResourceID,
+			Environment: req.Environment,
+		},
+		RequiredScopes: []string{req.Action},
+	}
+	if allowed {
+		decision.Reason = "allowed by resource role binding"
+		decision.MatchedRoleBindingID = "rb_1"
+		return decision
+	}
+	decision.Reason = "denied by access policy"
+	decision.MatchedPolicyRuleID = "pol_1"
+	return decision
 }
 
 func (f *fakeControlStore) CreateAPIKey(_ context.Context, input APIKeyCreateInput) (domain.APIKey, error) {

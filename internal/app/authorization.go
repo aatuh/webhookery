@@ -56,6 +56,7 @@ func (s AuthorizationService) Authorize(ctx context.Context, req AuthorizationRe
 		})
 		if err == nil {
 			explained.RequiredScopes = []string{action}
+			explained = redactAuthorizationDecision(explained)
 			if !explained.Allowed {
 				return explained
 			}
@@ -73,5 +74,10 @@ func (s AuthorizationService) Authorize(ctx context.Context, req AuthorizationRe
 	decision.Allowed = true
 	decision.Reason = "allowed by baseline role"
 	decision.MatchedRole = string(req.Actor.Role)
+	return decision
+}
+
+func redactAuthorizationDecision(decision authz.Decision) authz.Decision {
+	decision.Resource.Attributes = nil
 	return decision
 }
