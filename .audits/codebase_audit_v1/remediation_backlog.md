@@ -132,7 +132,7 @@ Implementation rules:
 - update the ticket checkmark from `[ ]` to `[x]` only after the ticket is actually complete
 - update the epic checkmark from `[ ]` to `[x]` only when all child tickets are complete
 
-### Ticket E3-T2 - Move Delivery Fanout Orchestration Into App Services [ ]
+### Ticket E3-T2 - Move Delivery Fanout Orchestration Into App Services [x]
 
 Description: Move route/subscription matching, transformation selection, payload snapshot creation decisions, and replay fanout policy out of `postgres.Store`.
 
