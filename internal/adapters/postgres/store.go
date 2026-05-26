@@ -434,8 +434,13 @@ func (s *Store) ListAPIKeys(ctx context.Context, tenantID string, limit int) ([]
 }
 
 func (s *Store) RevokeAPIKey(ctx context.Context, tenantID, apiKeyID, actorID, reason string) (domain.APIKey, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return domain.APIKey{}, err
+	}
+	defer rollback(ctx, tx)
 	var item domain.APIKey
-	err := s.pool.QueryRow(ctx, `
+	err = tx.QueryRow(ctx, `
 		UPDATE api_keys
 		SET state='revoked', revoked_at=now()
 		WHERE tenant_id=$1 AND id=$2 AND state <> 'revoked'
@@ -448,7 +453,12 @@ func (s *Store) RevokeAPIKey(ctx context.Context, tenantID, apiKeyID, actorID, r
 	if err != nil {
 		return domain.APIKey{}, err
 	}
-	_ = s.recordAuditEvent(ctx, auditEventInput{TenantID: tenantID, ActorID: actorID, Action: "api_key.revoked", Resource: "api_key", ResourceID: apiKeyID, Reason: reason})
+	if _, err := recordAuditEventTx(ctx, tx, auditEventInput{TenantID: tenantID, ActorID: actorID, Action: "api_key.revoked", Resource: "api_key", ResourceID: apiKeyID, Reason: reason}); err != nil {
+		return domain.APIKey{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return domain.APIKey{}, err
+	}
 	return item, nil
 }
 
@@ -2871,7 +2881,12 @@ func (s *Store) GetDeliveryAttempt(ctx context.Context, tenantID, attemptID stri
 }
 
 func (s *Store) RetryDelivery(ctx context.Context, tenantID, deliveryID, actorID, reason string) (domain.Delivery, error) {
-	row := s.pool.QueryRow(ctx, `UPDATE deliveries SET state='scheduled', next_attempt_at=now(), locked_by=NULL, lock_expires_at=NULL WHERE tenant_id=$1 AND id=$2 RETURNING id, tenant_id, event_id, endpoint_id, COALESCE(route_id,''), COALESCE(route_version_id,''), COALESCE(subscription_id,''), COALESCE(subscription_version_id,''), COALESCE(retry_policy_id,''), COALESCE(replay_job_id,''), COALESCE(adapter_version_id,''), COALESCE(normalized_envelope_id,''), COALESCE(transformation_version_id,''), COALESCE(delivery_payload_id,''), COALESCE((SELECT p.sha256 FROM delivery_payloads p WHERE p.tenant_id=deliveries.tenant_id AND p.id=deliveries.delivery_payload_id), ''), COALESCE(retry_seed,''), state, attempt_count, COALESCE(next_attempt_at, 'epoch'::timestamptz)`, tenantID, deliveryID)
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return domain.Delivery{}, err
+	}
+	defer rollback(ctx, tx)
+	row := tx.QueryRow(ctx, `UPDATE deliveries SET state='scheduled', next_attempt_at=now(), locked_by=NULL, lock_expires_at=NULL WHERE tenant_id=$1 AND id=$2 RETURNING id, tenant_id, event_id, endpoint_id, COALESCE(route_id,''), COALESCE(route_version_id,''), COALESCE(subscription_id,''), COALESCE(subscription_version_id,''), COALESCE(retry_policy_id,''), COALESCE(replay_job_id,''), COALESCE(adapter_version_id,''), COALESCE(normalized_envelope_id,''), COALESCE(transformation_version_id,''), COALESCE(delivery_payload_id,''), COALESCE((SELECT p.sha256 FROM delivery_payloads p WHERE p.tenant_id=deliveries.tenant_id AND p.id=deliveries.delivery_payload_id), ''), COALESCE(retry_seed,''), state, attempt_count, COALESCE(next_attempt_at, 'epoch'::timestamptz)`, tenantID, deliveryID)
 	item, err := scanDelivery(row)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return domain.Delivery{}, app.ErrNotFound
@@ -2879,12 +2894,22 @@ func (s *Store) RetryDelivery(ctx context.Context, tenantID, deliveryID, actorID
 	if err != nil {
 		return domain.Delivery{}, err
 	}
-	_ = s.recordAuditEvent(ctx, auditEventInput{TenantID: tenantID, ActorID: actorID, Action: "delivery.retry_requested", Resource: "delivery", ResourceID: deliveryID, Reason: reason})
+	if _, err := recordAuditEventTx(ctx, tx, auditEventInput{TenantID: tenantID, ActorID: actorID, Action: "delivery.retry_requested", Resource: "delivery", ResourceID: deliveryID, Reason: reason}); err != nil {
+		return domain.Delivery{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return domain.Delivery{}, err
+	}
 	return item, nil
 }
 
 func (s *Store) CancelDelivery(ctx context.Context, tenantID, deliveryID, actorID, reason string) (domain.Delivery, error) {
-	row := s.pool.QueryRow(ctx, `UPDATE deliveries SET state='canceled', locked_by=NULL, lock_expires_at=NULL WHERE tenant_id=$1 AND id=$2 AND state NOT IN ('succeeded','dead_lettered','canceled') RETURNING id, tenant_id, event_id, endpoint_id, COALESCE(route_id,''), COALESCE(route_version_id,''), COALESCE(subscription_id,''), COALESCE(subscription_version_id,''), COALESCE(retry_policy_id,''), COALESCE(replay_job_id,''), COALESCE(adapter_version_id,''), COALESCE(normalized_envelope_id,''), COALESCE(transformation_version_id,''), COALESCE(delivery_payload_id,''), COALESCE((SELECT p.sha256 FROM delivery_payloads p WHERE p.tenant_id=deliveries.tenant_id AND p.id=deliveries.delivery_payload_id), ''), COALESCE(retry_seed,''), state, attempt_count, COALESCE(next_attempt_at, 'epoch'::timestamptz)`, tenantID, deliveryID)
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return domain.Delivery{}, err
+	}
+	defer rollback(ctx, tx)
+	row := tx.QueryRow(ctx, `UPDATE deliveries SET state='canceled', locked_by=NULL, lock_expires_at=NULL WHERE tenant_id=$1 AND id=$2 AND state NOT IN ('succeeded','dead_lettered','canceled') RETURNING id, tenant_id, event_id, endpoint_id, COALESCE(route_id,''), COALESCE(route_version_id,''), COALESCE(subscription_id,''), COALESCE(subscription_version_id,''), COALESCE(retry_policy_id,''), COALESCE(replay_job_id,''), COALESCE(adapter_version_id,''), COALESCE(normalized_envelope_id,''), COALESCE(transformation_version_id,''), COALESCE(delivery_payload_id,''), COALESCE((SELECT p.sha256 FROM delivery_payloads p WHERE p.tenant_id=deliveries.tenant_id AND p.id=deliveries.delivery_payload_id), ''), COALESCE(retry_seed,''), state, attempt_count, COALESCE(next_attempt_at, 'epoch'::timestamptz)`, tenantID, deliveryID)
 	item, err := scanDelivery(row)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return domain.Delivery{}, app.ErrNotFound
@@ -2892,7 +2917,12 @@ func (s *Store) CancelDelivery(ctx context.Context, tenantID, deliveryID, actorI
 	if err != nil {
 		return domain.Delivery{}, err
 	}
-	_ = s.recordAuditEvent(ctx, auditEventInput{TenantID: tenantID, ActorID: actorID, Action: "delivery.canceled", Resource: "delivery", ResourceID: deliveryID, Reason: reason})
+	if _, err := recordAuditEventTx(ctx, tx, auditEventInput{TenantID: tenantID, ActorID: actorID, Action: "delivery.canceled", Resource: "delivery", ResourceID: deliveryID, Reason: reason}); err != nil {
+		return domain.Delivery{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return domain.Delivery{}, err
+	}
 	return item, nil
 }
 
@@ -5291,7 +5321,9 @@ func (s *Store) DownloadAuditExport(ctx context.Context, tenantID, exportID, act
 	if evidence.SHA256(body) != out.SHA256 {
 		return app.EvidenceExportDownload{}, errors.New("audit export bundle hash mismatch")
 	}
-	_ = s.recordAuditEvent(ctx, auditEventInput{TenantID: tenantID, ActorID: actorID, Action: "audit_export.downloaded", Resource: "audit_export", ResourceID: exportID})
+	if err := s.recordAuditEvent(ctx, auditEventInput{TenantID: tenantID, ActorID: actorID, Action: "audit_export.downloaded", Resource: "audit_export", ResourceID: exportID}); err != nil {
+		return app.EvidenceExportDownload{}, err
+	}
 	out = normalizeEvidenceExportTimes(out)
 	return app.EvidenceExportDownload{
 		Export:      out,
@@ -5345,10 +5377,20 @@ func (s *Store) ReleaseDeadLetter(ctx context.Context, tenantID, entryID, actorI
 	if err != nil {
 		return app.ReplayJob{}, err
 	}
-	if _, err := s.pool.Exec(ctx, `UPDATE dead_letter_entries SET state='released' WHERE tenant_id=$1 AND id=$2`, tenantID, entryID); err != nil {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
 		return app.ReplayJob{}, err
 	}
-	_ = s.recordAuditEvent(ctx, auditEventInput{TenantID: tenantID, ActorID: actorID, Action: "dead_letter.released", Resource: "dead_letter_entry", ResourceID: entryID, Reason: reason})
+	defer rollback(ctx, tx)
+	if _, err := tx.Exec(ctx, `UPDATE dead_letter_entries SET state='released' WHERE tenant_id=$1 AND id=$2`, tenantID, entryID); err != nil {
+		return app.ReplayJob{}, err
+	}
+	if _, err := recordAuditEventTx(ctx, tx, auditEventInput{TenantID: tenantID, ActorID: actorID, Action: "dead_letter.released", Resource: "dead_letter_entry", ResourceID: entryID, Reason: reason}); err != nil {
+		return app.ReplayJob{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return app.ReplayJob{}, err
+	}
 	return job, nil
 }
 
@@ -5387,33 +5429,54 @@ func (s *Store) ListQuarantine(ctx context.Context, tenantID string, limit int) 
 }
 
 func (s *Store) ApproveQuarantine(ctx context.Context, tenantID, entryID, actorID, reason string, routeAfterRelease bool) (map[string]any, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer rollback(ctx, tx)
 	var eventID string
-	err := s.pool.QueryRow(ctx, `UPDATE quarantine_entries SET state='approved' WHERE tenant_id=$1 AND id=$2 AND state='open' RETURNING COALESCE(event_id,'')`, tenantID, entryID).Scan(&eventID)
+	err = tx.QueryRow(ctx, `UPDATE quarantine_entries SET state='approved' WHERE tenant_id=$1 AND id=$2 AND state='open' RETURNING COALESCE(event_id,'')`, tenantID, entryID).Scan(&eventID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, app.ErrNotFound
 	}
 	if err != nil {
 		return nil, err
 	}
-	_ = s.recordAuditEvent(ctx, auditEventInput{TenantID: tenantID, ActorID: actorID, Action: "quarantine.approved", Resource: "quarantine_entry", ResourceID: entryID, Reason: reason})
+	if _, err := recordAuditEventTx(ctx, tx, auditEventInput{TenantID: tenantID, ActorID: actorID, Action: "quarantine.approved", Resource: "quarantine_entry", ResourceID: entryID, Reason: reason}); err != nil {
+		return nil, err
+	}
 	if routeAfterRelease && eventID != "" {
-		if err := s.enqueueRouteEvent(ctx, tenantID, eventID, false); err != nil {
+		payload, _ := json.Marshal(map[string]any{"event_id": eventID, "allow_recovered": false})
+		if _, err := tx.Exec(ctx, `INSERT INTO outbox(id, tenant_id, kind, resource_id, payload) VALUES($1,$2,$3,$4,$5)`, mustID("out"), tenantID, app.OutboxKindRouteEvent, eventID, payload); err != nil {
 			return nil, err
 		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, err
 	}
 	return map[string]any{"id": entryID, "event_id": eventID, "state": "approved"}, nil
 }
 
 func (s *Store) RejectQuarantine(ctx context.Context, tenantID, entryID, actorID, reason string) (map[string]any, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer rollback(ctx, tx)
 	var eventID string
-	err := s.pool.QueryRow(ctx, `UPDATE quarantine_entries SET state='rejected' WHERE tenant_id=$1 AND id=$2 AND state='open' RETURNING COALESCE(event_id,'')`, tenantID, entryID).Scan(&eventID)
+	err = tx.QueryRow(ctx, `UPDATE quarantine_entries SET state='rejected' WHERE tenant_id=$1 AND id=$2 AND state='open' RETURNING COALESCE(event_id,'')`, tenantID, entryID).Scan(&eventID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, app.ErrNotFound
 	}
 	if err != nil {
 		return nil, err
 	}
-	_ = s.recordAuditEvent(ctx, auditEventInput{TenantID: tenantID, ActorID: actorID, Action: "quarantine.rejected", Resource: "quarantine_entry", ResourceID: entryID, Reason: reason})
+	if _, err := recordAuditEventTx(ctx, tx, auditEventInput{TenantID: tenantID, ActorID: actorID, Action: "quarantine.rejected", Resource: "quarantine_entry", ResourceID: entryID, Reason: reason}); err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, err
+	}
 	return map[string]any{"id": entryID, "event_id": eventID, "state": "rejected"}, nil
 }
 
@@ -5625,14 +5688,24 @@ func (s *Store) updateReplayState(ctx context.Context, tenantID, replayJobID, ac
 	if state == "scheduled" {
 		stateGuard = "state NOT IN ('completed','canceled','pending_approval')"
 	}
-	item, err := scanReplayJob(s.pool.QueryRow(ctx, `UPDATE replay_jobs SET state=$1`+extra+` WHERE tenant_id=$2 AND id=$3 AND `+stateGuard+` RETURNING id, state, scope_hash, config_mode, rate_limit_per_minute, total_items, processed_items, failed_items, approval_required, COALESCE(approved_by,''), approved_at`, state, tenantID, replayJobID))
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return app.ReplayJob{}, err
+	}
+	defer rollback(ctx, tx)
+	item, err := scanReplayJob(tx.QueryRow(ctx, `UPDATE replay_jobs SET state=$1`+extra+` WHERE tenant_id=$2 AND id=$3 AND `+stateGuard+` RETURNING id, state, scope_hash, config_mode, rate_limit_per_minute, total_items, processed_items, failed_items, approval_required, COALESCE(approved_by,''), approved_at`, state, tenantID, replayJobID))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return app.ReplayJob{}, app.ErrNotFound
 	}
 	if err != nil {
 		return app.ReplayJob{}, err
 	}
-	_ = s.recordAuditEvent(ctx, auditEventInput{TenantID: tenantID, ActorID: actorID, Action: action, Resource: "replay_job", ResourceID: replayJobID, Reason: reason})
+	if _, err := recordAuditEventTx(ctx, tx, auditEventInput{TenantID: tenantID, ActorID: actorID, Action: action, Resource: "replay_job", ResourceID: replayJobID, Reason: reason}); err != nil {
+		return app.ReplayJob{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return app.ReplayJob{}, err
+	}
 	return item, nil
 }
 
