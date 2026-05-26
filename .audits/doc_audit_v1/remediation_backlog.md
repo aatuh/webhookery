@@ -181,7 +181,7 @@ Notes:
 
 - Preserve `openapi.yaml` as canonical and keep `sdk/openapi.yaml` aligned.
 
-### Ticket E3-T2 - Create CLI Reference From Current Command Groups [ ]
+### Ticket E3-T2 - Create CLI Reference From Current Command Groups [x]
 
 Description: Move the README command catalog into a CLI reference organized by command group, required scope, example, expected outcome, and elevated-risk action.
 
