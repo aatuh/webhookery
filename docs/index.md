@@ -19,7 +19,7 @@ owner document for a topic and linking to it from secondary docs.
 | `docs/security-promise.md` | All readers | Durable-capture promise, security invariants, and canonical non-claims. | Canonical non-claims reference. Link here instead of repeating caveat lists. |
 | `docs/cli.md` | Operators and developers using `whcp` | CLI command reference and moved README command catalog. | Human CLI reference. `cmd/whcp` remains exact behavior. |
 | `sdk/README.md` | SDK users and maintainers | Committed SDK artifact guidance. | SDK usage and artifact expectations. |
-| `collections/` | API evaluators, operators | Postman and Bruno smoke request examples. | Smoke examples, not full API coverage. |
+| `collections/README.md` and `collections/` | API evaluators, operators | Postman and Bruno smoke request usage, local variables, placeholder signatures, and expected smoke responses. | Smoke examples, not full API coverage. |
 | `docker-compose.yml` | Local developers, evaluators | Local API, worker, migration, PostgreSQL, and optional MinIO topology. | Local runtime example. Not production deployment guidance. |
 | `deploy/kubernetes/`, `deploy/helm/`, `deploy/terraform/` | Platform operators | Profile-specific deployment manifests, chart, and Terraform module. | Deployment profile specifics. Common production posture belongs in shared deployment docs. |
 | `docs/security-review-package.md` | Security reviewers | Artifact map, trust boundaries, review controls, and exit criteria. | Security review packet. It should route to canonical implementation and operations docs. |
