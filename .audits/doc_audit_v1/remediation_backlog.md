@@ -235,7 +235,7 @@ Notes:
 
 - Do not expand collections into full API coverage unless a real reader task requires it.
 
-## Epic E4 - Strengthen Deployment And Release Documentation [ ]
+## Epic E4 - Strengthen Deployment And Release Documentation [x]
 
 Description: Make the self-hosted RC posture clearer across Compose, Kubernetes, Helm, Terraform, release evidence, and restore workflows.
 
@@ -293,7 +293,7 @@ Notes:
 
 - Keep root `RELEASE_EVIDENCE.md` as a short router if useful.
 
-### Ticket E4-T4 - Add Migration And Schema Operations Overview [ ]
+### Ticket E4-T4 - Add Migration And Schema Operations Overview [x]
 
 Description: Add a concise schema/migration overview for DB reviewers and operators, focused on migration ordering, rollback stance, evidence-authority tables, and restore compatibility risk.
 
