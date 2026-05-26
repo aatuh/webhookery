@@ -679,10 +679,110 @@ func TestPostgresControlResourcesTenantIsolationAndEvidence(t *testing.T) {
 	}
 }
 
+func TestPostgresMigrationsAreIdempotentAndEnforceKeyConstraints(t *testing.T) {
+	ctx, store, _ := openPostgresIntegrationStore(t)
+	defer store.Close()
+
+	migrationsDir := filepath.Join("..", "..", "..", "migrations")
+	if err := MigrateUp(ctx, os.Getenv("WEBHOOKERY_TEST_DATABASE_URL"), migrationsDir); err != nil {
+		t.Fatal(err)
+	}
+	files, err := filepath.Glob(filepath.Join(migrationsDir, "*.up.sql"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(files) == 0 {
+		t.Fatal("expected migration files")
+	}
+	for _, file := range files {
+		version := strings.TrimSuffix(filepath.Base(file), ".up.sql")
+		var count int
+		if err := store.pool.QueryRow(ctx, `SELECT count(*) FROM schema_migrations WHERE version=$1`, version).Scan(&count); err != nil {
+			t.Fatal(err)
+		}
+		if count != 1 {
+			t.Fatalf("expected migration %s to be recorded once after rerun, got %d", version, count)
+		}
+	}
+
+	suffix := time.Now().UTC().Format("150405.000000000")
+	tenantID := "ten_it_migration_" + suffix
+	if _, err := store.pool.Exec(ctx, `INSERT INTO tenants(id, name) VALUES($1, 'migration constraints') ON CONFLICT (id) DO NOTHING`, tenantID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.pool.Exec(ctx, `
+		INSERT INTO sources(id, tenant_id, name, provider, adapter, state, encrypted_secret)
+		VALUES($1,$2,'migration source','stripe','stripe','active',$3)`,
+		"src_it_migration_"+suffix, tenantID, []byte("secret")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.pool.Exec(ctx, `
+		INSERT INTO raw_payloads(id, tenant_id, sha256, content_type, size_bytes, body)
+		VALUES($1,$2,'sha256:migration','application/json',2,'{}')`,
+		"raw_it_migration_"+suffix, tenantID); err != nil {
+		t.Fatal(err)
+	}
+	insertEvent := func(id string) error {
+		_, err := store.pool.Exec(ctx, `
+			INSERT INTO events(id, tenant_id, source_id, provider, type, provider_event_id, raw_payload_id, raw_payload_hash,
+				signature_verified, verification_reason, dedupe_key, dedupe_status, received_at)
+			VALUES($1,$2,$3,'stripe','invoice.created',$1,$4,'sha256:migration',true,'valid','same-dedupe-key','new',now())`,
+			id, tenantID, "src_it_migration_"+suffix, "raw_it_migration_"+suffix)
+		return err
+	}
+	if err := insertEvent("evt_it_migration_a_" + suffix); err != nil {
+		t.Fatal(err)
+	}
+	expectPostgresSQLFailure(t, insertEvent("evt_it_migration_b_"+suffix), "duplicate event dedupe key")
+
+	auditA := "aud_it_migration_a_" + suffix
+	auditB := "aud_it_migration_b_" + suffix
+	if _, err := store.pool.Exec(ctx, `
+		INSERT INTO audit_events(id, tenant_id, actor_id, action, resource, resource_id, reason, occurred_at)
+		VALUES($1,$2,'usr_it','migration.constraint','test',$1,'constraint',now()),
+		      ($3,$2,'usr_it','migration.constraint','test',$3,'constraint',now())`,
+		auditA, tenantID, auditB); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.pool.Exec(ctx, `
+		INSERT INTO audit_chain_entries(id, tenant_id, sequence, audit_event_id, event_hash, previous_chain_hash, chain_hash,
+			canonicalization_version, source, state)
+		VALUES($1,$2,1,$3,'sha256:event-a','','sha256:chain-a','audit-chain-v1','backfill','active')`,
+		"ace_it_migration_a_"+suffix, tenantID, auditA); err != nil {
+		t.Fatal(err)
+	}
+	_, err = store.pool.Exec(ctx, `
+		INSERT INTO audit_chain_entries(id, tenant_id, sequence, audit_event_id, event_hash, previous_chain_hash, chain_hash,
+			canonicalization_version, source, state)
+		VALUES($1,$2,1,$3,'sha256:event-b','sha256:chain-a','sha256:chain-b','audit-chain-v1','backfill','active')`,
+		"ace_it_migration_b_"+suffix, tenantID, auditB)
+	expectPostgresSQLFailure(t, err, "duplicate audit chain sequence")
+
+	fingerprint := "sha256:migration-fingerprint-" + suffix
+	if _, err := store.pool.Exec(ctx, `
+		INSERT INTO producer_mtls_identities(id, tenant_id, name, certificate_fingerprint_sha256, subject, not_before, not_after, state)
+		VALUES($1,$2,'migration mTLS',$3,'CN=migration',now(),now() + interval '1 hour','active')`,
+		"mtls_it_migration_a_"+suffix, tenantID, fingerprint); err != nil {
+		t.Fatal(err)
+	}
+	_, err = store.pool.Exec(ctx, `
+		INSERT INTO producer_mtls_identities(id, tenant_id, name, certificate_fingerprint_sha256, subject, not_before, not_after, state)
+		VALUES($1,$2,'migration mTLS duplicate',$3,'CN=migration',now(),now() + interval '1 hour','active')`,
+		"mtls_it_migration_b_"+suffix, tenantID, fingerprint)
+	expectPostgresSQLFailure(t, err, "duplicate producer mTLS fingerprint")
+}
+
 func assertPostgresNotFound(t *testing.T, err error) {
 	t.Helper()
 	if !errors.Is(err, app.ErrNotFound) {
 		t.Fatalf("expected wrong-tenant lookup to return not found, got %v", err)
+	}
+}
+
+func expectPostgresSQLFailure(t *testing.T, err error, operation string) {
+	t.Helper()
+	if err == nil {
+		t.Fatalf("expected SQL constraint failure for %s", operation)
 	}
 }
 
