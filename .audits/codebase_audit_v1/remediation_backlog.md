@@ -63,7 +63,7 @@ Implementation rules:
 
 Description: Make resource-aware role bindings and access policies the enforcement path for sensitive workflows while preserving fixed-role compatibility.
 
-### Ticket E2-T1 - Introduce A Central Authorization Service [ ]
+### Ticket E2-T1 - Introduce A Central Authorization Service [x]
 
 Description: Add a single application-layer authorization service that wraps baseline `authz.Can`, role bindings, access policies, scopes, tenant checks, and explain logging.
 
