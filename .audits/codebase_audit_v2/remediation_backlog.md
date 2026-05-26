@@ -179,7 +179,7 @@ Notes:
 
 Description: Reduce future change risk around the largest modules and improve the live persistence safety net.
 
-### Ticket E5-T1 - Split PostgreSQL Store By Resource Family [ ]
+### Ticket E5-T1 - Split PostgreSQL Store By Resource Family [x]
 
 Description: Move related PostgreSQL methods into smaller files by resource family while preserving public store interfaces and behavior.
 
