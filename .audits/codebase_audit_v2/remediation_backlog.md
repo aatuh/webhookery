@@ -175,7 +175,7 @@ Notes:
 - Use `WEBHOOKERY_TEST_DATABASE_URL`.
 - Keep the test deterministic and isolated by tenant/source identifiers.
 
-## Epic E5 - Maintainability And Persistence Test Depth [ ]
+## Epic E5 - Maintainability And Persistence Test Depth [x]
 
 Description: Reduce future change risk around the largest modules and improve the live persistence safety net.
 
@@ -198,7 +198,7 @@ Notes:
 - Do this after the audit, SSRF, and dedupe fixes have tests.
 - Avoid behavior changes in the file split.
 
-### Ticket E5-T2 - Add A Documented Live-Postgres Quality Gate [ ]
+### Ticket E5-T2 - Add A Documented Live-Postgres Quality Gate [x]
 
 Description: Make live PostgreSQL integration coverage easier to run consistently and document exactly when it is required.
 
