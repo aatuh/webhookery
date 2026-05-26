@@ -238,7 +238,7 @@ func (s *ControlService) enterpriseStore() (EnterpriseIdentityStore, error) {
 }
 
 func (s *ControlService) CreateIdentityProvider(ctx context.Context, actor authz.Actor, req CreateIdentityProviderRequest) (domain.IdentityProvider, error) {
-	if !authz.Can(actor, "security:write", actor.TenantID) {
+	if !s.authorized(ctx, actor, "security:write", "identity_provider", "", "") {
 		return domain.IdentityProvider{}, ErrForbidden
 	}
 	if err := validateIdentityProviderRequest(req); err != nil {
@@ -252,7 +252,7 @@ func (s *ControlService) CreateIdentityProvider(ctx context.Context, actor authz
 }
 
 func (s *ControlService) ListIdentityProviders(ctx context.Context, actor authz.Actor, limit int) ([]domain.IdentityProvider, error) {
-	if !authz.Can(actor, "security:read", actor.TenantID) {
+	if !s.authorized(ctx, actor, "security:read", "identity_provider", "", "") {
 		return nil, ErrForbidden
 	}
 	store, err := s.enterpriseStore()
@@ -263,7 +263,7 @@ func (s *ControlService) ListIdentityProviders(ctx context.Context, actor authz.
 }
 
 func (s *ControlService) GetIdentityProvider(ctx context.Context, actor authz.Actor, providerID string) (domain.IdentityProvider, error) {
-	if !authz.Can(actor, "security:read", actor.TenantID) {
+	if !s.authorized(ctx, actor, "security:read", "identity_provider", providerID, "") {
 		return domain.IdentityProvider{}, ErrForbidden
 	}
 	store, err := s.enterpriseStore()
@@ -274,7 +274,7 @@ func (s *ControlService) GetIdentityProvider(ctx context.Context, actor authz.Ac
 }
 
 func (s *ControlService) UpdateIdentityProvider(ctx context.Context, actor authz.Actor, providerID string, req UpdateIdentityProviderRequest) (domain.IdentityProvider, error) {
-	if !authz.Can(actor, "security:write", actor.TenantID) {
+	if !s.authorized(ctx, actor, "security:write", "identity_provider", providerID, "") {
 		return domain.IdentityProvider{}, ErrForbidden
 	}
 	if strings.TrimSpace(req.Reason) == "" {
@@ -288,7 +288,7 @@ func (s *ControlService) UpdateIdentityProvider(ctx context.Context, actor authz
 }
 
 func (s *ControlService) DisableIdentityProvider(ctx context.Context, actor authz.Actor, providerID string, req StateChangeRequest) (domain.IdentityProvider, error) {
-	if !authz.Can(actor, "security:write", actor.TenantID) {
+	if !s.authorized(ctx, actor, "security:write", "identity_provider", providerID, "") {
 		return domain.IdentityProvider{}, ErrForbidden
 	}
 	if strings.TrimSpace(req.Reason) == "" {
@@ -302,7 +302,7 @@ func (s *ControlService) DisableIdentityProvider(ctx context.Context, actor auth
 }
 
 func (s *ControlService) TestIdentityProvider(ctx context.Context, actor authz.Actor, providerID string, req StateChangeRequest) (domain.IdentityProvider, error) {
-	if !authz.Can(actor, "security:write", actor.TenantID) {
+	if !s.authorized(ctx, actor, "security:write", "identity_provider", providerID, "") {
 		return domain.IdentityProvider{}, ErrForbidden
 	}
 	if strings.TrimSpace(req.Reason) == "" {
@@ -485,7 +485,7 @@ func (s *ControlService) CurrentAuthSession(ctx context.Context, actor authz.Act
 }
 
 func (s *ControlService) ListAuthSessions(ctx context.Context, actor authz.Actor, limit int) ([]domain.AuthSession, error) {
-	if !authz.Can(actor, "security:read", actor.TenantID) {
+	if !s.authorized(ctx, actor, "security:read", "auth_session", "", "") {
 		return nil, ErrForbidden
 	}
 	store, err := s.enterpriseStore()
@@ -496,7 +496,7 @@ func (s *ControlService) ListAuthSessions(ctx context.Context, actor authz.Actor
 }
 
 func (s *ControlService) RevokeAuthSessionByID(ctx context.Context, actor authz.Actor, sessionID string, req StateChangeRequest) (domain.AuthSession, error) {
-	if !authz.Can(actor, "security:write", actor.TenantID) {
+	if !s.authorized(ctx, actor, "security:write", "auth_session", sessionID, "") {
 		return domain.AuthSession{}, ErrForbidden
 	}
 	if strings.TrimSpace(sessionID) == "" || strings.TrimSpace(req.Reason) == "" {
@@ -521,7 +521,7 @@ func (s *ControlService) AuthenticateSCIMToken(ctx context.Context, rawToken str
 }
 
 func (s *ControlService) CreateSCIMToken(ctx context.Context, actor authz.Actor, req CreateSCIMTokenRequest) (SCIMTokenCreated, error) {
-	if !authz.Can(actor, "security:write", actor.TenantID) {
+	if !s.authorized(ctx, actor, "security:write", "scim_token", "", "") {
 		return SCIMTokenCreated{}, ErrForbidden
 	}
 	if strings.TrimSpace(req.Name) == "" {
@@ -551,7 +551,7 @@ func (s *ControlService) CreateSCIMToken(ctx context.Context, actor authz.Actor,
 }
 
 func (s *ControlService) ListSCIMTokens(ctx context.Context, actor authz.Actor, limit int) ([]domain.SCIMToken, error) {
-	if !authz.Can(actor, "security:read", actor.TenantID) {
+	if !s.authorized(ctx, actor, "security:read", "scim_token", "", "") {
 		return nil, ErrForbidden
 	}
 	store, err := s.enterpriseStore()
@@ -562,7 +562,7 @@ func (s *ControlService) ListSCIMTokens(ctx context.Context, actor authz.Actor, 
 }
 
 func (s *ControlService) RevokeSCIMToken(ctx context.Context, actor authz.Actor, tokenID string, req StateChangeRequest) (domain.SCIMToken, error) {
-	if !authz.Can(actor, "security:write", actor.TenantID) {
+	if !s.authorized(ctx, actor, "security:write", "scim_token", tokenID, "") {
 		return domain.SCIMToken{}, ErrForbidden
 	}
 	if strings.TrimSpace(req.Reason) == "" {
@@ -684,7 +684,7 @@ func (s *ControlService) SCIMDeactivateGroup(ctx context.Context, actor authz.Ac
 }
 
 func (s *ControlService) CreateRoleBinding(ctx context.Context, actor authz.Actor, req CreateRoleBindingRequest) (domain.RoleBinding, error) {
-	if !authz.Can(actor, "security:write", actor.TenantID) {
+	if !s.authorized(ctx, actor, "security:write", "role_binding", "", "") {
 		return domain.RoleBinding{}, ErrForbidden
 	}
 	if err := validateRoleBinding(req.PrincipalType, req.PrincipalID, req.ResourceFamily, req.Environment, req.Reason); err != nil {
@@ -701,7 +701,7 @@ func (s *ControlService) CreateRoleBinding(ctx context.Context, actor authz.Acto
 }
 
 func (s *ControlService) ListRoleBindings(ctx context.Context, actor authz.Actor, limit int) ([]domain.RoleBinding, error) {
-	if !authz.Can(actor, "security:read", actor.TenantID) {
+	if !s.authorized(ctx, actor, "security:read", "role_binding", "", "") {
 		return nil, ErrForbidden
 	}
 	store, err := s.enterpriseStore()
@@ -712,7 +712,7 @@ func (s *ControlService) ListRoleBindings(ctx context.Context, actor authz.Actor
 }
 
 func (s *ControlService) UpdateRoleBinding(ctx context.Context, actor authz.Actor, bindingID string, req UpdateRoleBindingRequest) (domain.RoleBinding, error) {
-	if !authz.Can(actor, "security:write", actor.TenantID) {
+	if !s.authorized(ctx, actor, "security:write", "role_binding", bindingID, "") {
 		return domain.RoleBinding{}, ErrForbidden
 	}
 	if strings.TrimSpace(req.Reason) == "" {
@@ -726,7 +726,7 @@ func (s *ControlService) UpdateRoleBinding(ctx context.Context, actor authz.Acto
 }
 
 func (s *ControlService) DisableRoleBinding(ctx context.Context, actor authz.Actor, bindingID string, req StateChangeRequest) (domain.RoleBinding, error) {
-	if !authz.Can(actor, "security:write", actor.TenantID) {
+	if !s.authorized(ctx, actor, "security:write", "role_binding", bindingID, "") {
 		return domain.RoleBinding{}, ErrForbidden
 	}
 	if strings.TrimSpace(req.Reason) == "" {
@@ -740,7 +740,7 @@ func (s *ControlService) DisableRoleBinding(ctx context.Context, actor authz.Act
 }
 
 func (s *ControlService) CreateAccessPolicyRule(ctx context.Context, actor authz.Actor, req CreateAccessPolicyRuleRequest) (domain.AccessPolicyRule, error) {
-	if !authz.Can(actor, "security:write", actor.TenantID) {
+	if !s.authorized(ctx, actor, "security:write", "access_policy", "", "") {
 		return domain.AccessPolicyRule{}, ErrForbidden
 	}
 	if err := validateAccessPolicy(req.Name, req.Action, req.Effect, req.ResourceFamily, req.Environment, req.Conditions, req.Reason); err != nil {
@@ -757,7 +757,7 @@ func (s *ControlService) CreateAccessPolicyRule(ctx context.Context, actor authz
 }
 
 func (s *ControlService) ListAccessPolicyRules(ctx context.Context, actor authz.Actor, limit int) ([]domain.AccessPolicyRule, error) {
-	if !authz.Can(actor, "security:read", actor.TenantID) {
+	if !s.authorized(ctx, actor, "security:read", "access_policy", "", "") {
 		return nil, ErrForbidden
 	}
 	store, err := s.enterpriseStore()
@@ -768,7 +768,7 @@ func (s *ControlService) ListAccessPolicyRules(ctx context.Context, actor authz.
 }
 
 func (s *ControlService) UpdateAccessPolicyRule(ctx context.Context, actor authz.Actor, policyID string, req UpdateAccessPolicyRuleRequest) (domain.AccessPolicyRule, error) {
-	if !authz.Can(actor, "security:write", actor.TenantID) {
+	if !s.authorized(ctx, actor, "security:write", "access_policy", policyID, "") {
 		return domain.AccessPolicyRule{}, ErrForbidden
 	}
 	if strings.TrimSpace(req.Reason) == "" {
@@ -803,7 +803,7 @@ func (s *ControlService) UpdateAccessPolicyRule(ctx context.Context, actor authz
 }
 
 func (s *ControlService) DisableAccessPolicyRule(ctx context.Context, actor authz.Actor, policyID string, req StateChangeRequest) (domain.AccessPolicyRule, error) {
-	if !authz.Can(actor, "security:write", actor.TenantID) {
+	if !s.authorized(ctx, actor, "security:write", "access_policy", policyID, "") {
 		return domain.AccessPolicyRule{}, ErrForbidden
 	}
 	if strings.TrimSpace(req.Reason) == "" {
@@ -817,7 +817,7 @@ func (s *ControlService) DisableAccessPolicyRule(ctx context.Context, actor auth
 }
 
 func (s *ControlService) ExplainAuthorization(ctx context.Context, actor authz.Actor, req AuthzExplainRequest) (authz.Decision, error) {
-	if !authz.Can(actor, "security:read", actor.TenantID) {
+	if !s.authorized(ctx, actor, "security:read", "authz", "", "") {
 		return authz.Decision{}, ErrForbidden
 	}
 	if strings.TrimSpace(req.Action) == "" || strings.TrimSpace(req.ResourceFamily) == "" {

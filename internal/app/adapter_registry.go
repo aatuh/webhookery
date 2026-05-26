@@ -44,7 +44,7 @@ type AdapterVersionTransitionRequest struct {
 }
 
 func (s *ControlService) CreateProviderAdapter(ctx context.Context, actor authz.Actor, req CreateProviderAdapterRequest) (domain.ProviderAdapter, error) {
-	if !authz.Can(actor, "security:write", actor.TenantID) {
+	if !s.authorized(ctx, actor, "security:write", "provider_adapter", "", "") {
 		return domain.ProviderAdapter{}, ErrForbidden
 	}
 	if err := validateProviderAdapterRequest(&req); err != nil {
@@ -54,14 +54,14 @@ func (s *ControlService) CreateProviderAdapter(ctx context.Context, actor authz.
 }
 
 func (s *ControlService) ListProviderAdapters(ctx context.Context, actor authz.Actor, limit int) ([]domain.ProviderAdapter, error) {
-	if !authz.Can(actor, "sources:read", actor.TenantID) {
+	if !s.authorized(ctx, actor, "sources:read", "provider_adapter", "", "") {
 		return nil, ErrForbidden
 	}
 	return s.store.ListProviderAdapters(ctx, actor.TenantID, normalizeLimit(limit))
 }
 
 func (s *ControlService) GetProviderAdapter(ctx context.Context, actor authz.Actor, adapterID string) (domain.ProviderAdapter, error) {
-	if !authz.Can(actor, "sources:read", actor.TenantID) {
+	if !s.authorized(ctx, actor, "sources:read", "provider_adapter", adapterID, "") {
 		return domain.ProviderAdapter{}, ErrForbidden
 	}
 	if strings.TrimSpace(adapterID) == "" {
@@ -71,7 +71,7 @@ func (s *ControlService) GetProviderAdapter(ctx context.Context, actor authz.Act
 }
 
 func (s *ControlService) CreateAdapterVersion(ctx context.Context, actor authz.Actor, adapterID string, req CreateAdapterVersionRequest) (domain.AdapterVersion, error) {
-	if !authz.Can(actor, "security:write", actor.TenantID) {
+	if !s.authorized(ctx, actor, "security:write", "provider_adapter", adapterID, "") {
 		return domain.AdapterVersion{}, ErrForbidden
 	}
 	if strings.TrimSpace(adapterID) == "" {
@@ -84,7 +84,7 @@ func (s *ControlService) CreateAdapterVersion(ctx context.Context, actor authz.A
 }
 
 func (s *ControlService) ListAdapterVersions(ctx context.Context, actor authz.Actor, adapterID string, limit int) ([]domain.AdapterVersion, error) {
-	if !authz.Can(actor, "sources:read", actor.TenantID) {
+	if !s.authorized(ctx, actor, "sources:read", "provider_adapter", adapterID, "") {
 		return nil, ErrForbidden
 	}
 	if strings.TrimSpace(adapterID) == "" {
@@ -94,7 +94,7 @@ func (s *ControlService) ListAdapterVersions(ctx context.Context, actor authz.Ac
 }
 
 func (s *ControlService) CreateAdapterTestVector(ctx context.Context, actor authz.Actor, adapterID, versionID string, req CreateAdapterTestVectorRequest) (domain.AdapterTestVector, error) {
-	if !authz.Can(actor, "security:write", actor.TenantID) {
+	if !s.authorized(ctx, actor, "security:write", "adapter_version", versionID, "") {
 		return domain.AdapterTestVector{}, ErrForbidden
 	}
 	if strings.TrimSpace(adapterID) == "" || strings.TrimSpace(versionID) == "" {
@@ -107,7 +107,7 @@ func (s *ControlService) CreateAdapterTestVector(ctx context.Context, actor auth
 }
 
 func (s *ControlService) TransitionAdapterVersion(ctx context.Context, actor authz.Actor, adapterID, versionID string, req AdapterVersionTransitionRequest) (domain.AdapterVersion, error) {
-	if !authz.Can(actor, "security:write", actor.TenantID) {
+	if !s.authorized(ctx, actor, "security:write", "adapter_version", versionID, "") {
 		return domain.AdapterVersion{}, ErrForbidden
 	}
 	if strings.TrimSpace(adapterID) == "" || strings.TrimSpace(versionID) == "" || strings.TrimSpace(req.Reason) == "" {
