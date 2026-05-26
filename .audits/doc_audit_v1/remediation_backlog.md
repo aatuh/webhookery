@@ -123,7 +123,7 @@ Notes:
 
 - Preserve durable-capture, audit-chain, restore, raw-payload, and secret-redaction guidance.
 
-### Ticket E2-T3 - Move Feature Behavior Reference Out Of The Runbook [ ]
+### Ticket E2-T3 - Move Feature Behavior Reference Out Of The Runbook [x]
 
 Description: Move dense feature behavior sections for auth, delivery, reconciliation, transformations, retention, signal egress, identity, producer trust, and SSRF into clearer reference sections or separate docs.
 
