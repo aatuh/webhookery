@@ -91,7 +91,7 @@ Notes:
 - Cover customer deliveries, notification channels, and SIEM sinks.
 - Keep response truncation and signing behavior unchanged.
 
-## Epic E3 - Durable Audit Evidence [ ]
+## Epic E3 - Durable Audit Evidence [x]
 
 Description: Make audit evidence for sensitive control-plane actions required, transactional, or durably recoverable.
 
@@ -114,7 +114,7 @@ Notes:
 - Prioritize API key revocation, delivery retry/cancel, audit export download, dead-letter release, quarantine approval/rejection, and replay state changes.
 - Keep read-only audit behavior explicit if reads intentionally remain best-effort.
 
-### Ticket E3-T2 - Add Audit Failure Injection Tests [ ]
+### Ticket E3-T2 - Add Audit Failure Injection Tests [x]
 
 Description: Add tests that force audit persistence failure and assert sensitive actions do not silently succeed without audit evidence.
 
