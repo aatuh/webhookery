@@ -159,7 +159,7 @@ Notes:
 
 - Keep legal, security, support, commercial, and trademark docs focused on their own audience.
 
-## Epic E3 - Improve API, CLI, SDK, And Collection Task Support [ ]
+## Epic E3 - Improve API, CLI, SDK, And Collection Task Support [x]
 
 Description: Make the API-first product usable from contracts, CLI commands, SDKs, and request collections without forcing readers through the operations monolith.
 
@@ -217,7 +217,7 @@ Notes:
 
 - Keep examples minimal and avoid showing real secrets.
 
-### Ticket E3-T4 - Document Request Collection Smoke Paths [ ]
+### Ticket E3-T4 - Document Request Collection Smoke Paths [x]
 
 Description: Add collection usage notes for Postman and Bruno, including local variables, placeholder signatures, expected responses, and what each smoke request proves.
 
