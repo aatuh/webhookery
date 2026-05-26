@@ -1,8 +1,29 @@
 # Webhookery Release Evidence Template
 
-Use this template for each tagged release. Keep one evidence file per
-tag/commit, attach generated SBOM and scan artifacts, and record skipped checks
-as failures or explicit accepted-risk exceptions.
+This is the canonical release evidence template. Root `RELEASE_EVIDENCE.md`
+points here and should not grow a parallel checklist.
+
+Use one completed copy per tagged release. Keep generated SBOM and scan
+artifacts with that copy, and record skipped checks as failures or explicit
+accepted-risk exceptions. Store evidence outside source control unless it is
+sanitized for public review.
+
+Do not include real API keys, webhook secrets, bearer tokens, session tokens,
+private keys, provider credentials, database URLs with real credentials, raw
+signatures, raw payload bodies, or customer data.
+
+## Result Rules
+
+- `pass`: command or review completed and evidence is attached or linked.
+- `fail`: command or review failed; release is blocked unless an accepted-risk
+  exception below has owner, expiry, and mitigation.
+- `blocked`: required environment, dependency, or permission is unavailable.
+- `skipped`: only allowed with an accepted-risk exception.
+
+Local release-candidate gates use fake providers and receivers. They must not
+require live Stripe, GitHub, Shopify, Slack, AWS, Vault, SIEM, PagerDuty, or
+customer receiver credentials unless a separate commercial engagement records
+the live third-party provider scope and risk.
 
 ## Release Identity
 

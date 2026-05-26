@@ -141,6 +141,10 @@ Before promoting a release candidate:
 8. Remove, rotate, or restrict bootstrap API key posture after a database-
    backed owner or security key exists.
 
+Record release results in `docs/release-evidence-template.md`. Keep that
+template as the canonical evidence checklist; this runbook only explains the
+operator flow.
+
 Expected local RC sequence:
 
 ```bash
