@@ -772,6 +772,66 @@ func TestPostgresMigrationsAreIdempotentAndEnforceKeyConstraints(t *testing.T) {
 	expectPostgresSQLFailure(t, err, "duplicate producer mTLS fingerprint")
 }
 
+func TestPostgresAuditFailureRollsBackAPIKeyRevocation(t *testing.T) {
+	ctx, store, actor := openPostgresIntegrationStore(t)
+	defer store.Close()
+
+	rawToken := "whkey_audit_failure_" + time.Now().UTC().Format("150405.000000000")
+	key, err := store.CreateAPIKey(ctx, app.APIKeyCreateInput{
+		Key: domain.APIKey{
+			TenantID: actor.TenantID,
+			UserID:   actor.ID,
+			Name:     "audit failure key",
+			Prefix:   "whkey_af",
+			Last4:    "0001",
+			Hash:     app.HashToken(rawToken),
+			Scopes:   []string{"events:read"},
+			State:    domain.StateActive,
+		},
+		Role:    authz.RoleOperator,
+		ActorID: actor.ID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	poisonNextPostgresAuditSequence(t, ctx, store, actor.TenantID)
+
+	if _, err := store.RevokeAPIKey(ctx, actor.TenantID, key.ID, actor.ID, "audit failure injection"); err == nil {
+		t.Fatal("expected audit-chain failure to abort API key revocation")
+	}
+	var state string
+	if err := store.pool.QueryRow(ctx, `SELECT state FROM api_keys WHERE tenant_id=$1 AND id=$2`, actor.TenantID, key.ID).Scan(&state); err != nil {
+		t.Fatal(err)
+	}
+	if state != domain.StateActive {
+		t.Fatalf("API key revocation must roll back when audit evidence fails, got state %q", state)
+	}
+	assertPostgresNoAuditEvent(t, ctx, store, actor.TenantID, "api_key.revoked", "api_key", key.ID)
+}
+
+func TestPostgresAuditFailureRollsBackReplayStateChange(t *testing.T) {
+	ctx, store, actor := openPostgresIntegrationStore(t)
+	defer store.Close()
+
+	job, err := store.CreateReplay(ctx, actor.TenantID, actor.ID, app.ReplayRequest{Reason: "audit failure replay", ConfigMode: app.ReplayConfigCurrent})
+	if err != nil {
+		t.Fatal(err)
+	}
+	poisonNextPostgresAuditSequence(t, ctx, store, actor.TenantID)
+
+	if _, err := store.PauseReplayJob(ctx, actor.TenantID, job.ID, actor.ID, "audit failure injection"); err == nil {
+		t.Fatal("expected audit-chain failure to abort replay pause")
+	}
+	var state string
+	if err := store.pool.QueryRow(ctx, `SELECT state FROM replay_jobs WHERE tenant_id=$1 AND id=$2`, actor.TenantID, job.ID).Scan(&state); err != nil {
+		t.Fatal(err)
+	}
+	if state != "scheduled" {
+		t.Fatalf("replay state change must roll back when audit evidence fails, got state %q", state)
+	}
+	assertPostgresNoAuditEvent(t, ctx, store, actor.TenantID, "replay.paused", "replay_job", job.ID)
+}
+
 func assertPostgresNotFound(t *testing.T, err error) {
 	t.Helper()
 	if !errors.Is(err, app.ErrNotFound) {
@@ -815,6 +875,48 @@ func assertPostgresAuditEvent(t *testing.T, ctx context.Context, store *Store, t
 	}
 	if count == 0 {
 		t.Fatalf("expected audit event %s for %s/%s", action, resource, resourceID)
+	}
+}
+
+func assertPostgresNoAuditEvent(t *testing.T, ctx context.Context, store *Store, tenantID, action, resource, resourceID string) {
+	t.Helper()
+	var count int
+	if err := store.pool.QueryRow(ctx, `
+		SELECT count(*)
+		FROM audit_events
+		WHERE tenant_id=$1 AND action=$2 AND resource=$3 AND resource_id=$4`,
+		tenantID, action, resource, resourceID,
+	).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 0 {
+		t.Fatalf("expected no audit event %s for %s/%s, got %d", action, resource, resourceID, count)
+	}
+}
+
+func poisonNextPostgresAuditSequence(t *testing.T, ctx context.Context, store *Store, tenantID string) {
+	t.Helper()
+	var maxSequence int64
+	if err := store.pool.QueryRow(ctx, `SELECT COALESCE(max(sequence), 0) FROM audit_chain_entries WHERE tenant_id=$1`, tenantID).Scan(&maxSequence); err != nil {
+		t.Fatal(err)
+	}
+	nextSequence := maxSequence + 1
+	if _, err := store.pool.Exec(ctx, `
+		INSERT INTO audit_chain_heads(tenant_id, sequence, chain_hash)
+		VALUES($1,$2,'sha256:poison-head')
+		ON CONFLICT (tenant_id) DO UPDATE SET sequence=EXCLUDED.sequence, chain_hash=EXCLUDED.chain_hash`,
+		tenantID, nextSequence-1,
+	); err != nil {
+		t.Fatal(err)
+	}
+	suffix := strings.NewReplacer(".", "_", ":", "_").Replace(time.Now().UTC().Format("150405.000000000"))
+	if _, err := store.pool.Exec(ctx, `
+		INSERT INTO audit_chain_entries(id, tenant_id, sequence, audit_event_id, event_hash, previous_chain_hash, chain_hash,
+			canonicalization_version, source, state, created_at)
+		VALUES($1,$2,$3,$4,'sha256:poison-event','sha256:poison-head','sha256:poison-chain','audit-chain-v1','live','active',now())`,
+		"ace_it_poison_"+suffix, tenantID, nextSequence, "aud_it_poison_"+suffix,
+	); err != nil {
+		t.Fatal(err)
 	}
 }
 
