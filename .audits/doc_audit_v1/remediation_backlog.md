@@ -257,7 +257,7 @@ Notes:
 
 - Keep profile-specific READMEs concise and link to the common guide.
 
-### Ticket E4-T2 - Rewrite Kubernetes, Helm, And Terraform Profile READMEs [ ]
+### Ticket E4-T2 - Rewrite Kubernetes, Helm, And Terraform Profile READMEs [x]
 
 Description: Update deployment profile READMEs with prerequisites, validation commands, secrets boundary, migration job behavior, image pinning, and links to operations/config references.
 
