@@ -47,18 +47,27 @@ type ControlStore interface {
 }
 
 type ControlService struct {
-	store         ControlStore
-	ssrfValidator ssrf.Validator
-	runtimeConfig domain.OpsConfig
-	authorizer    AuthorizationService
+	store          ControlStore
+	ssrfValidator  ssrf.Validator
+	runtimeConfig  domain.OpsConfig
+	authorizer     AuthorizationService
+	reconciliation *ReconciliationService
 }
 
 func NewControlService(store ControlStore, validator ssrf.Validator) *ControlService {
-	return &ControlService{store: store, ssrfValidator: validator, authorizer: NewAuthorizationService(store)}
+	service := &ControlService{store: store, ssrfValidator: validator, authorizer: NewAuthorizationService(store)}
+	if reconciliationStore, ok := any(store).(ReconciliationWorkStore); ok {
+		service.reconciliation = NewReconciliationService(reconciliationStore, nil)
+	}
+	return service
 }
 
 func NewControlServiceWithRuntimeConfig(store ControlStore, validator ssrf.Validator, runtimeConfig domain.OpsConfig) *ControlService {
-	return &ControlService{store: store, ssrfValidator: validator, runtimeConfig: runtimeConfig, authorizer: NewAuthorizationService(store)}
+	service := &ControlService{store: store, ssrfValidator: validator, runtimeConfig: runtimeConfig, authorizer: NewAuthorizationService(store)}
+	if reconciliationStore, ok := any(store).(ReconciliationWorkStore); ok {
+		service.reconciliation = NewReconciliationService(reconciliationStore, nil)
+	}
+	return service
 }
 
 type CreateSourceRequest struct {
@@ -2251,7 +2260,15 @@ func (s *ControlService) DryRunReconciliation(ctx context.Context, actor authz.A
 		return domain.ReconciliationJob{}, err
 	}
 	req.DryRun = true
-	return s.store.DryRunReconciliation(ctx, actor.TenantID, req)
+	if s.reconciliation != nil {
+		return s.reconciliation.DryRunReconciliation(ctx, actor.TenantID, req)
+	}
+	if dryRunner, ok := any(s.store).(interface {
+		DryRunReconciliation(context.Context, string, ReconciliationJobRequest) (domain.ReconciliationJob, error)
+	}); ok {
+		return dryRunner.DryRunReconciliation(ctx, actor.TenantID, req)
+	}
+	return domain.ReconciliationJob{}, ErrInvalidInput
 }
 
 func (s *ControlService) CreateReconciliationJob(ctx context.Context, actor authz.Actor, req ReconciliationJobRequest) (domain.ReconciliationJob, error) {

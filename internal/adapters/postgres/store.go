@@ -4913,67 +4913,6 @@ func (s *Store) RevokeProviderConnection(ctx context.Context, tenantID, connecti
 	return normalizeProviderConnection(out), nil
 }
 
-func (s *Store) DryRunReconciliation(ctx context.Context, tenantID string, req app.ReconciliationJobRequest) (domain.ReconciliationJob, error) {
-	conn, credential, err := s.getProviderConnectionSecret(ctx, tenantID, req.ConnectionID)
-	if err != nil {
-		return domain.ReconciliationJob{}, err
-	}
-	adapter, ok := reconcile.BuiltInRegistry(nil).Adapter(conn.Provider)
-	if !ok {
-		return domain.ReconciliationJob{}, app.ErrInvalidInput
-	}
-	caps := adapter.Capabilities(conn.Config)
-	job := domain.ReconciliationJob{
-		ID:              "dry_run",
-		TenantID:        tenantID,
-		ConnectionID:    conn.ID,
-		Provider:        conn.Provider,
-		State:           domain.ReconciliationJobStateCompleted,
-		DryRun:          true,
-		CaptureMissing:  req.CaptureMissing,
-		RouteRecovered:  req.RouteRecovered,
-		RedeliverFailed: req.RedeliverFailed,
-		ScopeObjectID:   req.ScopeObjectID,
-		WindowStart:     req.WindowStart,
-		WindowEnd:       req.WindowEnd,
-		Reason:          req.Reason,
-		CreatedAt:       time.Now().UTC(),
-		CompletedAt:     time.Now().UTC(),
-	}
-	if !caps.CanScanEvents {
-		job.TotalItems = 1
-		job.UnrecoverableItems = 1
-		job.Error = strings.Join(caps.Limitations, "; ")
-		return job, nil
-	}
-	scan, err := adapter.Scan(ctx, reconcile.ScanRequest{
-		Connection:  reconcile.Connection{ID: conn.ID, Provider: conn.Provider, CredentialType: conn.CredentialType, Credential: credential, Config: conn.Config},
-		WindowStart: req.WindowStart, WindowEnd: req.WindowEnd, ScopeObjectID: req.ScopeObjectID,
-		CaptureMissing: req.CaptureMissing, RedeliverFailed: req.RedeliverFailed,
-	})
-	if err != nil {
-		job.State = domain.ReconciliationJobStateFailed
-		job.Error = providerErrorForDB(err)
-		return job, nil
-	}
-	for _, object := range scan.Objects {
-		job.TotalItems++
-		localID, err := s.findLocalProviderEvent(ctx, tenantID, conn, object.ID)
-		if err != nil {
-			return domain.ReconciliationJob{}, err
-		}
-		if localID != "" {
-			job.MatchedItems++
-		} else {
-			job.MissingItems++
-		}
-		if object.Failed && req.RedeliverFailed && object.Redeliverable {
-			job.RedeliveredItems++
-		}
-	}
-	return normalizeReconciliationJob(job), nil
-}
-
 func (s *Store) CreateReconciliationJob(ctx context.Context, tenantID, actorID string, req app.ReconciliationJobRequest) (domain.ReconciliationJob, error) {
 	conn, err := s.getProviderConnectionPublic(ctx, tenantID, req.ConnectionID)
 	if err != nil {
@@ -5938,149 +5877,74 @@ func (s *Store) CompleteReplayJob(ctx context.Context, tenantID, replayJobID str
 	return err
 }
 
-func (s *Store) RunReconciliationJob(ctx context.Context, tenantID, jobID string) error {
+func (s *Store) GetReconciliationConnection(ctx context.Context, tenantID, connectionID string) (domain.ProviderConnection, string, error) {
+	return s.getProviderConnectionSecret(ctx, tenantID, connectionID)
+}
+
+func (s *Store) GetReconciliationWork(ctx context.Context, tenantID, jobID string) (app.ReconciliationWork, error) {
 	job, err := scanReconciliationJob(s.pool.QueryRow(ctx, reconciliationJobSelectSQL()+` WHERE tenant_id=$1 AND id=$2`, tenantID, jobID))
 	if errors.Is(err, pgx.ErrNoRows) {
-		return app.ErrNotFound
+		return app.ReconciliationWork{}, app.ErrNotFound
 	}
 	if err != nil {
-		return err
-	}
-	job = normalizeReconciliationJob(job)
-	if job.State == domain.ReconciliationJobStateCanceled || job.State == domain.ReconciliationJobStateCompleted {
-		return nil
+		return app.ReconciliationWork{}, err
 	}
 	conn, credential, err := s.getProviderConnectionSecret(ctx, tenantID, job.ConnectionID)
 	if err != nil {
-		return s.failReconciliationJob(ctx, tenantID, jobID, err)
+		return app.ReconciliationWork{}, err
 	}
-	adapter, ok := reconcile.BuiltInRegistry(nil).Adapter(conn.Provider)
-	if !ok {
-		return s.failReconciliationJob(ctx, tenantID, jobID, fmt.Errorf("unsupported provider %q", conn.Provider))
-	}
-	if _, err := s.pool.Exec(ctx, `UPDATE reconciliation_jobs SET state='running', started_at=COALESCE(started_at, now()) WHERE tenant_id=$1 AND id=$2 AND state='scheduled'`, tenantID, jobID); err != nil {
-		return err
-	}
-	caps := adapter.Capabilities(conn.Config)
-	if !caps.CanScanEvents {
-		metadata, _ := json.Marshal(map[string]any{"limitations": caps.Limitations})
-		if _, err := s.insertReconciliationItem(ctx, reconciliationItemInput{
-			tenantID: tenantID, jobID: jobID, provider: conn.Provider, objectID: conn.Provider + ":unsupported", objectType: "capability",
-			outcome: domain.ReconciliationOutcomeUnrecoverable, errText: strings.Join(caps.Limitations, "; "), metadata: metadata,
-		}); err != nil {
-			return err
-		}
-		return s.completeReconciliationJob(ctx, tenantID, jobID)
-	}
-	scan, err := adapter.Scan(ctx, reconcile.ScanRequest{
-		Connection: reconcile.Connection{
-			ID: conn.ID, Provider: conn.Provider, CredentialType: conn.CredentialType, Credential: credential, Config: conn.Config,
-		},
-		WindowStart: job.WindowStart, WindowEnd: job.WindowEnd, ScopeObjectID: job.ScopeObjectID, Cursor: job.Cursor,
-		CaptureMissing: job.CaptureMissing, RedeliverFailed: job.RedeliverFailed,
-	})
-	for _, ev := range scan.Evidence {
-		if _, recErr := s.insertProviderAPIEvidence(ctx, tenantID, jobID, "", conn.ID, conn.Provider, ev); recErr != nil {
-			return recErr
-		}
-	}
+	return app.ReconciliationWork{Job: normalizeReconciliationJob(job), Connection: conn, Credential: credential}, nil
+}
+
+func (s *Store) StartReconciliationJob(ctx context.Context, tenantID, jobID string) (bool, error) {
+	tag, err := s.pool.Exec(ctx, `UPDATE reconciliation_jobs SET state='running', started_at=COALESCE(started_at, now()) WHERE tenant_id=$1 AND id=$2 AND state='scheduled'`, tenantID, jobID)
 	if err != nil {
-		return s.failReconciliationJob(ctx, tenantID, jobID, err)
+		return false, err
 	}
-	for _, object := range scan.Objects {
-		if err := s.reconcileProviderObject(ctx, job, conn, credential, adapter, object); err != nil {
-			return s.failReconciliationJob(ctx, tenantID, jobID, err)
-		}
-	}
-	if scan.NextCursor != "" {
-		if _, err := s.pool.Exec(ctx, `UPDATE reconciliation_jobs SET cursor=$1 WHERE tenant_id=$2 AND id=$3`, scan.NextCursor, tenantID, jobID); err != nil {
-			return err
-		}
-	}
+	return tag.RowsAffected() > 0, nil
+}
+
+func (s *Store) RecordProviderAPIEvidence(ctx context.Context, record app.ProviderAPIEvidenceRecord) (string, error) {
+	return s.insertProviderAPIEvidence(ctx, record.TenantID, record.JobID, record.ItemID, record.ConnectionID, record.Provider, reconcile.Evidence{
+		Method: record.Evidence.Method, URL: record.Evidence.URL, StatusCode: record.Evidence.StatusCode,
+		Body: record.Evidence.Body, Error: record.Evidence.Error,
+	})
+}
+
+func (s *Store) FindLocalProviderEvent(ctx context.Context, tenantID string, conn domain.ProviderConnection, providerObjectID string) (string, error) {
+	return s.findLocalProviderEvent(ctx, tenantID, conn, providerObjectID)
+}
+
+func (s *Store) InsertReconciliationItem(ctx context.Context, input app.ReconciliationItemRecord) (string, error) {
+	return s.insertReconciliationItem(ctx, reconciliationItemInput{
+		tenantID: input.TenantID, jobID: input.JobID, provider: input.Provider, objectID: input.ObjectID, objectType: input.ObjectType,
+		outcome: input.Outcome, localEventID: input.LocalEventID, recoveredEventID: input.RecoveredEventID, evidenceID: input.EvidenceID,
+		redeliveryRequested: input.RedeliveryRequested, errText: input.Error, metadata: input.Metadata,
+	})
+}
+
+func (s *Store) AttachProviderEvidenceToItem(ctx context.Context, tenantID, itemID, evidenceID string) error {
+	_, err := s.pool.Exec(ctx, `UPDATE provider_api_evidence SET item_id=$1 WHERE tenant_id=$2 AND id=$3`, itemID, tenantID, evidenceID)
+	return err
+}
+
+func (s *Store) UpdateReconciliationCursor(ctx context.Context, tenantID, jobID, cursor string) error {
+	_, err := s.pool.Exec(ctx, `UPDATE reconciliation_jobs SET cursor=$1 WHERE tenant_id=$2 AND id=$3`, cursor, tenantID, jobID)
+	return err
+}
+
+func (s *Store) CompleteReconciliationJob(ctx context.Context, tenantID, jobID string) error {
 	return s.completeReconciliationJob(ctx, tenantID, jobID)
 }
 
-func (s *Store) reconcileProviderObject(ctx context.Context, job domain.ReconciliationJob, conn domain.ProviderConnection, credential string, adapter reconcile.Adapter, object reconcile.ProviderObject) error {
-	tenantID := job.TenantID
-	localEventID, err := s.findLocalProviderEvent(ctx, tenantID, conn, object.ID)
-	if err != nil {
-		return err
-	}
-	outcome := domain.ReconciliationOutcomeMatched
-	if localEventID == "" {
-		outcome = domain.ReconciliationOutcomeMissing
-	}
-	metadata, _ := json.Marshal(object.Metadata)
-	var evidenceID string
-	var recoveredEventID string
-	var errText string
-	if localEventID == "" && job.CaptureMissing {
-		lookupObject := object
-		lookupEvidence := []reconcile.Evidence(nil)
-		if len(lookupObject.RawBody) == 0 || !lookupObject.Recoverable {
-			lookupID := providerLookupID(object)
-			lookedUp, evs, lookupErr := adapter.Lookup(ctx, reconcile.Connection{ID: conn.ID, Provider: conn.Provider, CredentialType: conn.CredentialType, Credential: credential, Config: conn.Config}, lookupID)
-			lookupEvidence = evs
-			if lookupErr == nil {
-				lookupObject = lookedUp
-			} else if errors.Is(lookupErr, reconcile.ErrUnsupported) {
-				outcome = domain.ReconciliationOutcomeUnrecoverable
-				errText = "provider does not expose recoverable payload evidence for this object"
-			} else {
-				outcome = domain.ReconciliationOutcomeFailed
-				errText = providerErrorForDB(lookupErr)
-			}
-		}
-		for _, ev := range lookupEvidence {
-			id, recErr := s.insertProviderAPIEvidence(ctx, tenantID, job.ID, "", conn.ID, conn.Provider, ev)
-			if recErr != nil {
-				return recErr
-			}
-			evidenceID = id
-		}
-		if outcome == domain.ReconciliationOutcomeMissing && lookupObject.Recoverable && len(lookupObject.RawBody) > 0 {
-			recoveredEventID, err = s.captureRecoveredProviderEvent(ctx, conn, lookupObject, job.RouteRecovered)
-			if err != nil {
-				outcome = domain.ReconciliationOutcomeFailed
-				errText = err.Error()
-			} else {
-				outcome = domain.ReconciliationOutcomeCaptured
-			}
-		} else if outcome == domain.ReconciliationOutcomeMissing {
-			outcome = domain.ReconciliationOutcomeUnrecoverable
-			errText = "provider API did not include a recoverable payload body"
-		}
-	}
-	redeliveryRequested := false
-	if job.RedeliverFailed && object.Failed && object.Redeliverable {
-		evs, redeliverErr := adapter.RequestRedelivery(ctx, reconcile.Connection{ID: conn.ID, Provider: conn.Provider, CredentialType: conn.CredentialType, Credential: credential, Config: conn.Config}, providerLookupID(object))
-		for _, ev := range evs {
-			id, recErr := s.insertProviderAPIEvidence(ctx, tenantID, job.ID, "", conn.ID, conn.Provider, ev)
-			if recErr != nil {
-				return recErr
-			}
-			evidenceID = id
-		}
-		if redeliverErr != nil {
-			outcome = domain.ReconciliationOutcomeFailed
-			errText = providerErrorForDB(redeliverErr)
-		} else {
-			outcome = domain.ReconciliationOutcomeRedeliveryRequested
-			redeliveryRequested = true
-		}
-	}
-	itemID, err := s.insertReconciliationItem(ctx, reconciliationItemInput{
-		tenantID: tenantID, jobID: job.ID, provider: conn.Provider, objectID: object.ID, objectType: object.ObjectType,
-		outcome: outcome, localEventID: localEventID, recoveredEventID: recoveredEventID, evidenceID: evidenceID,
-		redeliveryRequested: redeliveryRequested, errText: errText, metadata: metadata,
-	})
-	if err != nil {
-		return err
-	}
-	if evidenceID != "" {
-		_, _ = s.pool.Exec(ctx, `UPDATE provider_api_evidence SET item_id=$1 WHERE tenant_id=$2 AND id=$3`, itemID, tenantID, evidenceID)
-	}
-	return nil
+func (s *Store) FailReconciliationJob(ctx context.Context, tenantID, jobID, errorText string) error {
+	_, err := s.pool.Exec(ctx, `
+		UPDATE reconciliation_jobs
+		SET state='failed', error=$3, completed_at=now()
+		WHERE tenant_id=$1 AND id=$2 AND state <> 'canceled'`,
+		tenantID, jobID, errorText,
+	)
+	return err
 }
 
 func (s *Store) createDeliveryPayload(ctx context.Context, tx pgx.Tx, tenantID, eventID, deliveryID, transformationVersionID string) (payloadID, normalizedID, adapterVersionID string, err error) {
@@ -6141,7 +6005,8 @@ func (s *Store) createDeliveryPayload(ctx context.Context, tx pgx.Tx, tenantID, 
 	return payloadID, normalizedID, adapterVersionID, nil
 }
 
-func (s *Store) captureRecoveredProviderEvent(ctx context.Context, conn domain.ProviderConnection, object reconcile.ProviderObject, routeRecovered bool) (string, error) {
+func (s *Store) CaptureRecoveredProviderEvent(ctx context.Context, input app.RecoveredProviderEventCapture) (string, error) {
+	conn := input.Connection
 	sourceID := strings.TrimSpace(conn.Config["source_id"])
 	if sourceID == "" {
 		return "", errors.New("provider connection config source_id is required for recovered capture")
@@ -6159,14 +6024,14 @@ func (s *Store) captureRecoveredProviderEvent(ctx context.Context, conn domain.P
 	eventID := mustID("evt")
 	rawID := mustID("raw")
 	receiptID := mustID("rcp")
-	rawHash := domain.HashSHA256(object.RawBody)
-	dedupeKey := "reconcile:" + conn.Provider + ":" + source.ID + ":" + object.ID
+	rawHash := domain.HashSHA256(input.RawBody)
+	dedupeKey := "reconcile:" + conn.Provider + ":" + source.ID + ":" + input.ObjectID
 	raw := domain.RawPayload{
 		TenantID:    conn.TenantID,
 		SHA256:      rawHash,
 		ContentType: "application/json",
-		SizeBytes:   int64(len(object.RawBody)),
-		Body:        append([]byte(nil), object.RawBody...),
+		SizeBytes:   int64(len(input.RawBody)),
+		Body:        append([]byte(nil), input.RawBody...),
 		CreatedAt:   now,
 	}
 	storage, bodyForDB, err := s.prepareRawPayloadStorage(ctx, conn.TenantID, rawID, raw)
@@ -6203,12 +6068,12 @@ func (s *Store) captureRecoveredProviderEvent(ctx context.Context, conn domain.P
 			return "", err
 		}
 	} else {
-		eventType := firstNonEmpty(object.EventType, "unknown")
+		eventType := firstNonEmpty(input.EventType, "unknown")
 		if _, err := tx.Exec(ctx, `
 			INSERT INTO events(id, tenant_id, source_id, provider, type, provider_event_id, raw_payload_id, raw_payload_hash,
 				signature_verified, verification_reason, dedupe_key, dedupe_status, received_at, trace_id)
 			VALUES($1,$2,$3,$4,$5,$6,$7,$8,false,$9,$10,$11,$12,$13)`,
-			eventID, conn.TenantID, source.ID, source.Provider, eventType, object.ID, rawID, rawHash,
+			eventID, conn.TenantID, source.ID, source.Provider, eventType, input.ObjectID, rawID, rawHash,
 			domain.VerificationReasonProviderAPIReconcile, dedupeKey, domain.DedupeUnique, now, "",
 		); err != nil {
 			return "", err
@@ -6216,10 +6081,10 @@ func (s *Store) captureRecoveredProviderEvent(ctx context.Context, conn domain.P
 		if _, err := tx.Exec(ctx, `UPDATE raw_payloads SET event_id=$1 WHERE id=$2`, eventID, rawID); err != nil {
 			return "", err
 		}
-		headers := headerPairsFromMap(object.RequestHeaders)
+		headers := headerPairsFromMap(input.RequestHeaders)
 		normalized, err := provider.Normalize(provider.NormalizeInput{
 			Adapter: source.Adapter, Provider: source.Provider, TenantID: conn.TenantID, SourceID: source.ID,
-			RawBody: object.RawBody, Headers: domain.CanonicalHeaders(headers), Verified: false,
+			RawBody: input.RawBody, Headers: domain.CanonicalHeaders(headers), Verified: false,
 			VerifyReason: domain.VerificationReasonProviderAPIReconcile, RawHash: rawHash,
 		})
 		if err == nil {
@@ -6256,7 +6121,7 @@ func (s *Store) captureRecoveredProviderEvent(ctx context.Context, conn domain.P
 			return "", err
 		}
 	}
-	headersJSON, _ := json.Marshal(headerPairsFromMap(object.RequestHeaders))
+	headersJSON, _ := json.Marshal(headerPairsFromMap(input.RequestHeaders))
 	if _, err := tx.Exec(ctx, `
 		INSERT INTO provider_receipts(id, tenant_id, source_id, event_id, raw_payload_id, raw_headers, remote_ip, verification_ok, verification_reason, received_at)
 		VALUES($1,$2,$3,$4,$5,$6,'provider-api',false,$7,$8)`,
@@ -6273,7 +6138,7 @@ func (s *Store) captureRecoveredProviderEvent(ctx context.Context, conn domain.P
 		}
 		return "", err
 	}
-	if routeRecovered {
+	if input.RouteRecovered {
 		if err := s.enqueueRouteEvent(ctx, conn.TenantID, eventID, true); err != nil {
 			return "", err
 		}
@@ -8122,35 +7987,6 @@ func (s *Store) findLocalProviderEvent(ctx context.Context, tenantID string, con
 	return id, err
 }
 
-func providerLookupID(object reconcile.ProviderObject) string {
-	if value, ok := object.Metadata["delivery_id"]; ok && fmt.Sprint(value) != "" {
-		return fmt.Sprint(value)
-	}
-	return object.ID
-}
-
-func providerErrorForDB(err error) string {
-	if err == nil {
-		return ""
-	}
-	var providerErr reconcile.ProviderError
-	if errors.As(err, &providerErr) {
-		if providerErr.Class != "" {
-			return providerErr.Class
-		}
-	}
-	if errors.Is(err, reconcile.ErrUnsupported) {
-		return reconcile.ErrorUnsupported
-	}
-	msg := err.Error()
-	for _, marker := range []string{"sk_", "ghp_", "github_pat_", "xoxb-", "shpat_"} {
-		if strings.Contains(msg, marker) {
-			return "provider request failed"
-		}
-	}
-	return msg
-}
-
 func headerPairsFromMap(values map[string]string) []domain.HeaderPair {
 	headers := []domain.HeaderPair{{Name: "Webhookery-Recovered-By", Value: "provider-api-reconciliation"}}
 	for name, value := range values {
@@ -8200,16 +8036,6 @@ func (s *Store) completeReconciliationJob(ctx context.Context, tenantID, jobID s
 			WHERE tenant_id=$1 AND job_id=$2
 		) counts
 		WHERE j.tenant_id=$1 AND j.id=$2 AND j.state <> 'canceled'`, tenantID, jobID)
-	return err
-}
-
-func (s *Store) failReconciliationJob(ctx context.Context, tenantID, jobID string, cause error) error {
-	_, err := s.pool.Exec(ctx, `
-		UPDATE reconciliation_jobs
-		SET state='failed', error=$3, completed_at=now()
-		WHERE tenant_id=$1 AND id=$2 AND state <> 'canceled'`,
-		tenantID, jobID, providerErrorForDB(cause),
-	)
 	return err
 }
 
@@ -8735,6 +8561,7 @@ func mustID(prefix string) string {
 var _ app.IngestStore = (*Store)(nil)
 var _ app.ControlStore = (*Store)(nil)
 var _ app.DeliveryFanoutStore = (*Store)(nil)
+var _ app.ReconciliationWorkStore = (*Store)(nil)
 var _ app.APIKeyLookup = (*Store)(nil)
 var _ worker.OutboxStore = (*Store)(nil)
 var _ worker.DeliveryStore = (*Store)(nil)
