@@ -199,7 +199,7 @@ Notes:
 
 - Prefer generated or command-verified content where practical so docs do not drift from `cmd/whcp`.
 
-### Ticket E3-T3 - Expand SDK README For All Committed SDKs [ ]
+### Ticket E3-T3 - Expand SDK README For All Committed SDKs [x]
 
 Description: Update `sdk/README.md` with Go, Python, and TypeScript setup, auth handling, basic event ingestion, audit-chain verification, and error-redaction notes.
 
