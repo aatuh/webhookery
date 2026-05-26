@@ -2,6 +2,7 @@ package worker
 
 import (
 	"context"
+	"errors"
 	"testing"
 )
 
@@ -108,6 +109,76 @@ func TestRunOnceEnqueuesAndDeliversClaimedSIEMSignal(t *testing.T) {
 	}
 }
 
+func TestRunOnceContinuesAcrossIndependentPhaseFailures(t *testing.T) {
+	deliveryErr := errors.New("delivery claim failed")
+	retentionErr := errors.New("retention failed")
+	store := &fakeWorkerStore{
+		claimDeliveriesErr: deliveryErr,
+		retentionErr:       retentionErr,
+	}
+	w := Worker{
+		Store:                     store,
+		DeliveryStore:             store,
+		DeliveryClient:            &fakeDeliveryClient{},
+		RetentionStore:            store,
+		MetricsStore:              store,
+		AlertStore:                store,
+		NotificationDeliveryStore: store,
+		NotificationClient:        &fakeSignalClient{},
+		SIEMDeliveryStore:         store,
+		SIEMClient:                &fakeSignalClient{},
+		WorkerID:                  "worker_1",
+		Limit:                     2,
+	}
+	err := w.RunOnce(context.Background())
+	if !errors.Is(err, deliveryErr) {
+		t.Fatalf("expected delivery phase error, got %v", err)
+	}
+	if !errors.Is(err, retentionErr) {
+		t.Fatalf("expected retention phase error, got %v", err)
+	}
+	if store.metricsWorkerID != "worker_1" || store.alertWorkerID != "worker_1" {
+		t.Fatalf("expected metrics and alerts to run after earlier failures, metrics=%q alerts=%q", store.metricsWorkerID, store.alertWorkerID)
+	}
+	if !store.notificationClaimed || store.siemEnqueueWorkerID != "worker_1" || !store.siemClaimed {
+		t.Fatalf("expected notification and SIEM phases to run after earlier failures, notification=%v siem_enqueued=%q siem_claimed=%v", store.notificationClaimed, store.siemEnqueueWorkerID, store.siemClaimed)
+	}
+}
+
+func TestRunOnceReportRecordsPhaseResults(t *testing.T) {
+	deliveryErr := errors.New("delivery claim failed")
+	retentionErr := errors.New("retention failed")
+	store := &fakeWorkerStore{
+		claimDeliveriesErr: deliveryErr,
+		retentionErr:       retentionErr,
+	}
+	w := Worker{
+		Store:          store,
+		DeliveryStore:  store,
+		DeliveryClient: &fakeDeliveryClient{},
+		RetentionStore: store,
+		MetricsStore:   store,
+		WorkerID:       "worker_1",
+		Limit:          2,
+	}
+	report := w.RunOnceReport(context.Background())
+	if !errors.Is(report.Err(), deliveryErr) || !errors.Is(report.Err(), retentionErr) {
+		t.Fatalf("expected report to include delivery and retention errors, got %v", report.Err())
+	}
+	deliveryResult, ok := report.Result(PhaseDelivery)
+	if !ok || !errors.Is(deliveryResult.Err, deliveryErr) {
+		t.Fatalf("expected delivery phase result with error, got result=%+v ok=%v", deliveryResult, ok)
+	}
+	retentionResult, ok := report.Result(PhaseRetention)
+	if !ok || !errors.Is(retentionResult.Err, retentionErr) {
+		t.Fatalf("expected retention phase result with error, got result=%+v ok=%v", retentionResult, ok)
+	}
+	metricsResult, ok := report.Result(PhaseMetrics)
+	if !ok || metricsResult.Err != nil {
+		t.Fatalf("expected successful metrics phase result, got result=%+v ok=%v", metricsResult, ok)
+	}
+}
+
 type fakeWorkerStore struct {
 	items                  []OutboxItem
 	processed              string
@@ -115,17 +186,21 @@ type fakeWorkerStore struct {
 	deliveries             []DeliveryItem
 	recorded               string
 	processErr             error
+	claimDeliveriesErr     error
 	retentionWorkerID      string
 	retentionLimit         int
+	retentionErr           error
 	metricsWorkerID        string
 	metricsLimit           int
 	alertWorkerID          string
 	alertLimit             int
 	notificationDeliveries []SignalDeliveryItem
+	notificationClaimed    bool
 	notificationRecorded   string
 	siemDeliveries         []SignalDeliveryItem
 	siemRecorded           string
 	siemEnqueueWorkerID    string
+	siemClaimed            bool
 }
 
 func (f *fakeWorkerStore) ClaimOutbox(context.Context, string, int) ([]OutboxItem, error) {
@@ -140,6 +215,9 @@ func (f *fakeWorkerStore) CompleteOutbox(_ context.Context, outboxID string) err
 	return nil
 }
 func (f *fakeWorkerStore) ClaimDueDeliveries(context.Context, string, int) ([]DeliveryItem, error) {
+	if f.claimDeliveriesErr != nil {
+		return nil, f.claimDeliveriesErr
+	}
 	return f.deliveries, nil
 }
 func (f *fakeWorkerStore) RecordDeliveryAttempt(_ context.Context, item DeliveryItem, _ DeliveryResult, _ error) error {
@@ -149,7 +227,7 @@ func (f *fakeWorkerStore) RecordDeliveryAttempt(_ context.Context, item Delivery
 func (f *fakeWorkerStore) ApplyRetentionPolicies(_ context.Context, workerID string, limit int) error {
 	f.retentionWorkerID = workerID
 	f.retentionLimit = limit
-	return nil
+	return f.retentionErr
 }
 func (f *fakeWorkerStore) RefreshMetricsRollups(_ context.Context, workerID string, limit int) error {
 	f.metricsWorkerID = workerID
@@ -162,6 +240,7 @@ func (f *fakeWorkerStore) EvaluateAlertRules(_ context.Context, workerID string,
 	return nil
 }
 func (f *fakeWorkerStore) ClaimNotificationDeliveries(context.Context, string, int) ([]SignalDeliveryItem, error) {
+	f.notificationClaimed = true
 	return f.notificationDeliveries, nil
 }
 func (f *fakeWorkerStore) RecordNotificationDeliveryAttempt(_ context.Context, item SignalDeliveryItem, _ SignalDeliveryResult, _ error) error {
@@ -173,6 +252,7 @@ func (f *fakeWorkerStore) EnqueueSIEMDeliveries(_ context.Context, workerID stri
 	return nil
 }
 func (f *fakeWorkerStore) ClaimSIEMDeliveries(context.Context, string, int) ([]SignalDeliveryItem, error) {
+	f.siemClaimed = true
 	return f.siemDeliveries, nil
 }
 func (f *fakeWorkerStore) RecordSIEMDeliveryAttempt(_ context.Context, item SignalDeliveryItem, _ SignalDeliveryResult, _ error) error {
