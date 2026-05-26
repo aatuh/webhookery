@@ -275,7 +275,7 @@ Notes:
 
 - Avoid duplicating the same production-hardening text in three profile docs.
 
-### Ticket E4-T3 - Normalize Release Evidence Documentation [ ]
+### Ticket E4-T3 - Normalize Release Evidence Documentation [x]
 
 Description: Make `docs/release-evidence-template.md` the clear canonical release evidence artifact and reduce duplicated release-gate prose elsewhere.
 
