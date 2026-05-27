@@ -219,6 +219,71 @@ func TestVerifyTarGzipBundleRejectsTamperedFile(t *testing.T) {
 	}
 }
 
+func TestVerifyTarGzipBundleRejectsMissingManifestHash(t *testing.T) {
+	bundle, err := BuildTarGzipBundle(Manifest{ExportID: "exp_1", TenantID: "ten_1", CreatedAt: time.Unix(123, 0).UTC()}, map[string][]byte{
+		"audit_events.jsonl": []byte("{\"id\":\"aud_1\"}\n"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	files, err := readTarGzipFiles(bundle.Bytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var manifest map[string]any
+	if err := json.Unmarshal(files["manifest.json"], &manifest); err != nil {
+		t.Fatal(err)
+	}
+	manifest["hashes"] = map[string]string{}
+	files["manifest.json"], err = json.MarshalIndent(manifest, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	files["manifest.json"] = append(files["manifest.json"], '\n')
+
+	result, err := VerifyTarGzipBundle(tarGzipTestFiles(t, files))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Valid {
+		t.Fatalf("expected missing manifest hash to be invalid: %+v", result)
+	}
+	if !hasFailure(result.Failures, "manifest hash missing: audit_events.jsonl") {
+		t.Fatalf("expected manifest hash missing failure, got %+v", result.Failures)
+	}
+}
+
+func TestVerifyTarGzipBundleToleratesUnknownOptionalManifestField(t *testing.T) {
+	bundle, err := BuildTarGzipBundle(Manifest{ExportID: "exp_1", TenantID: "ten_1", CreatedAt: time.Unix(123, 0).UTC()}, map[string][]byte{
+		"audit_events.jsonl": []byte("{\"id\":\"aud_1\"}\n"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	files, err := readTarGzipFiles(bundle.Bytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var manifest map[string]any
+	if err := json.Unmarshal(files["manifest.json"], &manifest); err != nil {
+		t.Fatal(err)
+	}
+	manifest["future_optional_field"] = map[string]any{"ignored": true}
+	files["manifest.json"], err = json.MarshalIndent(manifest, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	files["manifest.json"] = append(files["manifest.json"], '\n')
+
+	result, err := VerifyTarGzipBundle(tarGzipTestFiles(t, files))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.Valid {
+		t.Fatalf("expected unknown optional field to be tolerated: %+v", result)
+	}
+}
+
 func tarGzipTestFiles(t *testing.T, files map[string][]byte) []byte {
 	t.Helper()
 	names := make([]string, 0, len(files))
