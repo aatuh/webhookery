@@ -228,10 +228,16 @@ func (s *Store) CreateIncidentEvidenceExport(ctx context.Context, tenantID, inci
 		"incident_report.md":   []byte(markdown),
 		"timelines.jsonl":      timelines,
 	}
+	eventIDs := make([]string, 0, len(report.Events))
+	for _, event := range report.Events {
+		eventIDs = append(eventIDs, event.Event.ID)
+	}
 	bundle, err := evidence.BuildTarGzipBundle(evidence.Manifest{
 		ExportID:             exportID,
 		TenantID:             tenantID,
 		CreatedAt:            now,
+		IncludedEvents:       eventIDs,
+		IncludedIncidents:    []string{incidentID},
 		IncludeRawPayloads:   false,
 		IncludeTimelines:     true,
 		IncludePayloadBodies: false,

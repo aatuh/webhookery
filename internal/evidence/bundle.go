@@ -18,17 +18,35 @@ import (
 	"webhookery/internal/domain"
 )
 
+const ManifestSchemaV1 = "webhookery.evidence_bundle.v1"
+
 type Manifest struct {
-	ExportID             string         `json:"export_id"`
-	TenantID             string         `json:"tenant_id"`
-	CreatedAt            time.Time      `json:"created_at"`
-	From                 time.Time      `json:"from,omitempty"`
-	To                   time.Time      `json:"to,omitempty"`
-	IncludeRawPayloads   bool           `json:"include_raw_payloads"`
-	IncludeTimelines     bool           `json:"include_timelines"`
-	IncludePayloadBodies bool           `json:"include_payload_bodies"`
-	AuditChain           *AuditChain    `json:"audit_chain,omitempty"`
-	Files                []ManifestFile `json:"files"`
+	SchemaVersion        string                  `json:"schema_version"`
+	GeneratedAt          time.Time               `json:"generated_at"`
+	TenantIDHash         string                  `json:"tenant_id_hash"`
+	BundleID             string                  `json:"bundle_id"`
+	ExportID             string                  `json:"export_id,omitempty"`
+	TenantID             string                  `json:"-"`
+	CreatedAt            time.Time               `json:"-"`
+	From                 *time.Time              `json:"from,omitempty"`
+	To                   *time.Time              `json:"to,omitempty"`
+	IncludedEvents       []string                `json:"included_events"`
+	IncludedIncidents    []string                `json:"included_incidents"`
+	Hashes               map[string]string       `json:"hashes"`
+	IncludeRawPayloads   bool                    `json:"include_raw_payloads"`
+	IncludeTimelines     bool                    `json:"include_timelines"`
+	IncludePayloadBodies bool                    `json:"include_payload_bodies"`
+	RedactionPolicy      ManifestRedactionPolicy `json:"redaction_policy"`
+	AuditChain           *AuditChain             `json:"audit_chain,omitempty"`
+	NonClaims            []string                `json:"non_claims"`
+	Files                []ManifestFile          `json:"files"`
+}
+
+type ManifestRedactionPolicy struct {
+	TenantIdentifiers string `json:"tenant_identifiers"`
+	Secrets           string `json:"secrets"`
+	RawPayloadBodies  string `json:"raw_payload_bodies"`
+	PayloadBodies     string `json:"payload_bodies"`
 }
 
 type AuditChain struct {
@@ -96,6 +114,7 @@ func BuildTarGzipBundle(manifest Manifest, files map[string][]byte) (Bundle, err
 			SizeBytes: int64(len(file)),
 		})
 	}
+	manifest = normalizeManifest(manifest)
 
 	manifestBytes, err := json.MarshalIndent(manifest, "", "  ")
 	if err != nil {
@@ -151,6 +170,7 @@ func VerifyTarGzipBundle(body []byte) (BundleVerification, error) {
 	if err := json.Unmarshal(manifestBytes, &manifest); err != nil {
 		return BundleVerification{}, err
 	}
+	validateManifest(manifest, &result)
 	for _, file := range manifest.Files {
 		body, ok := files[file.Name]
 		if !ok {
@@ -167,6 +187,13 @@ func VerifyTarGzipBundle(body []byte) (BundleVerification, error) {
 			result.Valid = false
 			result.Failures = append(result.Failures, "size mismatch: "+file.Name)
 		}
+		if want, ok := manifest.Hashes[file.Name]; !ok {
+			result.Valid = false
+			result.Failures = append(result.Failures, "manifest hash missing: "+file.Name)
+		} else if want != file.SHA256 {
+			result.Valid = false
+			result.Failures = append(result.Failures, "manifest hash mismatch: "+file.Name)
+		}
 	}
 	if proof, ok := files["audit_chain_proof.jsonl"]; ok {
 		failures, checked, err := verifyAuditChainProof(proof)
@@ -180,6 +207,118 @@ func VerifyTarGzipBundle(body []byte) (BundleVerification, error) {
 		}
 	}
 	return result, nil
+}
+
+func normalizeManifest(manifest Manifest) Manifest {
+	if manifest.SchemaVersion == "" {
+		manifest.SchemaVersion = ManifestSchemaV1
+	}
+	if manifest.GeneratedAt.IsZero() {
+		manifest.GeneratedAt = manifest.CreatedAt
+	}
+	if manifest.GeneratedAt.IsZero() {
+		manifest.GeneratedAt = time.Now().UTC()
+	} else {
+		manifest.GeneratedAt = manifest.GeneratedAt.UTC()
+	}
+	if manifest.BundleID == "" {
+		manifest.BundleID = manifest.ExportID
+	}
+	if manifest.TenantIDHash == "" && manifest.TenantID != "" {
+		manifest.TenantIDHash = domain.HashSHA256([]byte(manifest.TenantID))
+	}
+	if manifest.From != nil {
+		from := manifest.From.UTC()
+		manifest.From = &from
+	}
+	if manifest.To != nil {
+		to := manifest.To.UTC()
+		manifest.To = &to
+	}
+	manifest.IncludedEvents = normalizedStringSet(manifest.IncludedEvents)
+	manifest.IncludedIncidents = normalizedStringSet(manifest.IncludedIncidents)
+	manifest.Hashes = make(map[string]string, len(manifest.Files))
+	for _, file := range manifest.Files {
+		manifest.Hashes[file.Name] = file.SHA256
+	}
+	if manifest.RedactionPolicy == (ManifestRedactionPolicy{}) {
+		manifest.RedactionPolicy = defaultRedactionPolicy(manifest.IncludeRawPayloads, manifest.IncludePayloadBodies)
+	}
+	if len(manifest.NonClaims) == 0 {
+		manifest.NonClaims = DefaultNonClaims()
+	}
+	return manifest
+}
+
+func validateManifest(manifest Manifest, result *BundleVerification) {
+	if manifest.SchemaVersion != ManifestSchemaV1 {
+		result.Valid = false
+		result.Failures = append(result.Failures, "unsupported manifest schema_version: "+manifest.SchemaVersion)
+	}
+	if manifest.BundleID == "" {
+		result.Valid = false
+		result.Failures = append(result.Failures, "bundle_id is missing")
+	}
+	if manifest.TenantIDHash == "" {
+		result.Valid = false
+		result.Failures = append(result.Failures, "tenant_id_hash is missing")
+	}
+	if len(manifest.NonClaims) == 0 {
+		result.Valid = false
+		result.Failures = append(result.Failures, "non_claims are missing")
+	}
+	if manifest.RedactionPolicy == (ManifestRedactionPolicy{}) {
+		result.Valid = false
+		result.Failures = append(result.Failures, "redaction_policy is missing")
+	}
+	if manifest.Hashes == nil {
+		result.Valid = false
+		result.Failures = append(result.Failures, "hashes are missing")
+	}
+}
+
+func defaultRedactionPolicy(includeRawPayloads, includePayloadBodies bool) ManifestRedactionPolicy {
+	rawPayloadBodies := "omitted"
+	if includeRawPayloads {
+		rawPayloadBodies = "included only when explicitly requested with elevated raw-payload permission"
+	}
+	payloadBodies := "omitted"
+	if includePayloadBodies {
+		payloadBodies = "included only when explicitly requested with elevated raw-payload permission"
+	}
+	return ManifestRedactionPolicy{
+		TenantIdentifiers: "tenant identifiers are represented by tenant_id_hash",
+		Secrets:           "webhook secrets, provider signatures, bearer tokens, private keys, and credentials are excluded",
+		RawPayloadBodies:  rawPayloadBodies,
+		PayloadBodies:     payloadBodies,
+	}
+}
+
+func DefaultNonClaims() []string {
+	return []string{
+		"Inbound capture does not prove downstream business success.",
+		"Webhookery records at-least-once delivery evidence and does not claim exactly-once delivery.",
+		"The bundle proves Webhookery evidence observed locally; it does not prove provider-side completeness.",
+		"The bundle is not compliance certification, legal evidentiary certification, or managed-service availability evidence.",
+	}
+}
+
+func normalizedStringSet(values []string) []string {
+	if len(values) == 0 {
+		return []string{}
+	}
+	seen := map[string]bool{}
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" || seen[value] {
+			continue
+		}
+		seen[value] = true
+		out = append(out, value)
+	}
+	sort.Strings(out)
+	return out
 }
 
 func SHA256(data []byte) string {
