@@ -1,0 +1,141 @@
+{
+  "schema_version": "provider-conformance-v1",
+  "project": "webhookery",
+  "last_official_doc_verification": "2026-05-27",
+  "no_live_provider_calls": true,
+  "local_checks": [
+    "go test ./internal/provider -run TestProviderSignatureVectors",
+    "go test ./internal/provider -run TestNormalizeBuiltInProviderMetadata",
+    "go test ./internal/provider -run TestGenericJWTAdapter",
+    "go test ./pkg/verifier -run TestTimestampedSignatureWindow"
+  ],
+  "providers": [
+    {
+      "name": "stripe",
+      "official_docs": [
+        "https://docs.stripe.com/webhooks"
+      ],
+      "signature": "Stripe-Signature v1 HMAC-SHA256 over timestamp.raw_body",
+      "timestamp_window_seconds": 300,
+      "event_id": "json.id",
+      "event_type": "json.type",
+      "vector_tests": [
+        "TestProviderSignatureVectors/stripe",
+        "TestNormalizeBuiltInProviderMetadata/stripe"
+      ],
+      "limitations": [
+        "no provider-side completeness guarantee",
+        "recovered provider API events are not signed webhook evidence"
+      ]
+    },
+    {
+      "name": "github",
+      "official_docs": [
+        "https://docs.github.com/en/webhooks/using-webhooks/validating-webhook-deliveries",
+        "https://docs.github.com/en/webhooks/webhook-events-and-payloads"
+      ],
+      "signature": "X-Hub-Signature-256 sha256= HMAC-SHA256 over raw_body",
+      "timestamp_window_seconds": null,
+      "event_id": "X-GitHub-Delivery",
+      "event_type": "X-GitHub-Event",
+      "vector_tests": [
+        "TestProviderSignatureVectors/github",
+        "TestNormalizeBuiltInProviderMetadata/github"
+      ],
+      "limitations": [
+        "does not invent raw payloads when provider delivery detail lacks them",
+        "redelivery is explicit audited recovery work"
+      ]
+    },
+    {
+      "name": "shopify",
+      "official_docs": [
+        "https://shopify.dev/docs/apps/build/webhooks/verify-deliveries"
+      ],
+      "signature": "X-Shopify-Hmac-SHA256 base64 HMAC-SHA256 over raw_body",
+      "timestamp_window_seconds": null,
+      "event_id": "X-Shopify-Webhook-Id",
+      "event_type": "X-Shopify-Topic",
+      "vector_tests": [
+        "TestProviderSignatureVectors/shopify",
+        "TestNormalizeBuiltInProviderMetadata/shopify"
+      ],
+      "limitations": [
+        "no generic missed-event recovery claim",
+        "resource polling is topic-specific"
+      ]
+    },
+    {
+      "name": "slack",
+      "official_docs": [
+        "https://api.slack.com/docs/verifying-requests-from-slack"
+      ],
+      "signature": "X-Slack-Signature v0 HMAC-SHA256 over v0:timestamp:raw_body",
+      "timestamp_window_seconds": 300,
+      "event_id": "json.event_id",
+      "event_type": "json.event.type",
+      "vector_tests": [
+        "TestProviderSignatureVectors/slack",
+        "TestNormalizeBuiltInProviderMetadata/slack"
+      ],
+      "limitations": [
+        "limited retry-window evidence",
+        "no generic missed-event recovery claim"
+      ]
+    },
+    {
+      "name": "generic-hmac",
+      "official_docs": [
+        "local declarative adapter contract"
+      ],
+      "signature": "configured HMAC-SHA256 signature header and signed payload template",
+      "timestamp_window_seconds": "configured",
+      "event_id": "configured JSON extractor",
+      "event_type": "configured JSON extractor",
+      "vector_tests": [
+        "TestDeclarativeAdapterVerifiesTimestampedHMAC",
+        "TestDeclarativeAdapterRejectsExpiredAndMutatedPayloads"
+      ],
+      "limitations": [
+        "no arbitrary code plugins",
+        "no provider recovery without a concrete adapter"
+      ]
+    },
+    {
+      "name": "generic-jwt",
+      "official_docs": [
+        "https://www.rfc-editor.org/info/rfc7519/"
+      ],
+      "signature": "HS256 JWT bearer token with body_sha256 claim",
+      "timestamp_window_seconds": "iat/exp claims",
+      "event_id": "jti",
+      "event_type": "body or configured metadata",
+      "vector_tests": [
+        "TestGenericJWTAdapterVerifiesHS256AndBodyHash",
+        "TestGenericJWTAdapterRejectsAlgNone"
+      ],
+      "limitations": [
+        "HS256 only in the generic JWT adapter"
+      ]
+    },
+    {
+      "name": "cloudevents",
+      "official_docs": [
+        "https://github.com/cloudevents/spec"
+      ],
+      "signature": "none by default",
+      "timestamp_window_seconds": null,
+      "event_id": "ce-id or structured id",
+      "event_type": "ce-type or structured type",
+      "vector_tests": [
+        "TestCloudEventsAdapterDoesNotVerifyUnsignedStructuredMode",
+        "TestCloudEventsAdapterDoesNotVerifyUnsignedBinaryMode",
+        "TestNormalizeBuiltInProviderMetadata/cloudevents"
+      ],
+      "limitations": [
+        "unsigned CloudEvents validity does not imply trust",
+        "does not route by default without explicit trusted policy"
+      ]
+    }
+  ]
+}

@@ -37,7 +37,7 @@ official docs are checked and the maintained docs or implementation are updated.
 ## Official Source Registry
 
 These are the current official source locations to start from. URL availability
-was checked on 2026-05-26; that check does not certify every behavior claim as
+was checked on 2026-05-27; that check does not certify every behavior claim as
 current.
 
 | Area | Official source |

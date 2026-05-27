@@ -17,6 +17,8 @@ test -f TRADEMARKS.md
 test -f RELEASE_EVIDENCE.md
 test -f docs/release-evidence-template.md
 test -f docs/security-review-package.md
+test -f docs/provider-conformance.md
+test -f docs/provider-conformance.manifest.json
 test -f .dockerignore
 test -f .golangci.yml
 grep -q "AGPL-3.0-only" COMMERCIAL.md
@@ -29,6 +31,8 @@ grep -q "no provider-side event completeness" RELEASE_EVIDENCE.md
 grep -q "compliance" RELEASE_EVIDENCE.md
 grep -q "not a certification" RELEASE_EVIDENCE.md
 grep -q "live third-party provider" docs/release-evidence-template.md
+grep -q "Provider Conformance Matrix" docs/provider-conformance.md
+grep -q "no provider-side completeness guarantee" docs/provider-conformance.md
 grep -q ".refs" .dockerignore
 grep -q "release-evidence" .dockerignore
 grep -q "backups" .dockerignore
@@ -65,6 +69,8 @@ grep -q "make rc-check" README.md
 grep -q "make live-postgres-check" README.md
 grep -q "make live-postgres-check" docs/operations.md
 grep -q "make live-postgres-check" docs/release-evidence-template.md
+
+make provider-conformance-check
 
 if [ -n "${WEBHOOKERY_TEST_DATABASE_URL:-}" ]; then
   make live-postgres-check

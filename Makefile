@@ -8,7 +8,7 @@ GOSEC_VERSION ?= v2.25.0
 GOVULNCHECK_VERSION ?= v1.2.0
 FUZZTIME ?= 5s
 
-.PHONY: help tools fmt lint vuln gosec test test-race coverage openapi-check test-vectors-check crypto-inventory deployment-profile-check collections-check documentation-structure-check meta-files-check fuzz-smoke perf-smoke sdk-generate sdk-check docs-check release-acceptance rc-check compose-up compose-down migrate live-postgres-check postgres-integration-test redis-integration-test fast-check finalize clean
+.PHONY: help tools fmt lint vuln gosec test test-race coverage openapi-check test-vectors-check provider-conformance-check crypto-inventory deployment-profile-check collections-check documentation-structure-check meta-files-check fuzz-smoke perf-smoke sdk-generate sdk-check docs-check release-acceptance rc-check compose-up compose-down migrate live-postgres-check postgres-integration-test redis-integration-test fast-check finalize clean
 
 help: ## Show help
 	@awk 'BEGIN {FS=":.*## "}; /^[a-zA-Z0-9_.-]+:.*## / { printf "  %-16s %s\n", $$1, $$2 }' $(MAKEFILE_LIST)
@@ -46,6 +46,9 @@ openapi-check: ## Validate OpenAPI source and route contract smoke tests
 
 test-vectors-check: ## Validate committed public audit test vectors
 	@$(GO) test ./internal/provider -run TestProviderSignatureVectors
+
+provider-conformance-check: ## Validate provider conformance matrix and local vectors
+	@scripts/provider_conformance_check.sh
 
 crypto-inventory: ## Check crypto inventory evidence exists
 	@grep -q "Webhook-Signature" openapi.yaml
@@ -96,6 +99,8 @@ documentation-structure-check: ## Check canonical documentation structure
 	@test -f docs/security-promise.md
 	@test -f docs/stability.md
 	@test -f docs/performance-envelope.md
+	@test -f docs/provider-conformance.md
+	@test -f docs/provider-conformance.manifest.json
 	@test -f docs/documentation-maintenance.md
 	@test -f docs/cli.md
 	@test -f docs/deployment.md
@@ -108,6 +113,7 @@ documentation-structure-check: ## Check canonical documentation structure
 	@grep -q "Security Promise" docs/security-promise.md
 	@grep -q "Stability And Compatibility Policy" docs/stability.md
 	@grep -q "Performance Envelope" docs/performance-envelope.md
+	@grep -q "Provider Conformance Matrix" docs/provider-conformance.md
 	@grep -q "Provider Claim Freshness" docs/documentation-maintenance.md
 	@grep -q "Documentation Review Checklist" docs/documentation-maintenance.md
 	@grep -q "CLI" docs/cli.md
@@ -186,6 +192,7 @@ sdk-check: ## Validate committed SDK artifacts are present and aligned
 docs-check: ## Run non-mutating documentation-adjacent checks
 	@$(MAKE) openapi-check
 	@$(MAKE) test-vectors-check
+	@$(MAKE) provider-conformance-check
 	@$(MAKE) sdk-check
 	@$(MAKE) crypto-inventory
 	@$(MAKE) deployment-profile-check
