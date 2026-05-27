@@ -1,11 +1,22 @@
 # Webhookery Vs Svix
 
-Verification date: 2026-05-27
+Verification date: 2026-06-04
 
 Official sources reviewed:
 
 - <https://www.svix.com/>
+- <https://docs.svix.com/>
 - <https://api.svix.com/>
+- <https://github.com/svix/svix-webhooks>
+
+Current source notes:
+
+- Svix's public site positions the product as webhooks as a service for making
+  webhook sending simple, secure, and scalable.
+- The public site now also surfaces Svix products for sending, receiving,
+  testing, and portal workflows.
+- Svix publishes documentation, API reference material, SDK/library links, and
+  open-source server/source-code links.
 
 This page is a buyer-fit comparison, not a claim that one product is generally
 better. Product surfaces change; re-check official sources before publishing or
@@ -18,8 +29,8 @@ making webhook sending simple, secure, and scalable, with automatic retries,
 logs and monitoring, security, developer experience, an application portal, and
 API-first webhook sending.
 
-Svix also publishes API reference material and open-source components around
-webhook service operation and verification.
+Svix also publishes docs and source links around webhook service operation,
+webhook receiving/testing products, API references, SDKs, and verification.
 
 ## Where Webhookery Differs
 
