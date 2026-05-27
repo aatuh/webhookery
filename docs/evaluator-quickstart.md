@@ -1,11 +1,16 @@
 # Evaluator Quickstart
 
-This guide takes a new evaluator from a clean checkout to local evidence that
-Webhookery can capture, verify, deliver, replay, and audit webhook events.
+This guide takes a new evaluator from a clean checkout to a local incident
+packet that shows the Webhookery evidence loop:
 
-The flow is local-only. It uses synthetic provider payloads and fake receivers.
-Do not use live provider credentials, customer endpoints, real webhook secrets,
-or production databases.
+> A Stripe-style payment webhook is captured, downstream delivery fails, the
+> event reaches DLQ, replay succeeds after receiver recovery, and Webhookery
+> writes a verifiable incident evidence packet.
+
+The flow is local-only. It uses synthetic provider payloads, a fake receiver,
+and a disposable PostgreSQL database. Do not use live provider credentials,
+customer endpoints, real webhook secrets, raw customer payloads, or production
+databases.
 
 ## Prerequisites
 
@@ -18,7 +23,7 @@ or production databases.
 
 ```bash
 docker compose up -d postgres
-export WEBHOOKERY_TEST_DATABASE_URL='postgres://webhookery:webhookery@localhost:5432/webhookery?sslmode=disable'
+export WEBHOOKERY_TEST_DATABASE_URL='postgres://webhookery:change-me@localhost:5432/webhookery?sslmode=disable'
 ```
 
 Expected result:
@@ -27,7 +32,8 @@ Expected result:
 Container webhookery-postgres-1  Running
 ```
 
-The exact container name may differ by Compose version.
+The exact container name and status text may differ by Compose version. The URL
+above matches the default `docker-compose.yml` values.
 
 ## 2. Run The Evidence Demo
 
@@ -39,6 +45,8 @@ Expected result:
 
 ```text
 demo: running local webhook evidence demo
+demo: failed payment webhook incident packet
+ok  	webhookery/internal/e2e
 demo: provider ingest to signed delivery
 ok  	webhookery/internal/e2e
 demo: invalid signature quarantine
@@ -47,21 +55,79 @@ demo: retry, DLQ release, and replay modes
 ok  	webhookery/internal/e2e
 demo: retention, export, and audit-chain permission gates
 ok  	webhookery/internal/e2e
+demo: scenario result: downstream failure recorded before replay
+demo: scenario result: replay delivery succeeded after receiver recovery
+demo: output: .../examples/webhook-evidence-demo/output
 demo: completed
 ```
 
-What this proves:
+Durations after the `ok` lines vary by machine.
 
-- Webhookery accepts a valid Stripe-style event only after durable evidence
-  writes.
-- It signs outbound delivery payloads and records attempt hashes.
-- It quarantines invalid signatures without routing them.
-- It can retry to DLQ, release DLQ work, and replay original/current config
-  modes.
-- Retention and export paths preserve metadata and permission boundaries.
-- Audit-chain verification succeeds after the local evidence flow.
+## 3. Inspect The Incident Packet
 
-## 3. Run Release-Candidate Acceptance
+The demo writes sanitized output to
+`examples/webhook-evidence-demo/output/`:
+
+```text
+incident-report.md
+incident-report.json
+evidence-manifest.json
+verify-output.json
+README.md
+evidence.tar.gz
+```
+
+Read the Markdown report first:
+
+```bash
+sed -n '1,180p' examples/webhook-evidence-demo/output/incident-report.md
+```
+
+Expected result: the report includes summary, event identity, provider
+verification, raw capture evidence, route/configuration snapshot, delivery
+attempt timeline, retry/DLQ state, replay history, retention state,
+audit-chain references, and known gaps/non-claims.
+
+Verify the generated bundle:
+
+```bash
+go run ./cmd/whcp audit verify-bundle --file examples/webhook-evidence-demo/output/evidence.tar.gz
+```
+
+Expected result:
+
+```json
+{"valid":true,"manifest_sha256":"sha256:...","checked_files":4,"checked_chain_entries":0,"failures":null}
+```
+
+`verify-output.json` records the same local verification result from the demo
+run. A successful run has `result.valid: true`.
+
+## 4. What This Proves
+
+- Webhookery accepts the synthetic Stripe-style event only after durable local
+  evidence writes.
+- Raw capture evidence is represented by IDs and hashes instead of raw payload
+  bodies in the incident packet.
+- Invalid signatures are persisted as evidence and not routed.
+- Delivery failure, DLQ transition, endpoint recovery, replay work, and
+  successful replay delivery are visible in the incident report.
+- The local evidence bundle verifies by manifest and file hashes.
+- Retention and export checks preserve metadata and permission boundaries.
+
+## 5. What This Does Not Prove
+
+- It does not prove downstream business processing succeeded.
+- It does not claim exactly-once delivery or global ordering.
+- It does not prove provider-side event completeness.
+- It does not certify live Stripe, GitHub, Shopify, Slack, AWS, Vault, or
+  customer receiver behavior.
+- It is not compliance certification, legal evidentiary certification, a
+  restore drill, or a production deployment review.
+
+See `docs/security-promise.md` for the canonical promise and non-claims.
+
+## 6. Run Release-Candidate Acceptance
 
 ```bash
 make rc-check
@@ -77,7 +143,7 @@ When `WEBHOOKERY_TEST_DATABASE_URL` is set, `make rc-check` includes the
 DB-backed release-candidate E2E checks. If the variable is not set, the script
 prints that those DB-backed checks were skipped.
 
-## 4. Optional Local API Smoke
+## 7. Optional Local API Smoke
 
 Start the local API stack:
 
@@ -104,9 +170,7 @@ Expected result:
 The bootstrap key is for local development only. Do not use it for production
 or production-like evaluation.
 
-## 5. Review Evidence And Boundaries
-
-Read these docs before making a production decision:
+## 8. Review Before Production Decisions
 
 - `docs/security-promise.md`
 - `docs/provider-conformance.md`
@@ -116,18 +180,17 @@ Read these docs before making a production decision:
 - `docs/day-2-operations.md`
 - `COMMERCIAL.md`
 
-Key boundaries:
-
-- inbound success means durable capture, not downstream business success
-- delivery is at-least-once, not exactly once
-- provider reconciliation cannot prove provider-side event completeness
-- local acceptance does not call live providers
-- release evidence is not compliance certification
-
 ## Troubleshooting
 
 If the demo says `WEBHOOKERY_TEST_DATABASE_URL is required`, start PostgreSQL
 with Docker Compose and export the variable exactly as shown above.
+
+If the demo cannot connect to `localhost:5432`, confirm that your Compose
+PostgreSQL service publishes port `5432`:
+
+```bash
+docker compose ps postgres
+```
 
 If PostgreSQL is already running on another port, update the URL before running
 the demo:
@@ -136,8 +199,13 @@ the demo:
 export WEBHOOKERY_TEST_DATABASE_URL='postgres://USER:PASSWORD@HOST:PORT/DATABASE?sslmode=disable'
 ```
 
-Do not paste production database URLs into issues, support requests, release
-evidence, screenshots, or demo recordings.
+If the output directory check fails, make sure `WEBHOOKERY_DEMO_OUTPUT_DIR`
+points inside the repository and does not resolve through a symlink outside the
+repository.
+
+Do not paste production database URLs, provider secrets, raw payload bodies, or
+generated evidence bundles into issues, support requests, screenshots, or demo
+recordings.
 
 ## Cleanup
 

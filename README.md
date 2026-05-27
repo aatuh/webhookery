@@ -1,19 +1,22 @@
 # Webhookery
 
-Webhookery is a self-hosted webhook evidence and delivery control plane. It is
-built for receiving, verifying, storing, routing, delivering, replaying,
-auditing, and debugging webhooks without pretending that delivery can be
-exactly once.
+Audit-grade webhook capture, replay, and evidence -- self-hosted.
+
+Webhookery durably captures provider webhooks before acknowledging them,
+verifies signatures, records delivery attempts, supports governed replay, and
+exports verifiable evidence when integrations fail.
 
 The product promise is narrow by design: Webhookery must not return inbound
 success before durable capture, loss boundaries must be explicit, and replay,
-recovery, and audit evidence must be first-class.
+recovery, and audit evidence must be first-class. It is built for teams that
+need to prove what arrived, what failed, what was replayed, and what evidence
+remains without pretending that delivery can be exactly once.
 
 Start here if you are evaluating Webhookery:
 
-- Static product page: `site/index.html`
 - Evaluator walkthrough: `docs/evaluator-quickstart.md`
 - Local evidence demo: `examples/webhook-evidence-demo/`
+- Static product page: `site/index.html`
 - Release notes: `docs/releases/v0.1.0-rc1.md`
 - Commercial evaluation: `docs/commercial-evaluation.md`
 
@@ -39,6 +42,20 @@ profiles, and canonical docs as the source of truth for current behavior.
 
 Prerequisites: Go, Docker, and Docker Compose.
 
+For the evidence-first path, run the failed-payment demo:
+
+```bash
+docker compose up -d postgres
+export WEBHOOKERY_TEST_DATABASE_URL='postgres://webhookery:change-me@localhost:5432/webhookery?sslmode=disable'
+examples/webhook-evidence-demo/run.sh
+```
+
+Expected result: `examples/webhook-evidence-demo/output/` contains a sanitized
+incident report, evidence manifest, verification output, and local evidence
+bundle for a failed downstream delivery followed by replay.
+
+For a short API smoke path:
+
 ```bash
 cp .env.example .env
 docker compose up --build
@@ -60,8 +77,8 @@ The local bootstrap key is for development only. Create a database-backed API
 key immediately and remove or rotate the bootstrap hash before any
 production-style use.
 
-For a guided evidence-focused evaluation, use `docs/evaluator-quickstart.md`
-instead of this short smoke path.
+Use `docs/evaluator-quickstart.md` for the guided evidence-loop walkthrough,
+expected output, troubleshooting, and non-claims.
 
 ## Short Smoke Paths
 
