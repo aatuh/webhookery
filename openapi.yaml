@@ -3333,6 +3333,24 @@ paths:
       responses:
         "200":
           description: Replay dry-run result.
+  /v1/replay-jobs/preview:
+    post:
+      tags:
+        - Delivery And Replay
+      operationId: postReplayJobsPreview
+      summary: Preview replay
+      description: Additive alias for replay dry-run. It validates the same request and does not create replay jobs or delivery work.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ReplayRequest"
+      responses:
+        "200":
+          description: Replay preview result.
   /v1/replay-jobs:
     get:
       tags:

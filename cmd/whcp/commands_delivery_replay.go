@@ -38,7 +38,7 @@ func runDeliveries(args []string) error {
 
 func runReplayJobs(args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: whcp replay-jobs <list|dry-run|create|approve|pause|resume|cancel>")
+		return fmt.Errorf("usage: whcp replay-jobs <list|dry-run|preview|create|approve|pause|resume|cancel>")
 	}
 	fs := flag.NewFlagSet("replay-jobs "+args[0], flag.ContinueOnError)
 	baseURL := fs.String("base-url", "http://localhost:8080", "API base URL")
@@ -58,14 +58,18 @@ func runReplayJobs(args []string) error {
 	switch args[0] {
 	case "list":
 		return getJSON(*baseURL, *apiKey, "/v1/replay-jobs")
-	case "dry-run":
+	case "dry-run", "preview":
 		if strings.TrimSpace(*reasonCode) == "" {
 			return fmt.Errorf("reason-code is required")
 		}
 		if strings.TrimSpace(*reason) == "" {
 			return fmt.Errorf("reason is required")
 		}
-		return postJSON(*baseURL, *apiKey, "/v1/replay-jobs:dry-run", map[string]any{"event_id": *eventID, "delivery_id": *deliveryID, "endpoint_id": *endpointID, "reason_code": *reasonCode, "reason": *reason, "config_mode": *configMode, "rate_limit_per_minute": *rateLimitPerMinute})
+		path := "/v1/replay-jobs:dry-run"
+		if args[0] == "preview" {
+			path = "/v1/replay-jobs/preview"
+		}
+		return postJSON(*baseURL, *apiKey, path, map[string]any{"event_id": *eventID, "delivery_id": *deliveryID, "endpoint_id": *endpointID, "reason_code": *reasonCode, "reason": *reason, "config_mode": *configMode, "rate_limit_per_minute": *rateLimitPerMinute})
 	case "create":
 		if strings.TrimSpace(*reasonCode) == "" {
 			return fmt.Errorf("reason-code is required")
@@ -83,7 +87,7 @@ func runReplayJobs(args []string) error {
 	case "cancel":
 		return postJSON(*baseURL, *apiKey, "/v1/replay-jobs/"+url.PathEscape(*replayJobID)+":cancel", map[string]string{"reason": *reason})
 	default:
-		return fmt.Errorf("usage: whcp replay-jobs <list|dry-run|create|approve|pause|resume|cancel>")
+		return fmt.Errorf("usage: whcp replay-jobs <list|dry-run|preview|create|approve|pause|resume|cancel>")
 	}
 }
 
