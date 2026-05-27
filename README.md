@@ -68,12 +68,13 @@ production-style use.
 
 ## Production RC Readiness
 
-Use `docs/operations.md`, `docs/stability.md`, and
+Use `docs/operations.md`, `docs/day-2-operations.md`, `docs/stability.md`, and
 `docs/release-evidence-template.md` as the canonical release-candidate
 readiness path. The short version is: run the production doctor, `make
 finalize`, live PostgreSQL checks against a disposable database, `make
 rc-check`, and restore drills when migrations or evidence storage are touched.
-Do not use live provider or customer credentials for local acceptance gates.
+Use `docs/observability.md` for starter Prometheus rules and dashboards. Do
+not use live provider or customer credentials for local acceptance gates.
 
 ## Security Promise And Non-Claims
 

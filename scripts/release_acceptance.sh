@@ -40,7 +40,10 @@ grep -q "backups" .dockerignore
 test -f Dockerfile
 test -f docker-compose.yml
 test -f deploy/kubernetes/kustomization.yaml
+test -f deploy/kubernetes/networkpolicy.example.yaml
 test -f deploy/helm/webhookery/Chart.yaml
+test -f deploy/helm/webhookery/values-production.example.yaml
+test -f deploy/observability/prometheus-rules.example.yaml
 test -f deploy/terraform/webhookery-helm/main.tf
 grep -q "runAsNonRoot: true" deploy/kubernetes/api-deployment.yaml
 grep -q "runAsNonRoot: true" deploy/helm/webhookery/values.yaml
@@ -69,6 +72,12 @@ grep -q "make rc-check" README.md
 grep -q "make live-postgres-check" README.md
 grep -q "make live-postgres-check" docs/operations.md
 grep -q "make live-postgres-check" docs/release-evidence-template.md
+test -f docs/day-2-operations.md
+test -f docs/observability.md
+grep -q "Day-2 Operations Guide" docs/day-2-operations.md
+grep -q "Observability Examples" docs/observability.md
+grep -q "networkpolicy.example.yaml" docs/deployment.md
+grep -q "prometheus-rules.example.yaml" docs/deployment.md
 
 make provider-conformance-check
 

@@ -28,6 +28,15 @@ Deployment profiles do not install production PostgreSQL, object storage,
 ingress, DNS, TLS certificates, network policies, service monitors, or external
 secret managers for you.
 
+Hardened examples are included for adaptation:
+
+- `deploy/helm/webhookery/values-production.example.yaml`
+- `deploy/kubernetes/networkpolicy.example.yaml`
+- `deploy/observability/prometheus-rules.example.yaml`
+
+They are examples only. Review selectors, namespaces, resource requests,
+egress rules, and alert thresholds against your environment before use.
+
 ## TLS And Ingress
 
 Choose one API TLS boundary and document it:
@@ -142,6 +151,7 @@ backup into a controlled target and preserve the failed state for analysis.
 | Kubernetes | `deploy/kubernetes/` | Minimal manifests for API, worker, scheduler, migration job, config, and placeholder Secret shape. |
 | Helm | `deploy/helm/webhookery/` | Chart for the same workload shape with existing Secret support. |
 | Terraform | `deploy/terraform/webhookery-helm/` | Wrapper around the Helm chart. Does not manage secrets or external dependencies. |
+| Observability examples | `deploy/observability/` | Prometheus starter rules for aggregate metrics. Does not install Prometheus or Alertmanager. |
 
 Use the profile README for exact commands, and use this document for shared
 production posture.

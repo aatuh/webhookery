@@ -1,0 +1,60 @@
+# Hardened example values for a self-hosted Webhookery release candidate.
+# This file is an example overlay, not a managed production dependency stack.
+# Provide PostgreSQL, object storage, TLS, ingress, secret manager, and backup
+# procedures outside this chart.
+
+replicaCount:
+  api: 2
+  worker: 2
+  scheduler: 1
+
+image:
+  repository: ghcr.io/aatuh/webhookery
+  tag: v0.0.0
+  pullPolicy: IfNotPresent
+
+service:
+  type: ClusterIP
+  port: 8080
+
+config:
+  environment: production
+  httpAddr: ":8080"
+  logLevel: info
+  enableUI: "false"
+  rawStorageMode: s3
+  objectStorageEndpoint: "s3.example.internal"
+  objectStorageBucket: "webhookery-raw"
+  objectStorageRegion: "us-east-1"
+  objectStorageUseSSL: "true"
+  bootstrapTenantID: ten_bootstrap
+  bootstrapAPIKeyPrefix: ""
+
+secret:
+  create: false
+  name: webhookery-secrets
+
+migrate:
+  enabled: true
+
+resources:
+  requests:
+    cpu: 250m
+    memory: 256Mi
+  limits:
+    cpu: "1"
+    memory: 1Gi
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 10001
+  runAsGroup: 10001
+  fsGroup: 10001
+  seccompProfile:
+    type: RuntimeDefault
+
+containerSecurityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop: ["ALL"]

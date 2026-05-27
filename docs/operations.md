@@ -11,6 +11,11 @@ Use these canonical references with this runbook:
 - `docs/deployment.md`: shared deployment posture for dependencies, TLS,
   secrets, object storage, network policy, readiness, backup/restore, upgrade,
   and rollback.
+- `docs/day-2-operations.md`: post-install backup cadence, restore drills,
+  upgrades, incident triage, alert handling, key rotation, retention review,
+  and audit evidence handoff.
+- `docs/observability.md`: public metric names, Prometheus examples, and
+  dashboard starter panels.
 - `docs/feature-behavior.md`: capture, auth, routing, delivery, replay,
   reconciliation, transformations, retention, identity, producer trust, and
   SSRF behavior.

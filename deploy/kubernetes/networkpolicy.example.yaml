@@ -1,0 +1,47 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: webhookery-restrict-default
+  namespace: webhookery
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: webhookery
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: ingress-nginx
+      ports:
+        - protocol: TCP
+          port: 8080
+  egress:
+    # PostgreSQL. Replace the namespace/pod selector or use a CNI-supported
+    # external egress policy for managed databases.
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: data
+      ports:
+        - protocol: TCP
+          port: 5432
+    # DNS for endpoint and object-store resolution. Use your cluster DNS
+    # namespace and labels.
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    # HTTPS egress for object storage, Vault/AWS KMS, notification channels,
+    # SIEM sinks, and customer endpoints. Layer this with firewall/CNI rules
+    # that block private, link-local, metadata, multicast, and reserved ranges.
+    - ports:
+        - protocol: TCP
+          port: 443

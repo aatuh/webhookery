@@ -61,8 +61,11 @@ deployment-profile-check: ## Check deployment profile evidence and non-claims
 	@test -f docs/deployment.md
 	@test -f deploy/kubernetes/kustomization.yaml
 	@test -f deploy/kubernetes/secret.example.yaml
+	@test -f deploy/kubernetes/networkpolicy.example.yaml
 	@test -f deploy/helm/webhookery/Chart.yaml
 	@test -f deploy/helm/webhookery/values.yaml
+	@test -f deploy/helm/webhookery/values-production.example.yaml
+	@test -f deploy/observability/prometheus-rules.example.yaml
 	@test -f deploy/terraform/webhookery-helm/main.tf
 	@test -f deploy/terraform/webhookery-helm/README.md
 	@terraform fmt -check -recursive deploy/terraform
@@ -72,7 +75,9 @@ deployment-profile-check: ## Check deployment profile evidence and non-claims
 	@grep -q "WEBHOOKERY_DATABASE_URL" deploy/helm/webhookery/values.yaml
 	@grep -q "helm_release" deploy/terraform/webhookery-helm/main.tf
 	@grep -q "docs/deployment.md" deploy/kubernetes/README.md
+	@grep -q "networkpolicy.example.yaml" deploy/kubernetes/README.md
 	@grep -q "docs/deployment.md" deploy/helm/webhookery/README.md
+	@grep -q "values-production.example.yaml" deploy/helm/webhookery/README.md
 	@grep -q "docs/deployment.md" deploy/terraform/webhookery-helm/README.md
 	@grep -q "not accepted as module variables" deploy/terraform/webhookery-helm/README.md
 	@test -x scripts/release_acceptance.sh
@@ -101,6 +106,8 @@ documentation-structure-check: ## Check canonical documentation structure
 	@test -f docs/performance-envelope.md
 	@test -f docs/provider-conformance.md
 	@test -f docs/provider-conformance.manifest.json
+	@test -f docs/day-2-operations.md
+	@test -f docs/observability.md
 	@test -f docs/documentation-maintenance.md
 	@test -f docs/cli.md
 	@test -f docs/deployment.md
@@ -114,6 +121,8 @@ documentation-structure-check: ## Check canonical documentation structure
 	@grep -q "Stability And Compatibility Policy" docs/stability.md
 	@grep -q "Performance Envelope" docs/performance-envelope.md
 	@grep -q "Provider Conformance Matrix" docs/provider-conformance.md
+	@grep -q "Day-2 Operations Guide" docs/day-2-operations.md
+	@grep -q "Observability Examples" docs/observability.md
 	@grep -q "Provider Claim Freshness" docs/documentation-maintenance.md
 	@grep -q "Documentation Review Checklist" docs/documentation-maintenance.md
 	@grep -q "CLI" docs/cli.md
