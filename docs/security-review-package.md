@@ -18,6 +18,12 @@ not a substitute for source inspection.
 - Local runtime: `docker-compose.yml`.
 - Deployment image: `Dockerfile`.
 - Operations and recovery runbook: `docs/operations.md`.
+- Day-2 operations guide: `docs/day-2-operations.md`.
+- Provider conformance matrix: `docs/provider-conformance.md`.
+- Performance envelope: `docs/performance-envelope.md`.
+- External review scope template: `docs/external-review-scope.md`.
+- External review findings template: `docs/external-review-findings-template.md`.
+- Accepted risk registry: `docs/external-review-accepted-risks.md`.
 - Release-candidate harness: `scripts/rc_acceptance.sh`.
 
 ## Threat Model Focus
@@ -59,7 +65,13 @@ Include these artifacts in the review package:
 - `openapi.yaml`
 - `sdk/openapi.yaml`
 - `docs/operations.md`
+- `docs/day-2-operations.md`
+- `docs/provider-conformance.md`
+- `docs/performance-envelope.md`
 - `docs/release-evidence-template.md`
+- `docs/external-review-scope.md`
+- `docs/external-review-findings-template.md`
+- `docs/external-review-accepted-risks.md`
 - latest exact-tag release evidence file
 - `migrations/`
 - provider verification test vectors, if present
@@ -68,7 +80,10 @@ Include these artifacts in the review package:
 - SBOMs, Trivy output, `govulncheck`, and `gosec` outputs from the release
   workflow
 - sanitized `make rc-check` output
+- sanitized `make perf-smoke` output
+- sanitized `make provider-conformance-check` output
 - sanitized backup/restore drill output
+- branch protection status or accepted-risk record
 
 ## Review Exit Criteria
 

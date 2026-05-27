@@ -40,6 +40,10 @@ the live third-party provider scope and risk.
 - Stability policy reviewed:
 - Performance smoke output:
 - Provider conformance output:
+- Failure drill output:
+- External review status:
+- Accepted risk status:
+- Branch protection status:
 - Release workflow URL:
 - CI workflow URL:
 - Integration workflow URL:
@@ -72,6 +76,10 @@ the live third-party provider scope and risk.
 | audit-chain verification smoke |  |  |
 | reconciliation gap evidence smoke with fake providers |  |  |
 | alert notification and SIEM egress smoke with fake receivers |  |  |
+| receiver timeout storm drill |  |  |
+| object-store read/write failure drill |  |  |
+| migration checksum failure drill |  |  |
+| audit-chain/export tamper detection drill |  |  |
 | log and metrics secret scan |  |  |
 | `govulncheck` |  |  |
 | `gosec` |  |  |
@@ -96,6 +104,32 @@ enforcement. Broad production readiness requires CI, integration, and security
 checks to be required before merge. If GitHub account or repository settings
 block private branch protection, record that as a release blocker.
 
+Status:
+
+- Required checks:
+- Required reviews:
+- Force-push protection:
+- Admin bypass:
+- Evidence URL:
+
+## External Review
+
+Use `docs/external-review-scope.md`,
+`docs/external-review-findings-template.md`, and
+`docs/external-review-accepted-risks.md`.
+
+| Item | Status | Evidence |
+|------|--------|----------|
+| external review scope approved |  |  |
+| external review completed |  |  |
+| critical/high findings fixed |  |  |
+| accepted risks copied with owner/expiry/mitigation |  |  |
+| production-maturity language reviewed against findings |  |  |
+
+Broad production-maturity language is blocked unless external review findings
+are fixed or explicitly accepted with owner, expiry, mitigation, and release
+decision.
+
 ## Smoke Outputs
 
 Attach or link sanitized artifacts:
@@ -104,6 +138,8 @@ Attach or link sanitized artifacts:
 - readiness response,
 - production doctor response with secrets redacted,
 - provider conformance output and manifest,
+- performance smoke JSON/Markdown output,
+- failure drill output,
 - provider ingest response with raw payload omitted,
 - outbound delivery attempt metadata with request body omitted unless the
   evidence package is explicitly body-inclusive,

@@ -17,6 +17,9 @@ test -f TRADEMARKS.md
 test -f RELEASE_EVIDENCE.md
 test -f docs/release-evidence-template.md
 test -f docs/security-review-package.md
+test -f docs/external-review-scope.md
+test -f docs/external-review-findings-template.md
+test -f docs/external-review-accepted-risks.md
 test -f docs/provider-conformance.md
 test -f docs/provider-conformance.manifest.json
 test -f .dockerignore
@@ -31,6 +34,11 @@ grep -q "no provider-side event completeness" RELEASE_EVIDENCE.md
 grep -q "compliance" RELEASE_EVIDENCE.md
 grep -q "not a certification" RELEASE_EVIDENCE.md
 grep -q "live third-party provider" docs/release-evidence-template.md
+grep -q "External Review" docs/release-evidence-template.md
+grep -q "Branch Protection" docs/release-evidence-template.md
+grep -q "accepted_risk" docs/external-review-accepted-risks.md
+grep -q "External Review Scope Template" docs/external-review-scope.md
+grep -q "External Review Findings Template" docs/external-review-findings-template.md
 grep -q "Provider Conformance Matrix" docs/provider-conformance.md
 grep -q "no provider-side completeness guarantee" docs/provider-conformance.md
 grep -q ".refs" .dockerignore
@@ -78,6 +86,10 @@ grep -q "Day-2 Operations Guide" docs/day-2-operations.md
 grep -q "Observability Examples" docs/observability.md
 grep -q "networkpolicy.example.yaml" docs/deployment.md
 grep -q "prometheus-rules.example.yaml" docs/deployment.md
+grep -q "make perf-smoke" .github/workflows/integration.yml
+grep -q "make provider-conformance-check" .github/workflows/integration.yml
+grep -q "make perf-smoke" .github/workflows/release.yml
+grep -q "Branch protection status" .github/workflows/release.yml
 
 make provider-conformance-check
 
