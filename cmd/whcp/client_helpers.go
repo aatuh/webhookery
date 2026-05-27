@@ -37,6 +37,29 @@ func getJSON(baseURL, apiKey, path string) error {
 	return err
 }
 
+func getJSONDecode(baseURL, apiKey, path string, dst any) error {
+	endpoint, err := apiEndpoint(baseURL, path)
+	if err != nil {
+		return err
+	}
+	// #nosec G107,G704 -- CLI connects only to the operator-supplied Webhookery API URL after scheme/host validation.
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, endpoint, nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+apiKey)
+	// #nosec G704 -- operator-supplied CLI API URL; not reachable from untrusted remote input.
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+		return fmt.Errorf("request failed with status %d", resp.StatusCode)
+	}
+	return json.NewDecoder(resp.Body).Decode(dst)
+}
+
 func postJSON(baseURL, apiKey, path string, body any) error {
 	raw, err := json.Marshal(body)
 	if err != nil {

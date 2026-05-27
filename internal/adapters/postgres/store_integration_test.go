@@ -229,8 +229,8 @@ func TestPostgresDuplicateRawPayloadEvidenceRemainsLinkedAndExported(t *testing.
 	}
 	rawTimelineByID := map[string]string{}
 	for _, item := range timeline {
-		if item["kind"] == "raw_payload" {
-			rawTimelineByID[item["ref_id"].(string)] = item["detail"].(string)
+		if item.Kind == "raw_payload" {
+			rawTimelineByID[item.RefID] = item.Detail
 		}
 	}
 	if len(rawTimelineByID) != 2 {

@@ -74,7 +74,7 @@ type EventStore interface {
 	GetEvent(ctx context.Context, tenantID, eventID string) (domain.Event, error)
 	GetRawPayload(ctx context.Context, tenantID, eventID, actorID string) (domain.RawPayload, error)
 	GetNormalizedEvent(ctx context.Context, tenantID, eventID, actorID string, includeData bool) (domain.NormalizedEnvelope, error)
-	ListEventTimeline(ctx context.Context, tenantID, eventID string, limit int) ([]map[string]any, error)
+	ListEventTimeline(ctx context.Context, tenantID, eventID string, limit int) ([]EventTimelineEntry, error)
 }
 
 type IncidentStore interface {

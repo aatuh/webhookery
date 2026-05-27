@@ -2819,6 +2819,10 @@ paths:
       responses:
         "200":
           description: Timeline entries for event, receipts, deliveries, attempts, and audit records.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EventTimelinePage"
   /v1/incidents:
     get:
       tags:
@@ -6329,6 +6333,43 @@ components:
         generated_at:
           type: string
           format: date-time
+    EventTimelineEntry:
+      type: object
+      required: [schema_version, sequence, kind, ref_id, state, detail, occurred_at]
+      additionalProperties: false
+      properties:
+        schema_version:
+          type: string
+          enum: [webhookery.event_timeline.v1]
+        sequence:
+          type: integer
+          minimum: 1
+        kind:
+          type: string
+          enum: [event, receipt, raw_payload, normalized, delivery, delivery_payload, attempt, reconciliation, replay, audit]
+        ref_id:
+          type: string
+        state:
+          type: string
+        detail:
+          type: string
+          description: Redacted timeline detail; raw bodies and secrets are not included.
+        occurred_at:
+          type: string
+          format: date-time
+    EventTimelinePage:
+      type: object
+      required: [data, next_cursor, has_more]
+      properties:
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/EventTimelineEntry"
+        next_cursor:
+          type: string
+          nullable: true
+        has_more:
+          type: boolean
     NormalizedEnvelope:
       type: object
       required: [id, tenant_id, event_id, provider, type, source, envelope_sha256, data_sha256, metadata_sha256, storage_status, created_at]

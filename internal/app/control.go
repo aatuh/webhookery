@@ -71,6 +71,18 @@ func NewControlServiceWithRuntimeConfig(store ControlStore, validator ssrf.Valid
 	return service
 }
 
+const EventTimelineSchemaV1 = "webhookery.event_timeline.v1"
+
+type EventTimelineEntry struct {
+	SchemaVersion string    `json:"schema_version"`
+	Sequence      int       `json:"sequence"`
+	Kind          string    `json:"kind"`
+	RefID         string    `json:"ref_id"`
+	State         string    `json:"state"`
+	Detail        string    `json:"detail"`
+	OccurredAt    time.Time `json:"occurred_at"`
+}
+
 type CreateSourceRequest struct {
 	Name               string `json:"name"`
 	Provider           string `json:"provider"`
@@ -1639,11 +1651,15 @@ func (s *ControlService) GetNormalizedEvent(ctx context.Context, actor authz.Act
 	return s.store.GetNormalizedEvent(ctx, actor.TenantID, eventID, actor.ID, includeData)
 }
 
-func (s *ControlService) ListEventTimeline(ctx context.Context, actor authz.Actor, eventID string, limit int) ([]map[string]any, error) {
+func (s *ControlService) ListEventTimeline(ctx context.Context, actor authz.Actor, eventID string, limit int) ([]EventTimelineEntry, error) {
 	if !s.authorized(ctx, actor, "events:read", "event", eventID, "") {
 		return nil, ErrForbidden
 	}
-	return s.store.ListEventTimeline(ctx, actor.TenantID, eventID, normalizeLimit(limit))
+	items, err := s.store.ListEventTimeline(ctx, actor.TenantID, eventID, normalizeLimit(limit))
+	if err != nil {
+		return nil, err
+	}
+	return normalizeEventTimelineEntries(items), nil
 }
 
 func (s *ControlService) ListDeliveries(ctx context.Context, actor authz.Actor, limit int) ([]domain.Delivery, error) {
@@ -2537,6 +2553,27 @@ func normalizeLimit(limit int) int {
 		return 50
 	}
 	return limit
+}
+
+func normalizeEventTimelineEntries(items []EventTimelineEntry) []EventTimelineEntry {
+	out := make([]EventTimelineEntry, 0, len(items))
+	for i, item := range items {
+		if item.SchemaVersion == "" {
+			item.SchemaVersion = EventTimelineSchemaV1
+		}
+		if item.Sequence <= 0 {
+			item.Sequence = i + 1
+		}
+		item.Kind = strings.TrimSpace(item.Kind)
+		item.RefID = strings.TrimSpace(item.RefID)
+		item.State = strings.TrimSpace(item.State)
+		item.Detail = strings.TrimSpace(item.Detail)
+		if !item.OccurredAt.IsZero() {
+			item.OccurredAt = item.OccurredAt.UTC()
+		}
+		out = append(out, item)
+	}
+	return out
 }
 
 func validMetricName(name string) bool {

@@ -14,6 +14,7 @@ import (
 	"net/netip"
 	"strings"
 	"testing"
+	"time"
 
 	"webhookery/internal/app"
 	"webhookery/internal/authz"
@@ -1366,8 +1367,8 @@ func (noopControlStore) GetRawPayload(context.Context, string, string, string) (
 func (noopControlStore) GetNormalizedEvent(_ context.Context, tenantID, eventID, actorID string, includeData bool) (domain.NormalizedEnvelope, error) {
 	return domain.NormalizedEnvelope{ID: "nenv_1", TenantID: tenantID, EventID: eventID, StorageStatus: domain.StorageStatusStored}, nil
 }
-func (noopControlStore) ListEventTimeline(context.Context, string, string, int) ([]map[string]any, error) {
-	return nil, nil
+func (noopControlStore) ListEventTimeline(context.Context, string, string, int) ([]app.EventTimelineEntry, error) {
+	return []app.EventTimelineEntry{{SchemaVersion: app.EventTimelineSchemaV1, Sequence: 1, Kind: "event", RefID: "evt_1", State: "unique", Detail: "valid_signature", OccurredAt: time.Unix(1, 0).UTC()}}, nil
 }
 func (noopControlStore) CreateIncident(_ context.Context, incident domain.Incident) (domain.Incident, error) {
 	incident.ID = "inc_1"

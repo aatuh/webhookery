@@ -1125,7 +1125,7 @@ func resetDemoEndpointCircuit(t *testing.T, ctx context.Context, tenantID, endpo
 	}
 }
 
-func assertTimelineKinds(t *testing.T, timeline []map[string]any, expected ...string) {
+func assertTimelineKinds(t *testing.T, timeline []app.EventTimelineEntry, expected ...string) {
 	t.Helper()
 	for _, kind := range expected {
 		if !containsKind(timeline, kind) {
@@ -1134,9 +1134,9 @@ func assertTimelineKinds(t *testing.T, timeline []map[string]any, expected ...st
 	}
 }
 
-func containsKind(items []map[string]any, kind string) bool {
+func containsKind(items []app.EventTimelineEntry, kind string) bool {
 	for _, item := range items {
-		if item["kind"] == kind {
+		if item.Kind == kind {
 			return true
 		}
 	}
