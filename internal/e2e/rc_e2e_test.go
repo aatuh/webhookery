@@ -1253,7 +1253,7 @@ func assertDemoReportSections(t *testing.T, markdown string) {
 
 func writeDemoPacketOutput(t *testing.T, outputDir, tenantID string, incident domain.Incident, eventID, dlqEntryID string, replayJob app.ReplayJob, report domain.IncidentReportSnapshot, download app.EvidenceExportDownload, verification evidence.BundleVerification) {
 	t.Helper()
-	if err := os.MkdirAll(outputDir, 0o700); err != nil {
+	if err := os.MkdirAll(outputDir, 0o700); err != nil { // #nosec G703 -- WEBHOOKERY_DEMO_OUTPUT_DIR is an explicit local test artifact directory.
 		t.Fatalf("create demo output directory: %v", err)
 	}
 	manifestBytes := readDemoBundleFile(t, download.Body, "manifest.json")
@@ -1379,7 +1379,7 @@ func writeDemoJSON(t *testing.T, path string, value any) {
 
 func writeDemoBytes(t *testing.T, path string, body []byte) {
 	t.Helper()
-	if err := os.WriteFile(path, body, 0o600); err != nil {
+	if err := os.WriteFile(path, body, 0o600); err != nil { // #nosec G703 -- demo test writes only expected artifact paths under WEBHOOKERY_DEMO_OUTPUT_DIR.
 		t.Fatalf("write demo output %s: %v", path, err)
 	}
 }
@@ -1438,7 +1438,7 @@ The demo output omits raw payload bodies, webhook secrets, provider signature he
 func assertDemoPacketOutputRedacted(t *testing.T, outputDir string) {
 	t.Helper()
 	for _, name := range []string{"incident-report.md", "incident-report.json", "evidence-manifest.json", "verify-output.json", "README.md"} {
-		body, err := os.ReadFile(filepath.Join(outputDir, name)) // #nosec G304 -- test reads files it just wrote under an explicit demo output directory.
+		body, err := os.ReadFile(filepath.Join(outputDir, name)) // #nosec G304,G703 -- test reads files it just wrote under an explicit demo output directory.
 		if err != nil {
 			t.Fatalf("read demo output %s: %v", name, err)
 		}

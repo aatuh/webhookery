@@ -2,7 +2,6 @@ package app
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
@@ -237,14 +236,6 @@ func (s *ControlService) buildIncidentReport(ctx context.Context, actor authz.Ac
 	}
 	markdown := markdownIncidentReport(report)
 	return report, markdown, nil
-}
-
-func marshalIncidentReport(report IncidentReport) ([]byte, error) {
-	raw, err := json.Marshal(report)
-	if err != nil {
-		return nil, err
-	}
-	return raw, nil
 }
 
 func sanitizeTimeline(entries []EventTimelineEntry) []EventTimelineEntry {
