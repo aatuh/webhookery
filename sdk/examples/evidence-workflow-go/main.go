@@ -176,10 +176,13 @@ func (c restClient) download(ctx context.Context, path, output string) error {
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(filepath.Dir(output), 0o700); err != nil && filepath.Dir(output) != "." {
-		return err
+	outputDir := filepath.Dir(output)
+	if outputDir != "." {
+		if err := os.MkdirAll(outputDir, 0o700); err != nil { // #nosec G703 -- SDK example writes to an operator-selected local evidence output directory.
+			return err
+		}
 	}
-	return os.WriteFile(output, body, 0o600)
+	return os.WriteFile(output, body, 0o600) // #nosec G703 -- SDK example writes to an operator-selected local evidence output path.
 }
 
 func endpoint(baseURL, path string) string {
