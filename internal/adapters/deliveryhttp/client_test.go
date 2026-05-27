@@ -52,6 +52,22 @@ func TestClientDoesNotFollowRedirects(t *testing.T) {
 	}
 }
 
+func TestSafeHTTPClientOverridesPermissiveRedirectPolicy(t *testing.T) {
+	base := &http.Client{
+		CheckRedirect: func(*http.Request, []*http.Request) error {
+			return nil
+		},
+	}
+	client, err := safeHTTPClient(base, 2*time.Second, ssrf.StaticResolver{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = client.CheckRedirect(&http.Request{}, []*http.Request{{}})
+	if err == nil {
+		t.Fatal("copied HTTP clients must not preserve permissive redirect policies")
+	}
+}
+
 func TestHTTPClientUsesPinnedEgressTransport(t *testing.T) {
 	client := HTTPClient(2*time.Second, ssrf.StaticResolver{
 		"customer.example.com": {netip.MustParseAddr("10.0.0.10")},
@@ -74,6 +90,22 @@ func TestSafeDoErrorDoesNotLeakCustomerURLTokens(t *testing.T) {
 	}
 	if err == nil || strings.Contains(err.Error(), "secret-token") || strings.Contains(err.Error(), "customer.example") {
 		t.Fatalf("network error leaked customer URL detail: %v", err)
+	}
+}
+
+func TestBuildRequestPolicyBlockDoesNotLeakURLToken(t *testing.T) {
+	client := Client{
+		Secret: []byte("secret"),
+		SSRF: ssrf.Validator{Resolver: ssrf.StaticResolver{
+			"internal.example.com": {netip.MustParseAddr("10.0.0.10")},
+		}},
+	}
+	_, err := client.BuildRequest(context.Background(), "https://internal.example.com/hook?token=secret-token", []byte("{}"))
+	if err == nil {
+		t.Fatal("expected blocked endpoint URL")
+	}
+	if strings.Contains(err.Error(), "secret-token") || strings.Contains(err.Error(), "internal.example.com") {
+		t.Fatalf("blocked endpoint error leaked URL detail: %v", err)
 	}
 }
 
