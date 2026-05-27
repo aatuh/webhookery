@@ -368,6 +368,12 @@ deliveries retry from PostgreSQL state and leave the cursor unchanged.
 Management API and UI access can use API keys or OIDC-backed sessions. API keys
 remain the bootstrap and break-glass path.
 
+The minimal operator UI is API-backed and keeps API keys in memory only. It can
+list and search event metadata, open event timelines, view normalized event
+metadata, list incidents, and load incident reports as JSON or Markdown text.
+It does not display raw payload bodies by default; raw payload access remains a
+separate elevated API/CLI operation.
+
 OIDC identity providers are tenant-scoped and support Authorization Code +
 PKCE. The callback validates state, nonce, issuer, audience/client ID, expiry,
 and signed ID token before creating a hashed session cookie. Session cookies

@@ -65,6 +65,7 @@ var indexTemplate = template.Must(template.New("index").Parse(`<!doctype html>
       ["routes", "/v1/routes"],
       ["schemas", "/v1/event-types"],
       ["events", "/v1/events"],
+      ["incidents", "/v1/incidents"],
       ["deliveries", "/v1/deliveries"],
       ["replay", "/v1/replay-jobs"],
       ["reconciliation", "/v1/reconciliation-jobs"],
@@ -148,6 +149,9 @@ var indexTemplate = template.Must(template.New("index").Parse(`<!doctype html>
         renderAuditChain(body);
         return;
       }
+      if (name === "events") {
+        renderEventSearchControls();
+      }
       const rows = Array.isArray(body.data) ? body.data : [];
       view.innerHTML = "";
       if (rows.length === 0) {
@@ -157,6 +161,12 @@ var indexTemplate = template.Must(template.New("index").Parse(`<!doctype html>
       let keys = [...new Set(rows.flatMap(row => Object.keys(row)))].slice(0, 8);
       if (name === "deliveries") {
         keys = ["id", "event_id", "endpoint_id", "state", "retry_seed", "adapter_version_id", "transformation_version_id", "delivery_payload_sha256"];
+      }
+      if (name === "events") {
+        keys = ["id", "provider", "event_type", "provider_event_id", "verification_status", "dedupe_status", "received_at", "trace_id"];
+      }
+      if (name === "incidents") {
+        keys = ["id", "title", "state", "created_by", "created_at", "updated_at"];
       }
       if (name === "provider connections") {
         keys = ["id", "name", "provider", "state", "credential_type", "credential_hint", "verified_at", "updated_at"];
@@ -197,7 +207,17 @@ var indexTemplate = template.Must(template.New("index").Parse(`<!doctype html>
       }
       if (name === "events") {
         const th = document.createElement("th");
+        th.textContent = "timeline";
+        head.append(th);
+      }
+      if (name === "events") {
+        const th = document.createElement("th");
         th.textContent = "normalized";
+        head.append(th);
+      }
+      if (name === "incidents") {
+        const th = document.createElement("th");
+        th.textContent = "report";
         head.append(th);
       }
       if (name === "transformations") {
@@ -233,9 +253,32 @@ var indexTemplate = template.Must(template.New("index").Parse(`<!doctype html>
           const td = document.createElement("td");
           if (row.id) {
             const button = document.createElement("button");
+            button.textContent = "Timeline";
+            button.onclick = () => showEventTimeline(row.id);
+            td.append(button);
+          }
+          tr.append(td);
+        }
+        if (name === "events") {
+          const td = document.createElement("td");
+          if (row.id) {
+            const button = document.createElement("button");
             button.textContent = "View";
             button.onclick = () => showNormalized(row.id);
             td.append(button);
+          }
+          tr.append(td);
+        }
+        if (name === "incidents") {
+          const td = document.createElement("td");
+          if (row.id) {
+            const json = document.createElement("button");
+            json.textContent = "JSON";
+            json.onclick = () => showIncidentReport(row.id, "json");
+            const markdown = document.createElement("button");
+            markdown.textContent = "Markdown";
+            markdown.onclick = () => showIncidentReport(row.id, "markdown");
+            td.append(json, markdown);
           }
           tr.append(td);
         }
@@ -350,6 +393,90 @@ var indexTemplate = template.Must(template.New("index").Parse(`<!doctype html>
         raw.hidden = false;
         raw.textContent = JSON.stringify(error, null, 2);
         status.textContent = "Audit chain anchor failed";
+      }
+    }
+
+    function renderEventSearchControls() {
+      const query = current[1].includes("?") ? current[1].split("?")[1] : "";
+      const params = new URLSearchParams(query);
+      const controls = [];
+      for (const spec of [
+        ["provider", "Provider"],
+        ["external_id", "External ID"],
+        ["delivery_id", "Delivery ID"],
+        ["received_after", "Received after"],
+        ["route_id", "Route ID"]
+      ]) {
+        const input = document.createElement("input");
+        input.placeholder = spec[1];
+        input.name = spec[0];
+        input.value = params.get(spec[0]) || "";
+        controls.push(input);
+      }
+      const statusSelect = document.createElement("select");
+      statusSelect.name = "status";
+      for (const optionValue of ["", "dlq"]) {
+        const option = document.createElement("option");
+        option.value = optionValue;
+        option.textContent = optionValue || "Status";
+        statusSelect.append(option);
+      }
+      statusSelect.value = params.get("status") || "";
+      controls.push(statusSelect);
+      const verificationSelect = document.createElement("select");
+      verificationSelect.name = "verification";
+      for (const optionValue of ["", "valid", "invalid"]) {
+        const option = document.createElement("option");
+        option.value = optionValue;
+        option.textContent = optionValue || "Verification";
+        verificationSelect.append(option);
+      }
+      verificationSelect.value = params.get("verification") || "";
+      controls.push(verificationSelect);
+      const search = document.createElement("button");
+      search.textContent = "Search";
+      search.onclick = () => {
+        const next = new URLSearchParams();
+        for (const control of controls) {
+          const value = control.value.trim();
+          if (value) next.set(control.name, value);
+        }
+        const qs = next.toString();
+        current = ["events", qs ? "/v1/events?" + qs : "/v1/events"];
+        load();
+      };
+      const clear = document.createElement("button");
+      clear.textContent = "Clear";
+      clear.onclick = () => {
+        current = ["events", "/v1/events"];
+        load();
+      };
+      actions.replaceChildren(...controls, search, clear);
+    }
+
+    async function showEventTimeline(id) {
+      try {
+        const body = await request("/v1/events/" + encodeURIComponent(id) + "/timeline");
+        raw.hidden = false;
+        raw.textContent = JSON.stringify(body, null, 2);
+        status.textContent = "Timeline loaded";
+      } catch (error) {
+        raw.hidden = false;
+        raw.textContent = JSON.stringify(error, null, 2);
+        status.textContent = "Timeline read failed";
+      }
+    }
+
+    async function showIncidentReport(id, format) {
+      try {
+        const body = await request("/v1/incidents/" + encodeURIComponent(id) + "/report?format=" + encodeURIComponent(format));
+        raw.hidden = false;
+        raw.textContent = typeof body === "string" ? body : JSON.stringify(body, null, 2);
+        status.textContent = "Incident report loaded";
+      } catch (error) {
+        raw.hidden = false;
+        raw.textContent = JSON.stringify(error, null, 2);
+        status.textContent = "Incident report read failed";
       }
     }
 
