@@ -10,6 +10,10 @@ placeholder Secret shape. It does not install PostgreSQL, object storage,
 ingress, DNS, TLS certificates, network policies, service monitors, or an
 external secret manager.
 
+`networkpolicy.example.yaml` is a starting point for ingress and egress
+restriction. Review namespace selectors, CNI behavior, external database/object
+storage access, and metadata-address blocking before applying it.
+
 ## Prerequisites
 
 - A Kubernetes cluster with access to the Webhookery image registry.

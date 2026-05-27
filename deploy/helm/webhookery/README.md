@@ -8,6 +8,10 @@ production posture, `docs/configuration.md` for environment variables, and
 The chart does not deploy PostgreSQL, object storage, ingress, DNS, TLS
 certificates, network policies, service monitors, or an external secret manager.
 
+`values-production.example.yaml` is a hardened starting overlay with multiple
+replicas, resource requests, S3-mode placeholders, and non-root security
+contexts. It still expects operator-managed secrets and external dependencies.
+
 ## Prerequisites
 
 - A Kubernetes cluster and Helm 3.

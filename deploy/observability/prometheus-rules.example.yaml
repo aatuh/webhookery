@@ -1,0 +1,65 @@
+groups:
+  - name: webhookery-core
+    rules:
+      - alert: WebhookeryOutboxOld
+        expr: webhookery_outbox_oldest_age_seconds > 300
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: Webhookery outbox has old pending work
+          description: Oldest pending outbox row is older than 5 minutes. Check API/worker health and PostgreSQL.
+
+      - alert: WebhookeryOutboxBacklog
+        expr: webhookery_outbox_pending > 1000
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: Webhookery outbox backlog is high
+          description: Durable outbox backlog is above the local threshold. Check worker capacity and downstream failures.
+
+      - alert: WebhookeryDeadLetterOpen
+        expr: webhookery_dead_letter_open > 0
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: Webhookery has open DLQ entries
+          description: Open dead-letter entries require operator triage and explicit replay/release decisions.
+
+      - alert: WebhookeryQuarantineOpen
+        expr: webhookery_quarantine_open > 0
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: Webhookery has open quarantine entries
+          description: Open quarantine entries indicate rejected or unsafe provider/request evidence requiring review.
+
+      - alert: WebhookeryAuditChainFailures
+        expr: webhookery_audit_chain_verification_failures > 0 or webhookery_audit_chain_unchained_events > 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: Webhookery audit chain verification has failures
+          description: Audit-chain continuity is failing. Preserve state and run audit-chain verification before remediation.
+
+      - alert: WebhookeryReconciliationFailures
+        expr: webhookery_reconciliation_items{outcome=~"failed|unrecoverable"} > 0
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: Webhookery reconciliation has failed or unrecoverable items
+          description: Reconciliation found provider-side gaps or failed recovery work. Review job items and provider limitations.
+
+      - alert: WebhookeryEndpointCircuitOpen
+        expr: webhookery_endpoint_circuit_open > 0
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: Webhookery endpoint circuit is open
+          description: One or more endpoint delivery circuits are open. Check receiver status and delivery attempts.
