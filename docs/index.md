@@ -6,6 +6,7 @@ owner document for a topic and linking to it from secondary docs.
 | Document | Audience | Purpose | Source-of-truth boundary |
 |----------|----------|---------|--------------------------|
 | `README.md` | New readers, evaluators, developers | Product framing, current implementation status, local quickstart, and first smoke paths. | Entry point only. Do not maintain long command catalogs, route catalogs, or deployment runbooks here. |
+| `site/index.html` | Evaluators, commercial buyers | Static product landing page for Webhookery positioning, quickstart CTA, commercial path, and non-goals. | Public landing surface. Keep operational detail in docs. |
 | `AGENTS.md` | Coding agents and maintainers | Repository operating rules, implementation loop, security classification, and validation expectations. | Agent guidance only. It must reflect current repo evidence. |
 | `.initial_design.md` | Maintainers, architects, agents | Historical design input, product framing, architecture rationale, and intended direction. | Not proof of implemented behavior. Current code, contracts, migrations, and maintained docs override it. |
 | `openapi.yaml` | API consumers, SDK maintainers, reviewers | Canonical REST API contract. | API paths, schemas, status codes, auth schemes, and examples. |
@@ -16,6 +17,9 @@ owner document for a topic and linking to it from secondary docs.
 | `Makefile` | Contributors, CI maintainers, release operators | Project-owned commands and validation gates. | Command names and check composition. Confirm with `make help`. |
 | `docs/configuration.md` | Operators, deployment maintainers, contributors | Environment variables, defaults, safe production values, secret sensitivity, and process applicability. | Canonical configuration reference. Keep env examples and deployment profile references aligned here. |
 | `docs/operations.md` | Self-hosted operators and SREs | Production doctor, RC checks, backup/restore, incident triage, audit verification, and recovery guidance. | Operator runbooks. Avoid moving API reference or command catalogs back into this file. |
+| `docs/evaluator-quickstart.md` | Evaluators | Guided local path from checkout to fake-provider/fake-receiver evidence demo and RC checks. | Tutorial. Do not turn it into a full operations guide. |
+| `examples/webhook-evidence-demo/` | Evaluators, demo authors | Deterministic local evidence demo and synthetic fixtures. | Demo fixtures only. Do not store real provider/customer data here. |
+| `docs/demo-media-checklist.md` | Maintainers, marketers, demo authors | Safety checklist for screenshots, GIFs, short videos, and slide material. | Media safety checklist. It is not product behavior documentation. |
 | `docs/day-2-operations.md` | Self-hosted operators and SREs | Post-install backup cadence, restore drills, upgrades, incident triage, alert handling, key rotation, retention review, and audit evidence handoff. | Day-2 operating guide. Link to command references instead of duplicating them. |
 | `docs/feature-behavior.md` | Maintainers, API reviewers, security reviewers, operators | Implemented behavior reference for capture, auth, routing, delivery, replay, reconciliation, transformations, retention, identity, producer trust, and SSRF. | Behavior summary. Code, OpenAPI, and migrations remain exact. |
 | `docs/security-promise.md` | All readers | Durable-capture promise, security invariants, and canonical non-claims. | Canonical non-claims reference. Link here instead of repeating caveat lists. |
@@ -35,12 +39,16 @@ owner document for a topic and linking to it from secondary docs.
 | `docs/external-review-findings-template.md` | External reviewers, maintainers, release managers | Finding tracker template with severity, ownership, release-blocking decision, and closure fields. | Finding tracking template. Do not store exploit material or secrets. |
 | `docs/external-review-accepted-risks.md` | Maintainers, release managers | Accepted-risk registry and status vocabulary for release decisions. | Public sanitized registry. Release-specific evidence owns exact decision copies. |
 | `docs/release-evidence-template.md` | Release managers, security reviewers | Canonical release evidence checklist and template. | Release evidence requirements. Other docs should link here instead of duplicating gates. |
+| `docs/releases/v0.1.0-rc1.md` | Evaluators, release managers, commercial reviewers | First release-candidate notes, implemented behavior, limitations, and validation commands. | Release-specific narrative. Keep canonical release gates in `docs/release-evidence-template.md`. |
 | `RELEASE_EVIDENCE.md` | Release readers | Short router to the release evidence template. | Current release evidence pointer, not a parallel checklist. |
 | `SECURITY.md` | Security researchers | Vulnerability reporting policy and sensitive-data handling. | Reporting process. Keep project architecture details elsewhere. |
 | `CONTRIBUTING.md` | Contributors | Contribution policy, checks, and sensitive-data rules. | Contribution entry point. Link to canonical docs for details. |
 | `GOVERNANCE.md` | Maintainers, contributors, commercial users | Decision model, maintainer role, and invariant governance. | Governance policy, not operations reference. |
 | `SUPPORT.md` | Users and customers | Public and private support paths. | Support policy and sensitive-data warning. |
 | `COMMERCIAL.md` | Commercial users | AGPL and commercial licensing boundary. | Business and licensing information. |
+| `docs/commercial-evaluation.md` | Commercial evaluators | Evaluation path, starting ranges, required inputs, and safe information boundaries. | Commercial evaluation guide. It is not legal advice. |
+| `docs/production-readiness-review.md` | Commercial evaluators, operators | Paid production-readiness review scope, inputs, outputs, and limits. | Review-offer guide. It is not certification. |
+| `docs/support-packages.md` | Users and customers | Support options, starting ranges, request quality, and non-claims. | Support package guide. Contract terms override public examples. |
 | `TRADEMARKS.md` | Forks, redistributors, commercial users | Naming and trademark guidance. | Trademark policy only. |
 
 ## Maintenance Rule

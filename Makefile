@@ -100,7 +100,12 @@ collections-check: ## Check committed API client collections
 documentation-structure-check: ## Check canonical documentation structure
 	@test -f CHANGELOG.md
 	@test -f docs/index.md
+	@test -f docs/evaluator-quickstart.md
+	@test -f docs/demo-media-checklist.md
 	@test -f docs/releases/v0.1.0-rc1.md
+	@test -f docs/commercial-evaluation.md
+	@test -f docs/production-readiness-review.md
+	@test -f docs/support-packages.md
 	@test -f docs/configuration.md
 	@test -f docs/feature-behavior.md
 	@test -f docs/security-promise.md
@@ -120,10 +125,19 @@ documentation-structure-check: ## Check canonical documentation structure
 	@test -f docs/external-review-accepted-risks.md
 	@test -f docs/release-evidence-template.md
 	@grep -q "Documentation Map" docs/index.md
+	@grep -q "docs/evaluator-quickstart.md" README.md
+	@grep -q "examples/webhook-evidence-demo" README.md
+	@grep -q "site/index.html" README.md
+	@grep -q "docs/commercial-evaluation.md" README.md
+	@grep -q "Evaluator Quickstart" docs/evaluator-quickstart.md
+	@grep -q "Demo Media Checklist" docs/demo-media-checklist.md
 	@grep -q "v0.1.0-rc1" CHANGELOG.md
 	@grep -q "release candidate" docs/releases/v0.1.0-rc1.md
 	@grep -q "exactly-once delivery" docs/releases/v0.1.0-rc1.md
 	@grep -q "provider-side event completeness" docs/releases/v0.1.0-rc1.md
+	@grep -q "Commercial Evaluation" docs/commercial-evaluation.md
+	@grep -q "Production Readiness Review" docs/production-readiness-review.md
+	@grep -q "Support Packages" docs/support-packages.md
 	@grep -q "Configuration Reference" docs/configuration.md
 	@grep -q "Feature Behavior Reference" docs/feature-behavior.md
 	@grep -q "Security Promise" docs/security-promise.md
