@@ -823,3 +823,91 @@ func TestRunDoctorProductionReturnsNonZeroOnBlockers(t *testing.T) {
 		t.Fatalf("doctor output leaked database password: %s", body)
 	}
 }
+
+func TestPilotDoctorNoNetworkSkipsConnectivityAndRedactsValues(t *testing.T) {
+	env := map[string]string{
+		"WEBHOOKERY_ENVIRONMENT":                   "production",
+		"WEBHOOKERY_DATABASE_URL":                  "postgres://webhookery:secret-db-password@db/webhookery?sslmode=require",
+		"WEBHOOKERY_SECRET_BOX_MODE":               "local",
+		"WEBHOOKERY_MASTER_KEY_BASE64":             "MTIzNDU2Nzg5MDEyMzQ1Njc4OTAxMjM0NTY3ODkwMTI=",
+		"WEBHOOKERY_RAW_STORAGE_MODE":              "postgres",
+		"WEBHOOKERY_PILOT_RECEIVER_CHECK_URL":      "https://receiver.example.test/webhook?token=secret",
+		"WEBHOOKERY_PILOT_ALLOW_RECEIVER_CHECK":    "true",
+		"WEBHOOKERY_STRIPE_WEBHOOK_SECRET":         "stripe-secret-marker",
+		"WEBHOOKERY_OBJECT_STORAGE_SECRET_KEY":     "object-secret-password",
+		"WEBHOOKERY_BOOTSTRAP_API_KEY_HASH":        "sha256:bootstrap-secret-hash",
+		"WEBHOOKERY_BOOTSTRAP_API_KEY_PREFIX":      "live",
+		"WEBHOOKERY_PROVIDER_PROOF_MANIFEST_PATH":  "docs/provider-proof-manifest.json",
+		"WEBHOOKERY_PROVIDER_CONFORMANCE_MANIFEST": "docs/provider-conformance.manifest.json",
+	}
+	calledDB := false
+	calledReceiver := false
+	findings := pilotDoctorFindings(func(name string) string { return env[name] }, pilotDoctorOptions{
+		Network: false,
+		DBCheck: func(_ context.Context, _ string, _ time.Duration) (pilotDatabaseStatus, error) {
+			calledDB = true
+			return pilotDatabaseStatus{}, nil
+		},
+		ReceiverCheck: func(_ context.Context, _ string, _ time.Duration) error {
+			calledReceiver = true
+			return nil
+		},
+	})
+	if calledDB || calledReceiver {
+		t.Fatalf("no-network pilot doctor called network checks: db=%t receiver=%t", calledDB, calledReceiver)
+	}
+	var out bytes.Buffer
+	writeDoctorFindings(&out, findings)
+	body := out.String()
+	for _, want := range []string{"warning: database-connectivity", "warning: receiver-connectivity"} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("expected %q in pilot doctor output:\n%s", want, body)
+		}
+	}
+	for _, forbidden := range []string{"secret-db-password", "token=secret", "stripe-secret-marker", "object-secret-password", env["WEBHOOKERY_DATABASE_URL"]} {
+		if strings.Contains(body, forbidden) {
+			t.Fatalf("pilot doctor output leaked sensitive value %q in %s", forbidden, body)
+		}
+	}
+}
+
+func TestPilotDoctorReportsDatabaseReadiness(t *testing.T) {
+	env := map[string]string{
+		"WEBHOOKERY_ENVIRONMENT":                  "production",
+		"WEBHOOKERY_DATABASE_URL":                 "postgres://webhookery@db/webhookery?sslmode=require",
+		"WEBHOOKERY_SECRET_BOX_MODE":              "vault-transit",
+		"WEBHOOKERY_VAULT_ADDR":                   "https://vault.internal",
+		"WEBHOOKERY_VAULT_TOKEN":                  "vault-token",
+		"WEBHOOKERY_VAULT_TRANSIT_KEY":            "webhookery",
+		"WEBHOOKERY_RAW_STORAGE_MODE":             "postgres",
+		"WEBHOOKERY_BOOTSTRAP_API_KEY_HASH":       "",
+		"WEBHOOKERY_PROVIDER_PROOF_MANIFEST_PATH": "docs/provider-proof-manifest.json",
+	}
+	findings := pilotDoctorFindings(func(name string) string { return env[name] }, pilotDoctorOptions{
+		Network: true,
+		DBCheck: func(_ context.Context, databaseURL string, _ time.Duration) (pilotDatabaseStatus, error) {
+			if databaseURL != env["WEBHOOKERY_DATABASE_URL"] {
+				t.Fatalf("unexpected database url %q", databaseURL)
+			}
+			return pilotDatabaseStatus{
+				AppliedMigrations:  3,
+				ExpectedMigrations: 3,
+				PendingOutbox:      0,
+				InProgressOutbox:   0,
+				RetentionPolicies:  1,
+				AuditChainEntries:  4,
+			}, nil
+		},
+	})
+	if blockers := countDoctorBlockers(findings); blockers != 0 {
+		t.Fatalf("expected no pilot doctor blockers, got %d: %+v", blockers, findings)
+	}
+	var out bytes.Buffer
+	writeDoctorFindings(&out, findings)
+	body := out.String()
+	for _, want := range []string{"ok: database-connectivity", "ok: migrations", "ok: queue", "ok: retention", "ok: audit-chain"} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("expected %q in pilot doctor output:\n%s", want, body)
+		}
+	}
+}

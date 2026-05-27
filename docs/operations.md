@@ -125,13 +125,54 @@ Local development should use `.env.example`,
 `WEBHOOKERY_ENVIRONMENT=development`, and Docker Compose. Do not treat the
 production doctor as the local development gate.
 
+## Pilot Doctor Runbook
+
+Use the pilot doctor before a bounded commercial evaluation or provider proof
+run:
+
+```bash
+go run ./cmd/whcp doctor pilot --no-network
+```
+
+`--no-network` keeps the check local: configuration, key custody shape,
+raw-storage config, bootstrap-key risk, provider-proof manifest presence, and
+explicit skipped network checks are reported without contacting PostgreSQL,
+object storage, receivers, or live providers.
+
+To include safe PostgreSQL metadata checks, omit `--no-network` only when
+`WEBHOOKERY_DATABASE_URL` points at the intended disposable or pilot database:
+
+```bash
+go run ./cmd/whcp doctor pilot --timeout 3s
+```
+
+Network-enabled pilot doctor checks include:
+
+- PostgreSQL connectivity;
+- applied migration count compared with repository migration files;
+- durable outbox pending and in-progress counts;
+- active retention policy count; and
+- audit-chain entry presence.
+
+Receiver connectivity is skipped unless both
+`WEBHOOKERY_PILOT_RECEIVER_CHECK_URL` and
+`WEBHOOKERY_PILOT_ALLOW_RECEIVER_CHECK=true` are set. The receiver URL is
+validated through the SSRF policy before a `HEAD` request is attempted, and the
+doctor output does not print the URL.
+
+The pilot doctor does not replace `make rc-check`, `make finalize`, restore
+drills, audit-chain verification, object-store read/write drills, or manual
+live-provider proof guides.
+
 ## Production RC Checklist
 
 Before promoting a release candidate:
 
 1. Run `go run ./cmd/whcp doctor production`. Fix blockers.
-2. Run `make finalize` on the release candidate commit.
-3. Run `WEBHOOKERY_TEST_DATABASE_URL=postgres://... make live-postgres-check`
+2. Run `go run ./cmd/whcp doctor pilot --no-network`, then a network-enabled
+   pilot doctor only against a disposable or intended pilot database.
+3. Run `make finalize` on the release candidate commit.
+4. Run `WEBHOOKERY_TEST_DATABASE_URL=postgres://... make live-postgres-check`
    against a disposable PostgreSQL database.
 4. Run non-live `make rc-check`. It must not require live third-party provider,
    AWS, Vault, Slack, PagerDuty, SIEM, or customer receiver calls.

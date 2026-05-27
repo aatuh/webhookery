@@ -94,6 +94,8 @@ expected output, troubleshooting, and non-claims.
 - Full repository gate: `make finalize`.
 - Redacted production preflight:
   `WEBHOOKERY_ENVIRONMENT=production go run ./cmd/whcp doctor production`.
+- Redacted pilot preflight:
+  `go run ./cmd/whcp doctor pilot --no-network`.
 - Disposable live database gate:
   `WEBHOOKERY_TEST_DATABASE_URL=postgres://... make live-postgres-check`.
 - Release-candidate acceptance:

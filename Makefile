@@ -198,6 +198,7 @@ documentation-structure-check: ## Check canonical documentation structure
 	@grep -q "Roadmap Intake Policy" docs/roadmap-intake-policy.md
 	@grep -q "Pilot Review Checklist" docs/pilot-review-checklist.md
 	@grep -q "Configuration Reference" docs/configuration.md
+	@grep -q "WEBHOOKERY_PILOT_ALLOW_RECEIVER_CHECK" docs/configuration.md
 	@grep -q "Feature Behavior Reference" docs/feature-behavior.md
 	@grep -q "Security Promise" docs/security-promise.md
 	@grep -q "Stability And Compatibility Policy" docs/stability.md
@@ -221,6 +222,8 @@ documentation-structure-check: ## Check canonical documentation structure
 	@grep -q "Provider Claim Freshness" docs/documentation-maintenance.md
 	@grep -q "Documentation Review Checklist" docs/documentation-maintenance.md
 	@grep -q "CLI" docs/cli.md
+	@grep -q "doctor pilot --no-network" docs/cli.md
+	@grep -q "Pilot Doctor Runbook" docs/operations.md
 	@grep -q "Deployment Posture" docs/deployment.md
 	@grep -q "Schema And Migration Operations" docs/schema-migrations.md
 	@grep -q "docs/security-promise.md" docs/documentation-maintenance.md
@@ -264,6 +267,7 @@ meta-files-check: ## Check governance, licensing, and release-evidence metadata
 	@grep -q "compliance" RELEASE_EVIDENCE.md
 	@grep -q "live third-party provider" docs/release-evidence-template.md
 	@grep -q "make live-postgres-check" README.md
+	@grep -q "doctor pilot --no-network" README.md
 	@grep -q "make live-postgres-check" docs/operations.md
 	@grep -q "make live-postgres-check" docs/release-evidence-template.md
 	@grep -q "not a certification" RELEASE_EVIDENCE.md

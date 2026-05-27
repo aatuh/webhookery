@@ -45,6 +45,7 @@ non-zero because a command is required. The groups are:
 | Apply migrations | Database URL | `go run ./cmd/whcp migrate up` | PostgreSQL schema reaches latest migration. | Yes, schema mutation |
 | Start API | Runtime env | `go run ./cmd/whcp api` | API listens on configured address. | Process lifecycle |
 | Run production doctor | Local config | `go run ./cmd/whcp doctor production` | `blocker`, `warning`, and `ok` findings without secrets. | Config disclosure |
+| Run pilot doctor | Local config, optional network | `go run ./cmd/whcp doctor pilot --no-network` | Pilot posture findings without contacting PostgreSQL or receivers. Remove `--no-network` only for explicit safe connectivity checks. | Config disclosure |
 | Check key custody | Secret custody env | `go run ./cmd/whcp key-custody test` | Encrypt/decrypt smoke succeeds without plaintext or ciphertext output. | Secret custody |
 
 ## Identity And Access
