@@ -120,7 +120,7 @@ Local development should use `.env.example`,
 `WEBHOOKERY_ENVIRONMENT=development`, and Docker Compose. Do not treat the
 production doctor as the local development gate.
 
-## Release-Candidate Checklist
+## Production RC Checklist
 
 Before promoting a release candidate:
 
@@ -170,7 +170,7 @@ make rc-check
 The restore target is destructive. The restore script refuses to run without
 `WEBHOOKERY_RESTORE_CONFIRM=restore`.
 
-## Backup And Restore Runbook
+## Upgrade And Restore Drill
 
 Back up PostgreSQL before upgrading, changing retention policies, rotating
 master-key material, changing secret custody mode, or enabling object storage.
@@ -320,6 +320,14 @@ mismatched hashes are failures.
   PostgreSQL.
 - Object storage outage in S3 mode is an ingress durability problem, not only a
   delivery problem.
+
+## Explicit Non-Goals
+
+The production RC posture does not claim exactly-once delivery, provider-side
+event completeness, managed-service availability, multi-region active-active
+operation, compliance certification, legal evidentiary certification, external
+timestamping, or recovery of every provider-side event. Use
+`docs/security-promise.md` as the canonical non-claims reference.
 
 ## Cryptography And Secret Handling
 

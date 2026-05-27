@@ -94,6 +94,7 @@ documentation-structure-check: ## Check canonical documentation structure
 	@test -f docs/configuration.md
 	@test -f docs/feature-behavior.md
 	@test -f docs/security-promise.md
+	@test -f docs/stability.md
 	@test -f docs/documentation-maintenance.md
 	@test -f docs/cli.md
 	@test -f docs/deployment.md
@@ -104,6 +105,7 @@ documentation-structure-check: ## Check canonical documentation structure
 	@grep -q "Configuration Reference" docs/configuration.md
 	@grep -q "Feature Behavior Reference" docs/feature-behavior.md
 	@grep -q "Security Promise" docs/security-promise.md
+	@grep -q "Stability And Compatibility Policy" docs/stability.md
 	@grep -q "Provider Claim Freshness" docs/documentation-maintenance.md
 	@grep -q "Documentation Review Checklist" docs/documentation-maintenance.md
 	@grep -q "CLI" docs/cli.md
