@@ -63,6 +63,34 @@ func postJSON(baseURL, apiKey, path string, body any) error {
 	return err
 }
 
+func postJSONDecode(baseURL, apiKey, path string, body, dst any) error {
+	raw, err := json.Marshal(body)
+	if err != nil {
+		return err
+	}
+	endpoint, err := apiEndpoint(baseURL, path)
+	if err != nil {
+		return err
+	}
+	// #nosec G107,G704 -- CLI connects only to the operator-supplied Webhookery API URL after scheme/host validation.
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, endpoint, bytes.NewReader(raw))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+apiKey)
+	req.Header.Set("Content-Type", "application/json")
+	// #nosec G704 -- operator-supplied CLI API URL; not reachable from untrusted remote input.
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+		return fmt.Errorf("request failed with status %d", resp.StatusCode)
+	}
+	return json.NewDecoder(resp.Body).Decode(dst)
+}
+
 func patchJSON(baseURL, apiKey, path string, body any) error {
 	raw, err := json.Marshal(body)
 	if err != nil {
@@ -143,6 +171,60 @@ func downloadAuditExport(baseURL, apiKey, exportID, outputPath string) error {
 		return err
 	}
 	return writePrivateFile(outputPath, body)
+}
+
+func downloadIncidentReport(baseURL, apiKey, incidentID, format, outputPath string) error {
+	if strings.TrimSpace(incidentID) == "" {
+		return fmt.Errorf("incident-id is required")
+	}
+	format = strings.ToLower(strings.TrimSpace(format))
+	if format == "" {
+		format = "markdown"
+	}
+	if format != "markdown" && format != "json" {
+		return fmt.Errorf("format must be markdown or json")
+	}
+	endpoint, err := apiEndpoint(baseURL, "/v1/incidents/"+url.PathEscape(incidentID)+"/report?format="+url.QueryEscape(format))
+	if err != nil {
+		return err
+	}
+	// #nosec G107,G704 -- CLI connects only to the operator-supplied Webhookery API URL after scheme/host validation.
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, endpoint, nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+apiKey)
+	// #nosec G704 -- operator-supplied CLI API URL; not reachable from untrusted remote input.
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+		return fmt.Errorf("incident report download failed with status %d", resp.StatusCode)
+	}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return err
+	}
+	if outputPath == "" || outputPath == "-" {
+		_, err = os.Stdout.Write(body)
+		return err
+	}
+	return writePrivateFile(outputPath, body)
+}
+
+func createAndDownloadIncidentExport(baseURL, apiKey, incidentID, reason, outputPath string) error {
+	var export struct {
+		ID string `json:"id"`
+	}
+	if err := postJSONDecode(baseURL, apiKey, "/v1/incidents/"+url.PathEscape(incidentID)+"/evidence-export", map[string]string{"reason": reason}, &export); err != nil {
+		return err
+	}
+	if strings.TrimSpace(export.ID) == "" {
+		return fmt.Errorf("incident evidence export response did not include id")
+	}
+	return downloadAuditExport(baseURL, apiKey, export.ID, outputPath)
 }
 
 func verifyEvidenceBundleFile(path string) error {

@@ -191,6 +191,34 @@ Compatibility checks reject newly required fields, removed existing properties,
 and changed property types. Unsupported advanced JSON Schema features are not
 treated as compatibility proof.
 
+## Incident Packets And Reports
+
+Incidents are tenant-scoped investigation records. Operators can create an
+incident, attach captured events, generate a report snapshot, and create an
+incident evidence export. Event attachment validates the incident and event in
+the actor tenant before writing the link.
+
+Incident report snapshots are generated from existing event metadata and event
+timeline entries. The report includes:
+
+- incident title, reason, state, creator, and timestamps
+- event identity, provider, event type, provider event ID, source ID, and
+  received time
+- provider verification result, verification reason, and dedupe status
+- raw payload ID and raw payload hash
+- route, subscription, delivery, retry, DLQ, replay, retention, and audit
+  timeline references when those entries exist
+- explicit non-claims that inbound capture is not downstream business success,
+  delivery is at-least-once, and local evidence is not provider-side
+  completeness
+
+Reports and incident evidence exports omit raw payload bodies, webhook secrets,
+signatures, bearer tokens, private keys, and provider credentials by default.
+Generated reports are auditable through `incident_report.generated`; incident
+evidence exports write `incident_evidence_export.created` and include
+`incident_report.json`, `incident_report.md`, timeline evidence, and bundle
+hashes.
+
 ## Retention, Raw Payloads, And Exports
 
 Raw payload retrieval is elevated and audited. Operators should keep raw

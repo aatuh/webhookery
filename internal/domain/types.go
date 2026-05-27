@@ -544,6 +544,47 @@ type Event struct {
 	TraceID        string    `json:"trace_id"`
 }
 
+type Incident struct {
+	ID        string    `json:"id"`
+	TenantID  string    `json:"tenant_id"`
+	Title     string    `json:"title"`
+	Reason    string    `json:"reason"`
+	State     string    `json:"state"`
+	CreatedBy string    `json:"created_by"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
+type IncidentEvent struct {
+	ID         string    `json:"id"`
+	TenantID   string    `json:"tenant_id"`
+	IncidentID string    `json:"incident_id"`
+	EventID    string    `json:"event_id"`
+	AddedBy    string    `json:"added_by"`
+	Reason     string    `json:"reason"`
+	CreatedAt  time.Time `json:"created_at"`
+}
+
+type IncidentReportSnapshot struct {
+	ID            string          `json:"id"`
+	TenantID      string          `json:"tenant_id"`
+	IncidentID    string          `json:"incident_id"`
+	SchemaVersion string          `json:"schema_version"`
+	Report        json.RawMessage `json:"report"`
+	Markdown      string          `json:"markdown"`
+	GeneratedBy   string          `json:"generated_by"`
+	GeneratedAt   time.Time       `json:"generated_at"`
+}
+
+type IncidentEvidenceExport struct {
+	ID         string    `json:"id"`
+	TenantID   string    `json:"tenant_id"`
+	IncidentID string    `json:"incident_id"`
+	ExportID   string    `json:"export_id"`
+	CreatedBy  string    `json:"created_by"`
+	CreatedAt  time.Time `json:"created_at"`
+}
+
 type ProviderAdapter struct {
 	ID            string    `json:"id"`
 	TenantID      string    `json:"tenant_id,omitempty"`

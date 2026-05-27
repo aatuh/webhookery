@@ -77,6 +77,18 @@ type EventStore interface {
 	ListEventTimeline(ctx context.Context, tenantID, eventID string, limit int) ([]map[string]any, error)
 }
 
+type IncidentStore interface {
+	CreateIncident(ctx context.Context, incident domain.Incident) (domain.Incident, error)
+	ListIncidents(ctx context.Context, tenantID string, limit int) ([]domain.Incident, error)
+	GetIncident(ctx context.Context, tenantID, incidentID string) (domain.Incident, error)
+	AddIncidentEvent(ctx context.Context, tenantID, incidentID, eventID, actorID, reason string) (domain.IncidentEvent, error)
+	RemoveIncidentEvent(ctx context.Context, tenantID, incidentID, eventID, actorID, reason string) (domain.IncidentEvent, error)
+	ListIncidentEvents(ctx context.Context, tenantID, incidentID string) ([]domain.IncidentEvent, error)
+	CreateIncidentReportSnapshot(ctx context.Context, tenantID, incidentID, actorID, reason string, report IncidentReport, markdown string) (domain.IncidentReportSnapshot, error)
+	GetIncidentReportSnapshot(ctx context.Context, tenantID, incidentID string) (domain.IncidentReportSnapshot, error)
+	CreateIncidentEvidenceExport(ctx context.Context, tenantID, incidentID, actorID string, req CreateIncidentEvidenceExportRequest, report IncidentReport, markdown string) (domain.IncidentEvidenceExport, domain.EvidenceExport, error)
+}
+
 type DeliveryStore interface {
 	ListDeliveries(ctx context.Context, tenantID string, limit int) ([]domain.Delivery, error)
 	ListDeliveryAttempts(ctx context.Context, tenantID, deliveryID string, limit int) ([]domain.DeliveryAttempt, error)

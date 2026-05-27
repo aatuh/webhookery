@@ -73,19 +73,20 @@ func roleAllows(role Role, scope string) bool {
 			"events:read", "events:write",
 			"deliveries:read", "deliveries:retry",
 			"replay:read", "replay:write",
+			"incidents:read", "incidents:write",
 		})
 	case RoleOperator:
 		return hasScope(scope, []string{
 			"sources:read", "endpoints:read", "subscriptions:read", "routes:read", "schemas:read",
 			"events:read", "events:write", "deliveries:read", "deliveries:retry", "replay:read", "replay:write",
-			"ops:read", "ops:write",
+			"incidents:read", "incidents:write", "ops:read", "ops:write",
 		})
 	case RoleSecurity:
-		return hasScope(scope, []string{"security:read", "security:write", "audit:read", "events:read", "events:raw"})
+		return hasScope(scope, []string{"security:read", "security:write", "audit:read", "events:read", "events:raw", "incidents:read", "incidents:write"})
 	case RoleAuditor:
-		return hasScope(scope, []string{"audit:read", "events:read", "events:raw", "deliveries:read", "replay:read", "security:read"})
+		return hasScope(scope, []string{"audit:read", "events:read", "events:raw", "deliveries:read", "replay:read", "security:read", "incidents:read"})
 	case RoleSupport:
-		return hasScope(scope, []string{"events:read", "deliveries:read", "replay:read"})
+		return hasScope(scope, []string{"events:read", "deliveries:read", "replay:read", "incidents:read"})
 	default:
 		return false
 	}

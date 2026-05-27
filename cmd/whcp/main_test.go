@@ -75,6 +75,7 @@ func TestRunDispatchesSubcommandUsage(t *testing.T) {
 		"schemas",
 		"dead-letter",
 		"quarantine",
+		"incidents",
 		"signatures",
 	} {
 		t.Run(command, func(t *testing.T) {
@@ -425,6 +426,34 @@ func TestCLIResourceCommandsSendExpectedRequests(t *testing.T) {
 			wantMethod:   http.MethodPost,
 			wantPath:     "/v1/quarantine/qua_1:approve",
 			bodyContains: []string{`"reason":"verified"`, `"route_after_release":true`},
+		},
+		{
+			name:         "incident create",
+			args:         append([]string{"incidents", "create", "--title", "Stripe payment webhook failed", "--reason", "support investigation"}, common...),
+			wantMethod:   http.MethodPost,
+			wantPath:     "/v1/incidents",
+			bodyContains: []string{`"title":"Stripe payment webhook failed"`, `"reason":"support investigation"`},
+		},
+		{
+			name:         "incident add event",
+			args:         append([]string{"incidents", "add-event", "--incident-id", "inc_1", "--event-id", "evt_1", "--reason", "attach failed payment"}, common...),
+			wantMethod:   http.MethodPost,
+			wantPath:     "/v1/incidents/inc_1/events",
+			bodyContains: []string{`"event_id":"evt_1"`, `"reason":"attach failed payment"`},
+		},
+		{
+			name:         "incident generate report",
+			args:         append([]string{"incidents", "generate-report", "--incident-id", "inc_1", "--reason", "handoff"}, common...),
+			wantMethod:   http.MethodPost,
+			wantPath:     "/v1/incidents/inc_1/generate-report",
+			bodyContains: []string{`"reason":"handoff"`},
+		},
+		{
+			name:         "incident evidence export",
+			args:         append([]string{"incidents", "export", "--incident-id", "inc_1", "--reason", "customer evidence"}, common...),
+			wantMethod:   http.MethodPost,
+			wantPath:     "/v1/incidents/inc_1/evidence-export",
+			bodyContains: []string{`"reason":"customer evidence"`},
 		},
 	}
 

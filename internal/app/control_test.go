@@ -34,6 +34,59 @@ func TestControlServiceScopesEventReadsToActorTenant(t *testing.T) {
 	}
 }
 
+func TestControlServiceIncidentLifecycleScopesAndRedactsReports(t *testing.T) {
+	store := &fakeControlStore{}
+	svc := NewControlService(store, ssrf.Validator{Resolver: ssrf.StaticResolver{}})
+	actor := authz.Actor{ID: "usr_1", TenantID: "ten_a", Role: authz.RoleOperator, Scopes: []string{"incidents:read", "incidents:write", "events:read"}}
+	reader := authz.Actor{ID: "usr_2", TenantID: "ten_a", Role: authz.RoleSupport, Scopes: []string{"incidents:read"}}
+
+	if _, err := svc.CreateIncident(context.Background(), reader, CreateIncidentRequest{Title: "Stripe payment failed", Reason: "support case"}); err != ErrForbidden {
+		t.Fatalf("expected incident create to require incidents:write, got %v", err)
+	}
+	if _, err := svc.CreateIncident(context.Background(), actor, CreateIncidentRequest{Title: " ", Reason: "support case"}); !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("expected incident title validation, got %v", err)
+	}
+
+	incident, err := svc.CreateIncident(context.Background(), actor, CreateIncidentRequest{Title: "Stripe payment failed", Reason: "support case"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if incident.TenantID != "ten_a" || incident.CreatedBy != "usr_1" || store.incidentTenantID != "ten_a" || store.incidentActorID != "usr_1" {
+		t.Fatalf("incident was not tenant-scoped: incident=%+v tenant=%q actor=%q", incident, store.incidentTenantID, store.incidentActorID)
+	}
+
+	if _, err := svc.AddIncidentEvent(context.Background(), actor, incident.ID, AddIncidentEventRequest{EventID: "evt_1", Reason: "investigate"}); err != nil {
+		t.Fatal(err)
+	}
+	if store.incidentID != incident.ID || store.incidentEventID != "evt_1" || store.incidentReason != "investigate" {
+		t.Fatalf("incident event link was not scoped with reason: incident=%q event=%q reason=%q", store.incidentID, store.incidentEventID, store.incidentReason)
+	}
+
+	snapshot, err := svc.GenerateIncidentReport(context.Background(), actor, incident.ID, IncidentReportRequest{Reason: "support handoff"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := json.Marshal(snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, forbidden := range []string{"raw-body-secret", "whsec_test", "sk_test_secret"} {
+		if strings.Contains(string(raw), forbidden) {
+			t.Fatalf("incident report leaked sensitive value %q in %s", forbidden, raw)
+		}
+	}
+	if !strings.Contains(snapshot.Markdown, "Inbound capture does not prove downstream business success") {
+		t.Fatalf("incident report must include non-claims, got markdown:\n%s", snapshot.Markdown)
+	}
+
+	if _, err := svc.GetIncidentReport(context.Background(), reader, incident.ID); err != nil {
+		t.Fatal(err)
+	}
+	if store.incidentTenantID != "ten_a" {
+		t.Fatalf("incident report read was not tenant-scoped: %q", store.incidentTenantID)
+	}
+}
+
 func TestControlServiceScopesEventSchemaReadsToActorTenant(t *testing.T) {
 	store := &fakeControlStore{}
 	svc := NewControlService(store, ssrf.Validator{Resolver: ssrf.StaticResolver{}})
@@ -1685,6 +1738,11 @@ func testClientCertificatePEM(t *testing.T, commonName string) (string, string) 
 
 type fakeControlStore struct {
 	eventTenantID              string
+	incidentTenantID           string
+	incidentActorID            string
+	incidentID                 string
+	incidentEventID            string
+	incidentReason             string
 	auditExportTenantID        string
 	auditExport                domain.EvidenceExport
 	auditExportDownloaded      bool
@@ -2132,7 +2190,20 @@ func (f *fakeControlStore) ListEvents(context.Context, string, int) ([]domain.Ev
 }
 func (f *fakeControlStore) GetEvent(_ context.Context, tenantID, eventID string) (domain.Event, error) {
 	f.eventTenantID = tenantID
-	return domain.Event{ID: eventID, TenantID: tenantID}, nil
+	return domain.Event{
+		ID:             eventID,
+		TenantID:       tenantID,
+		SourceID:       "src_1",
+		Provider:       "stripe",
+		Type:           "invoice.paid",
+		ProviderID:     "evt_provider_1",
+		RawPayloadID:   "raw_1",
+		RawPayloadHash: "sha256:raw",
+		Verified:       true,
+		VerifyReason:   "valid_signature",
+		DedupeStatus:   domain.DedupeUnique,
+		ReceivedAt:     time.Unix(100, 0).UTC(),
+	}, nil
 }
 func (f *fakeControlStore) GetRawPayload(context.Context, string, string, string) (domain.RawPayload, error) {
 	return domain.RawPayload{}, nil
@@ -2143,7 +2214,81 @@ func (f *fakeControlStore) GetNormalizedEvent(_ context.Context, tenantID, event
 	return domain.NormalizedEnvelope{ID: "nenv_1", TenantID: tenantID, EventID: eventID}, nil
 }
 func (f *fakeControlStore) ListEventTimeline(context.Context, string, string, int) ([]map[string]any, error) {
-	return nil, nil
+	return []map[string]any{
+		{"kind": "event", "ref_id": "evt_1", "state": "unique", "detail": "valid_signature", "occurred_at": time.Unix(100, 0).UTC()},
+		{"kind": "delivery", "ref_id": "del_1", "state": "failed", "detail": "route_version=rtv_1 subscription_version=none retry_policy=rtp_1", "occurred_at": time.Unix(101, 0).UTC()},
+		{"kind": "attempt", "ref_id": "att_1", "state": "failed", "detail": "network_error retryable=true retry_delay_ms=1000", "occurred_at": time.Unix(102, 0).UTC()},
+		{"kind": "audit", "ref_id": "aud_1", "state": "raw_payload.read", "detail": "operator reason", "occurred_at": time.Unix(103, 0).UTC()},
+	}, nil
+}
+func (f *fakeControlStore) CreateIncident(_ context.Context, incident domain.Incident) (domain.Incident, error) {
+	f.incidentTenantID = incident.TenantID
+	f.incidentActorID = incident.CreatedBy
+	if incident.ID == "" {
+		incident.ID = "inc_1"
+	}
+	if incident.CreatedAt.IsZero() {
+		incident.CreatedAt = time.Unix(1, 0).UTC()
+		incident.UpdatedAt = incident.CreatedAt
+	}
+	return incident, nil
+}
+func (f *fakeControlStore) ListIncidents(_ context.Context, tenantID string, limit int) ([]domain.Incident, error) {
+	f.incidentTenantID = tenantID
+	return []domain.Incident{{ID: "inc_1", TenantID: tenantID, Title: "Stripe payment failed", State: domain.StateActive}}, nil
+}
+func (f *fakeControlStore) GetIncident(_ context.Context, tenantID, incidentID string) (domain.Incident, error) {
+	f.incidentTenantID = tenantID
+	f.incidentID = incidentID
+	return domain.Incident{ID: incidentID, TenantID: tenantID, Title: "Stripe payment failed", Reason: "support case", State: domain.StateActive, CreatedBy: "usr_1", CreatedAt: time.Unix(1, 0).UTC()}, nil
+}
+func (f *fakeControlStore) AddIncidentEvent(_ context.Context, tenantID, incidentID, eventID, actorID, reason string) (domain.IncidentEvent, error) {
+	f.incidentTenantID = tenantID
+	f.incidentID = incidentID
+	f.incidentEventID = eventID
+	f.incidentActorID = actorID
+	f.incidentReason = reason
+	return domain.IncidentEvent{ID: "ine_1", TenantID: tenantID, IncidentID: incidentID, EventID: eventID, AddedBy: actorID, Reason: reason, CreatedAt: time.Unix(2, 0).UTC()}, nil
+}
+func (f *fakeControlStore) RemoveIncidentEvent(_ context.Context, tenantID, incidentID, eventID, actorID, reason string) (domain.IncidentEvent, error) {
+	f.incidentTenantID = tenantID
+	f.incidentID = incidentID
+	f.incidentEventID = eventID
+	f.incidentActorID = actorID
+	f.incidentReason = reason
+	return domain.IncidentEvent{ID: "ine_1", TenantID: tenantID, IncidentID: incidentID, EventID: eventID, AddedBy: actorID, Reason: reason, CreatedAt: time.Unix(2, 0).UTC()}, nil
+}
+func (f *fakeControlStore) ListIncidentEvents(_ context.Context, tenantID, incidentID string) ([]domain.IncidentEvent, error) {
+	f.incidentTenantID = tenantID
+	f.incidentID = incidentID
+	eventID := f.incidentEventID
+	if eventID == "" {
+		eventID = "evt_1"
+	}
+	return []domain.IncidentEvent{{ID: "ine_1", TenantID: tenantID, IncidentID: incidentID, EventID: eventID, AddedBy: "usr_1", Reason: "investigate", CreatedAt: time.Unix(2, 0).UTC()}}, nil
+}
+func (f *fakeControlStore) CreateIncidentReportSnapshot(_ context.Context, tenantID, incidentID, actorID, reason string, report IncidentReport, markdown string) (domain.IncidentReportSnapshot, error) {
+	f.incidentTenantID = tenantID
+	f.incidentID = incidentID
+	f.incidentActorID = actorID
+	f.incidentReason = reason
+	raw, err := json.Marshal(report)
+	if err != nil {
+		return domain.IncidentReportSnapshot{}, err
+	}
+	return domain.IncidentReportSnapshot{ID: "irs_1", TenantID: tenantID, IncidentID: incidentID, SchemaVersion: report.SchemaVersion, Report: raw, Markdown: markdown, GeneratedBy: actorID, GeneratedAt: report.GeneratedAt}, nil
+}
+func (f *fakeControlStore) GetIncidentReportSnapshot(_ context.Context, tenantID, incidentID string) (domain.IncidentReportSnapshot, error) {
+	f.incidentTenantID = tenantID
+	f.incidentID = incidentID
+	return domain.IncidentReportSnapshot{ID: "irs_1", TenantID: tenantID, IncidentID: incidentID, SchemaVersion: incidentReportSchemaV1, Markdown: "incident report", GeneratedBy: "usr_1", GeneratedAt: time.Unix(3, 0).UTC()}, nil
+}
+func (f *fakeControlStore) CreateIncidentEvidenceExport(_ context.Context, tenantID, incidentID, actorID string, req CreateIncidentEvidenceExportRequest, report IncidentReport, markdown string) (domain.IncidentEvidenceExport, domain.EvidenceExport, error) {
+	f.incidentTenantID = tenantID
+	f.incidentID = incidentID
+	f.incidentActorID = actorID
+	f.incidentReason = req.Reason
+	return domain.IncidentEvidenceExport{ID: "iex_1", TenantID: tenantID, IncidentID: incidentID, ExportID: "exp_1", CreatedBy: actorID}, domain.EvidenceExport{ID: "exp_1", TenantID: tenantID, IncludeTimelines: true, CreatedBy: actorID}, nil
 }
 func (f *fakeControlStore) ListDeliveries(context.Context, string, int) ([]domain.Delivery, error) {
 	return nil, nil

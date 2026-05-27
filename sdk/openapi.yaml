@@ -22,6 +22,8 @@ tags:
     description: Event schemas, compatibility checks, and deterministic transformations.
   - name: Events And Ingestion
     description: Product events, provider ingestion, event evidence, raw payloads, and timelines.
+  - name: Incidents
+    description: Webhook incident packets, report snapshots, and incident evidence exports.
   - name: Delivery And Replay
     description: Deliveries, attempts, replay jobs, dead letter, and quarantine.
   - name: Reconciliation
@@ -2817,6 +2819,228 @@ paths:
       responses:
         "200":
           description: Timeline entries for event, receipts, deliveries, attempts, and audit records.
+  /v1/incidents:
+    get:
+      tags:
+        - Incidents
+      operationId: getIncidents
+      summary: List webhook incidents
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: Paginated tenant-scoped incidents.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IncidentPage"
+    post:
+      tags:
+        - Incidents
+      operationId: postIncidents
+      summary: Create webhook incident
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateIncidentRequest"
+            example:
+              title: "Stripe payment webhook failed"
+              reason: "customer support investigation"
+      responses:
+        "201":
+          description: Incident created.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Incident"
+        "403":
+          $ref: "#/components/responses/ForbiddenProblem"
+  /v1/incidents/{incident_id}:
+    get:
+      tags:
+        - Incidents
+      operationId: getIncidentsIncidentId
+      summary: Get webhook incident
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: incident_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Incident metadata.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Incident"
+        "404":
+          description: Incident not found or not visible.
+  /v1/incidents/{incident_id}/events:
+    post:
+      tags:
+        - Incidents
+      operationId: postIncidentsIncidentIdEvents
+      summary: Attach event to incident
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: incident_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AddIncidentEventRequest"
+            example:
+              event_id: evt_example
+              reason: "failed downstream delivery"
+      responses:
+        "201":
+          description: Event attached to incident.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IncidentEvent"
+        "404":
+          description: Incident or event not found in the actor tenant.
+  /v1/incidents/{incident_id}/events/{event_id}:
+    delete:
+      tags:
+        - Incidents
+      operationId: deleteIncidentsIncidentIdEventsEventId
+      summary: Remove event from incident
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: incident_id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: event_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/StateChangeRequest"
+            example:
+              reason: "event not related to this incident"
+      responses:
+        "200":
+          description: Event removed from incident.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IncidentEvent"
+  /v1/incidents/{incident_id}/generate-report:
+    post:
+      tags:
+        - Incidents
+      operationId: postIncidentsIncidentIdGenerateReport
+      summary: Generate incident report snapshot
+      description: Generates a tenant-scoped JSON and Markdown report from attached event timelines. Raw payload bodies are omitted by default.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: incident_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/IncidentReportRequest"
+            example:
+              reason: "support handoff"
+      responses:
+        "201":
+          description: Incident report snapshot generated.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IncidentReportSnapshot"
+  /v1/incidents/{incident_id}/report:
+    get:
+      tags:
+        - Incidents
+      operationId: getIncidentsIncidentIdReport
+      summary: Get latest incident report snapshot
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: incident_id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: format
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [json, markdown]
+            default: json
+      responses:
+        "200":
+          description: Latest incident report snapshot.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IncidentReportSnapshot"
+            text/markdown:
+              schema:
+                type: string
+  /v1/incidents/{incident_id}/evidence-export:
+    post:
+      tags:
+        - Incidents
+      operationId: postIncidentsIncidentIdEvidenceExport
+      summary: Create incident evidence export
+      description: Creates a tenant-scoped evidence bundle that includes incident_report.json and incident_report.md. Raw payload bodies are excluded.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: incident_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateIncidentEvidenceExportRequest"
+            example:
+              reason: "customer evidence package"
+      responses:
+        "202":
+          description: Incident evidence export created.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EvidenceExport"
   /v1/ingest/{tenant_id}/{source_id}:
     post:
       tags:
@@ -5973,6 +6197,129 @@ components:
           nullable: true
         has_more:
           type: boolean
+    CreateIncidentRequest:
+      type: object
+      required: [title, reason]
+      additionalProperties: false
+      properties:
+        title:
+          type: string
+          minLength: 1
+          maxLength: 200
+        reason:
+          type: string
+          minLength: 1
+          maxLength: 500
+    AddIncidentEventRequest:
+      type: object
+      required: [event_id, reason]
+      additionalProperties: false
+      properties:
+        event_id:
+          type: string
+          minLength: 1
+        reason:
+          type: string
+          minLength: 1
+          maxLength: 500
+    IncidentReportRequest:
+      type: object
+      required: [reason]
+      additionalProperties: false
+      properties:
+        reason:
+          type: string
+          minLength: 1
+          maxLength: 500
+    CreateIncidentEvidenceExportRequest:
+      type: object
+      required: [reason]
+      additionalProperties: false
+      properties:
+        reason:
+          type: string
+          minLength: 1
+          maxLength: 500
+    Incident:
+      type: object
+      required: [id, tenant_id, title, reason, state, created_by, created_at]
+      properties:
+        id:
+          type: string
+        tenant_id:
+          type: string
+        title:
+          type: string
+        reason:
+          type: string
+        state:
+          type: string
+          enum: [active, disabled]
+        created_by:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+    IncidentPage:
+      type: object
+      required: [data, has_more]
+      properties:
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/Incident"
+        next_cursor:
+          type: string
+          nullable: true
+        has_more:
+          type: boolean
+    IncidentEvent:
+      type: object
+      required: [id, tenant_id, incident_id, event_id, added_by, reason, created_at]
+      properties:
+        id:
+          type: string
+        tenant_id:
+          type: string
+        incident_id:
+          type: string
+        event_id:
+          type: string
+        added_by:
+          type: string
+        reason:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+    IncidentReportSnapshot:
+      type: object
+      required: [id, tenant_id, incident_id, schema_version, report, markdown, generated_by, generated_at]
+      properties:
+        id:
+          type: string
+        tenant_id:
+          type: string
+        incident_id:
+          type: string
+        schema_version:
+          type: string
+          enum: [webhookery.incident_report.v1]
+        report:
+          type: object
+          additionalProperties: true
+          description: Machine-readable incident report. Raw payload bodies, secrets, and signatures are omitted by default.
+        markdown:
+          type: string
+          description: Human-readable Markdown incident report.
+        generated_by:
+          type: string
+        generated_at:
+          type: string
+          format: date-time
     NormalizedEnvelope:
       type: object
       required: [id, tenant_id, event_id, provider, type, source, envelope_sha256, data_sha256, metadata_sha256, storage_status, created_at]
