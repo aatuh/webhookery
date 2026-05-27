@@ -7,7 +7,9 @@ each tagged release is:
 
 Copy that template for the release being reviewed and fill in commit, tag,
 image digest, checks, SBOMs, vulnerability scans, OpenAPI checksums, migration
-state, production-doctor output, and acceptance evidence.
+state, production-doctor output, performance smoke output, provider
+conformance output, failure-drill output, branch protection status, external
+review status, accepted-risk status, and acceptance evidence.
 
 Local acceptance gates start with:
 

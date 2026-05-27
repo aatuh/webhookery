@@ -113,6 +113,9 @@ documentation-structure-check: ## Check canonical documentation structure
 	@test -f docs/deployment.md
 	@test -f docs/schema-migrations.md
 	@test -f docs/security-review-package.md
+	@test -f docs/external-review-scope.md
+	@test -f docs/external-review-findings-template.md
+	@test -f docs/external-review-accepted-risks.md
 	@test -f docs/release-evidence-template.md
 	@grep -q "Documentation Map" docs/index.md
 	@grep -q "Configuration Reference" docs/configuration.md
@@ -129,6 +132,9 @@ documentation-structure-check: ## Check canonical documentation structure
 	@grep -q "Deployment Posture" docs/deployment.md
 	@grep -q "Schema And Migration Operations" docs/schema-migrations.md
 	@grep -q "docs/security-promise.md" docs/documentation-maintenance.md
+	@grep -q "External Review Scope Template" docs/external-review-scope.md
+	@grep -q "External Review Findings Template" docs/external-review-findings-template.md
+	@grep -q "External Review Accepted Risks" docs/external-review-accepted-risks.md
 
 meta-files-check: ## Check governance, licensing, and release-evidence metadata
 	@test -f LICENSE

@@ -53,6 +53,14 @@ jobs:
         id: live_postgres_check
         run: make live-postgres-check
 
+      - name: Provider conformance evidence
+        id: provider_conformance
+        run: make provider-conformance-check
+
+      - name: Performance smoke evidence
+        id: perf_smoke
+        run: make perf-smoke
+
       - name: DB-backed release-candidate checks
         id: rc_check
         run: make rc-check
@@ -61,8 +69,12 @@ jobs:
         if: always()
         env:
           LIVE_POSTGRES_CHECK_OUTCOME: ${{ steps.live_postgres_check.outcome }}
+          PROVIDER_CONFORMANCE_OUTCOME: ${{ steps.provider_conformance.outcome }}
+          PERF_SMOKE_OUTCOME: ${{ steps.perf_smoke.outcome }}
           RC_CHECK_OUTCOME: ${{ steps.rc_check.outcome }}
           RESTORE_DRILL_STATUS: skipped_not_configured
+          BRANCH_PROTECTION_STATUS: not_checked_by_workflow
+          EXTERNAL_REVIEW_STATUS: not_completed_or_not_attached
         run: scripts/integration_evidence.sh
 
       - name: Upload integration evidence
