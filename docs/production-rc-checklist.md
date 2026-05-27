@@ -78,11 +78,13 @@ Review:
 - `docs/operations.md`
 - `docs/day-2-operations.md`
 - `docs/deployment.md`
+- `docs/pilot-topology.md`
 - `docs/schema-migrations.md`
 - `docs/observability.md`
 
 Expected result: production doctor, backup/restore, retention, audit-chain
-verification, alert handling, and restore drills have an owner.
+verification, alert handling, restore drills, and pilot topology boundaries
+have an owner.
 
 ## 7. Accepted Risks
 

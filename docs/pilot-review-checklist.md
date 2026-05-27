@@ -10,6 +10,8 @@ apps unless pilot evidence justifies that phase.
 ## Inputs
 
 - [ ] Completed `docs/pilot-feedback-template.md`.
+- [ ] Completed `docs/pilot-evidence-template.md`.
+- [ ] Accepted pilot topology from `docs/pilot-topology.md`.
 - [ ] Sanitized quickstart/demo result.
 - [ ] Relevant issue links.
 - [ ] Commercial intent, if any.

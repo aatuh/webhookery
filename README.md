@@ -18,6 +18,7 @@ Start here if you are evaluating Webhookery:
 - Local evidence demo: `examples/webhook-evidence-demo/`
 - Static product page: `site/index.html`
 - Release notes: `docs/releases/v0.1.0-rc1.md`
+- Pilot topology: `docs/pilot-topology.md`
 - Commercial evaluation: `docs/commercial-evaluation.md`
 
 ## Implementation Status
@@ -148,6 +149,8 @@ reviews, and support package boundaries are described in `COMMERCIAL.md`,
 - `docs/documentation-maintenance.md`: provider freshness and documentation
   review checklist.
 - `docs/deployment.md`: common self-hosted deployment posture.
+- `docs/pilot-topology.md`: narrow supported topology for initial pilots.
+- `docs/pilot-evidence-template.md`: sanitized pilot evidence packet template.
 - `docs/schema-migrations.md`: schema review, migration ordering, and restore
   compatibility guidance.
 - `docs/security-review-package.md`: security reviewer artifact map.
