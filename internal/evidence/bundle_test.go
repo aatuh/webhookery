@@ -1,6 +1,11 @@
 package evidence
 
 import (
+	"archive/tar"
+	"bytes"
+	"compress/gzip"
+	"sort"
+	"strings"
 	"testing"
 	"time"
 
@@ -107,4 +112,67 @@ func TestVerifyTarGzipBundleChecksAuditChainProof(t *testing.T) {
 	if !result.Valid || result.CheckedChainEntries != 1 {
 		t.Fatalf("unexpected chain verification result: %+v", result)
 	}
+}
+
+func TestVerifyTarGzipBundleRejectsTamperedFile(t *testing.T) {
+	bundle, err := BuildTarGzipBundle(Manifest{ExportID: "exp_1", TenantID: "ten_1", CreatedAt: time.Unix(123, 0).UTC()}, map[string][]byte{
+		"audit_events.jsonl": []byte("{\"id\":\"aud_1\"}\n"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	files, err := readTarGzipFiles(bundle.Bytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	files["audit_events.jsonl"] = []byte("{\"id\":\"aud_tampered\"}\n")
+
+	result, err := VerifyTarGzipBundle(tarGzipTestFiles(t, files))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Valid {
+		t.Fatalf("expected tampered bundle to be invalid: %+v", result)
+	}
+	if !hasFailure(result.Failures, "hash mismatch: audit_events.jsonl") {
+		t.Fatalf("expected audit_events hash mismatch, got %+v", result.Failures)
+	}
+}
+
+func tarGzipTestFiles(t *testing.T, files map[string][]byte) []byte {
+	t.Helper()
+	names := make([]string, 0, len(files))
+	for name := range files {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	var out bytes.Buffer
+	gz, err := gzip.NewWriterLevel(&out, gzip.BestCompression)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gz.Name = "webhookery-evidence-export.tar"
+	gz.ModTime = time.Unix(0, 0).UTC()
+	tw := tar.NewWriter(gz)
+	for _, name := range names {
+		if err := writeTarFile(tw, name, files[name]); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := gz.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return out.Bytes()
+}
+
+func hasFailure(failures []string, want string) bool {
+	for _, failure := range failures {
+		if strings.Contains(failure, want) {
+			return true
+		}
+	}
+	return false
 }

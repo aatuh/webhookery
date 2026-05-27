@@ -192,6 +192,7 @@ func TestRCE2EProviderIngestToSignedDelivery(t *testing.T) {
 	}
 
 	otherTenant := authz.Actor{ID: "usr_other", TenantID: actor.TenantID + "_other", Role: authz.RoleOwner, Scopes: []string{"*"}}
+	createRCActorMembership(t, ctx, store, otherTenant)
 	if _, err := control.GetEvent(ctx, otherTenant, result.EventID); !errors.Is(err, app.ErrNotFound) {
 		t.Fatalf("expected wrong-tenant event read to be hidden as not found, got %v", err)
 	}
@@ -450,6 +451,7 @@ func TestRCE2EEvidenceLifecycleRetentionExportAndPermissionGates(t *testing.T) {
 	}, "rc-evidence-"+testSuffix(t))
 
 	reader := authz.Actor{ID: "usr_reader_" + testSuffix(t), TenantID: actor.TenantID, Role: authz.RoleSupport}
+	createRCActorMembership(t, ctx, store, reader)
 	if _, err := control.GetRawPayload(ctx, reader, result.EventID); !errors.Is(err, app.ErrForbidden) {
 		t.Fatalf("expected raw payload read without events:raw to be forbidden, got %v", err)
 	}
@@ -472,6 +474,7 @@ func TestRCE2EEvidenceLifecycleRetentionExportAndPermissionGates(t *testing.T) {
 	}
 
 	auditOnly := authz.Actor{ID: "usr_audit_" + testSuffix(t), TenantID: actor.TenantID, Role: authz.RoleAuditor, Scopes: []string{"audit:read"}}
+	createRCActorMembership(t, ctx, store, auditOnly)
 	if _, err := control.CreateAuditExport(ctx, auditOnly, app.CreateAuditExportRequest{IncludePayloadBodies: true, Reason: "forbidden payload export"}); !errors.Is(err, app.ErrForbidden) {
 		t.Fatalf("expected payload-inclusive export without events:raw to be forbidden, got %v", err)
 	}
@@ -588,6 +591,47 @@ func TestRCE2EStorageFailureDrillsRejectInboundSuccess(t *testing.T) {
 	}
 	if leaksSensitiveValue(err.Error(), "whsec_rc", string(body)) {
 		t.Fatalf("S3 storage error leaked secret or raw body: %v", err)
+	}
+}
+
+func TestRCE2EObjectReadFailuresAreRedacted(t *testing.T) {
+	blob := &flakyBlobStore{}
+	ctx, store, actor := openRCStoreWithOptions(t, postgres.StoreOptions{
+		RawStorageMode: domain.RawStorageS3,
+		ObjectStore:    blob,
+		ObjectBucket:   "bucket-secret",
+	})
+	defer store.Close()
+
+	now := time.Date(2026, 5, 26, 18, 0, 0, 0, time.UTC)
+	control := app.NewControlService(store, ssrf.Validator{Resolver: rcResolver})
+	source, _ := createRCRoute(t, ctx, control, actor, "stripe", "stripe", "invoice.object_read")
+	body := []byte(`{"id":"evt_rc_object_read_` + testSuffix(t) + `","type":"invoice.object_read","data":{"object":{"id":"in_read"}}}`)
+	result, err := app.NewIngestService(store, fixedClock{now: now}).Ingest(ctx, app.IngestRequest{
+		TenantID:    actor.TenantID,
+		SourceID:    source.ID,
+		Provider:    "stripe",
+		RawBody:     body,
+		Headers:     []domain.HeaderPair{{Name: "Stripe-Signature", Value: verifier.TimestampedHeader("v1", now, []byte("whsec_rc"), body)}},
+		ContentType: "application/json",
+		RemoteIP:    "198.51.100.10",
+	})
+	if err != nil {
+		t.Fatalf("ingest object-backed event: %v", err)
+	}
+	blob.getErr = errors.New("backend timeout for bucket-secret/raw-payloads with raw body " + string(body))
+	if _, err := control.GetRawPayload(ctx, actor, result.EventID); err == nil || leaksSensitiveValue(err.Error(), "bucket-secret", string(body), "raw-payloads") {
+		t.Fatalf("object raw read failure must be redacted, got %v", err)
+	}
+
+	blob.getErr = nil
+	export, err := control.CreateAuditExport(ctx, actor, app.CreateAuditExportRequest{IncludeTimelines: true, Reason: "object read failure drill"})
+	if err != nil {
+		t.Fatalf("create object-backed audit export: %v", err)
+	}
+	blob.getErr = errors.New("backend timeout for bucket-secret/evidence-export object key")
+	if _, err := control.DownloadAuditExport(ctx, actor, export.ID); err == nil || leaksSensitiveValue(err.Error(), "bucket-secret", "evidence-export") {
+		t.Fatalf("object export read failure must be redacted, got %v", err)
 	}
 }
 
@@ -733,6 +777,31 @@ func openRCStoreWithOptions(t *testing.T, opts postgres.StoreOptions) (context.C
 	return ctx, store, actor
 }
 
+func createRCActorMembership(t *testing.T, ctx context.Context, store *postgres.Store, actor authz.Actor) {
+	t.Helper()
+	suffix := testSuffix(t) + "_" + strings.ReplaceAll(actor.ID, "-", "_")
+	scopes := actor.Scopes
+	if scopes == nil {
+		scopes = []string{}
+	}
+	if _, err := store.CreateAPIKey(ctx, app.APIKeyCreateInput{
+		Key: domain.APIKey{
+			TenantID: actor.TenantID,
+			UserID:   actor.ID,
+			Name:     "RC E2E actor " + actor.ID,
+			Prefix:   "rc-e2e",
+			Last4:    "test",
+			Hash:     app.HashToken("rc-e2e-" + suffix),
+			Scopes:   scopes,
+			State:    domain.StateActive,
+		},
+		Role:    actor.Role,
+		ActorID: actor.ID,
+	}); err != nil {
+		t.Fatalf("create RC E2E actor membership for %s: %v", actor.ID, err)
+	}
+}
+
 func clearPriorRCE2EWork(t *testing.T, ctx context.Context, databaseURL string) {
 	t.Helper()
 	pool, err := pgxpool.New(ctx, databaseURL)
@@ -798,6 +867,35 @@ func (s *failingBlobStore) Get(context.Context, string, string) ([]byte, error) 
 }
 
 func (s *failingBlobStore) Delete(context.Context, string, string) error {
+	return nil
+}
+
+type flakyBlobStore struct {
+	objects map[string][]byte
+	getErr  error
+}
+
+func (s *flakyBlobStore) Put(_ context.Context, object blobstore.Object, body []byte) error {
+	if s.objects == nil {
+		s.objects = map[string][]byte{}
+	}
+	s.objects[object.Bucket+"/"+object.Key] = append([]byte(nil), body...)
+	return nil
+}
+
+func (s *flakyBlobStore) Get(_ context.Context, bucket, key string) ([]byte, error) {
+	if s.getErr != nil {
+		return nil, s.getErr
+	}
+	body, ok := s.objects[bucket+"/"+key]
+	if !ok {
+		return nil, blobstore.ErrNotFound
+	}
+	return append([]byte(nil), body...), nil
+}
+
+func (s *flakyBlobStore) Delete(_ context.Context, bucket, key string) error {
+	delete(s.objects, bucket+"/"+key)
 	return nil
 }
 
