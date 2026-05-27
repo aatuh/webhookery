@@ -101,7 +101,7 @@ func TestVerifyTarGzipBundleChecksManifestFiles(t *testing.T) {
 func TestBuildTarGzipBundleWritesVersionedSanitizedManifest(t *testing.T) {
 	bundle, err := BuildTarGzipBundle(Manifest{
 		ExportID:          "exp_1",
-		TenantID:          "ten_1",
+		TenantID:          "ten_whsec_secret_marker",
 		CreatedAt:         time.Unix(123, 0).UTC(),
 		IncludedEvents:    []string{"evt_2", "evt_1", "evt_1"},
 		IncludedIncidents: []string{"inc_1"},
@@ -118,6 +118,9 @@ func TestBuildTarGzipBundleWritesVersionedSanitizedManifest(t *testing.T) {
 	manifestBytes := files["manifest.json"]
 	if bytes.Contains(manifestBytes, []byte(`"tenant_id":`)) {
 		t.Fatalf("manifest leaked raw tenant id: %s", string(manifestBytes))
+	}
+	if bytes.Contains(manifestBytes, []byte("ten_whsec_secret_marker")) || bytes.Contains(manifestBytes, []byte("whsec_secret_marker")) {
+		t.Fatalf("manifest leaked secret-shaped tenant id: %s", string(manifestBytes))
 	}
 	if bytes.Contains(manifestBytes, []byte(`"from":`)) || bytes.Contains(manifestBytes, []byte(`"to":`)) {
 		t.Fatalf("manifest serialized empty time window: %s", string(manifestBytes))

@@ -586,6 +586,46 @@ func TestPrometheusAuditChainMetricsAreAggregate(t *testing.T) {
 	}
 }
 
+func TestPrometheusMetricLabelsDoNotExposeSecretShapedValues(t *testing.T) {
+	body := formatPrometheus(domain.OpsMetrics{
+		DeliveriesByState: map[string]int64{
+			"scheduled":           2,
+			"whsec_secret_marker": 1,
+		},
+		ReplayJobsByState: map[string]int64{
+			"pending_approval": 3,
+			"sk_test_secret":   4,
+		},
+		ReconciliationJobsByState: map[string]int64{
+			"running":             5,
+			"tenant_secret_state": 6,
+		},
+		ReconciliationItemsByOutcome: map[string]int64{
+			"matched":             7,
+			"raw-body-secret-out": 8,
+		},
+	})
+	for _, forbidden := range []string{"whsec_secret_marker", "sk_test_secret", "tenant_secret_state", "raw-body-secret-out"} {
+		if strings.Contains(body, forbidden) {
+			t.Fatalf("public metrics leaked secret-shaped label %q:\n%s", forbidden, body)
+		}
+	}
+	for _, want := range []string{
+		`webhookery_deliveries{state="scheduled"} 2`,
+		`webhookery_deliveries{state="unknown"} 1`,
+		`webhookery_replay_jobs{state="pending_approval"} 3`,
+		`webhookery_replay_jobs{state="unknown"} 4`,
+		`webhookery_reconciliation_jobs{state="running"} 5`,
+		`webhookery_reconciliation_jobs{state="unknown"} 6`,
+		`webhookery_reconciliation_items{outcome="matched"} 7`,
+		`webhookery_reconciliation_items{outcome="unknown"} 8`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("missing sanitized metric line %q in:\n%s", want, body)
+		}
+	}
+}
+
 func TestOpsConfigRouteReturnsRedactedRuntimeMetadata(t *testing.T) {
 	control := app.NewControlServiceWithRuntimeConfig(noopControlStore{}, ssrf.Validator{Resolver: ssrf.StaticResolver{}}, domain.OpsConfig{
 		Environment:             "production",

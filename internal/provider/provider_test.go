@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 )
@@ -82,6 +83,32 @@ func TestProviderSignatureVectors(t *testing.T) {
 				t.Fatal("mutated body must not verify")
 			}
 		})
+	}
+}
+
+func TestFailedVerificationResultDoesNotExposeSensitiveInputs(t *testing.T) {
+	result := StripeAdapter{}.Verify(VerifyInput{
+		RawBody: []byte(`{"customer":"cus_secret","raw_body":"raw-body-secret"}`),
+		Headers: map[string][]string{
+			"stripe-signature": {"t=1700000000,v1=signature-secret-marker"},
+		},
+		Secret: []byte("whsec_secret_marker"),
+		Now:    time.Unix(1_700_000_000, 0),
+	})
+	raw, err := json.Marshal(result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Verified {
+		t.Fatal("expected failed verification")
+	}
+	for _, forbidden := range []string{"whsec_secret_marker", "signature-secret-marker", "raw-body-secret", "cus_secret"} {
+		if strings.Contains(string(raw), forbidden) {
+			t.Fatalf("failed verification result leaked sensitive input %q: %s", forbidden, raw)
+		}
+	}
+	if !strings.Contains(string(raw), "invalid_signature") {
+		t.Fatalf("failed verification should retain safe reason, got %s", raw)
 	}
 }
 
