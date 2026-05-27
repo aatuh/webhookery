@@ -983,6 +983,10 @@ func TestControlServiceReplayValidatesConfigModeAndRate(t *testing.T) {
 	if !errors.Is(err, ErrInvalidInput) {
 		t.Fatalf("expected invalid reason code rejection, got %v", err)
 	}
+	_, err = svc.DryRunReplay(context.Background(), actor, ReplayRequest{EventID: "evt_1", Reason: "repair", ConfigMode: ReplayConfigOriginal})
+	if !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("expected dry-run missing reason code rejection, got %v", err)
+	}
 }
 
 func TestControlServiceReplayApprovalValidationAndTenantScope(t *testing.T) {
