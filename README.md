@@ -88,7 +88,9 @@ Use `docs/observability.md` for starter Prometheus rules and dashboards. Do
 not use live provider or customer credentials for local acceptance gates.
 
 Release-candidate details live in `docs/releases/v0.1.0-rc1.md`. Release
-evidence requirements live in `docs/release-evidence-template.md`.
+evidence requirements live in `docs/release-evidence-template.md`, with a
+reader-facing example in `docs/release-evidence-sample.md` and a concise
+operator checklist in `docs/production-rc-checklist.md`.
 
 ## Security Promise And Non-Claims
 
@@ -132,9 +134,14 @@ reviews, and support package boundaries are described in `COMMERCIAL.md`,
 - `docs/schema-migrations.md`: schema review, migration ordering, and restore
   compatibility guidance.
 - `docs/security-review-package.md`: security reviewer artifact map.
+- `docs/external-review-package.md`: external review package index.
 - `docs/release-evidence-template.md`: canonical release evidence template.
+- `docs/production-rc-checklist.md`: release-candidate readiness checklist.
 - `docs/releases/v0.1.0-rc1.md`: first release-candidate notes.
 - `docs/demo-media-checklist.md`: safe screenshots/video checklist.
+- `docs/customer-discovery-notes-template.md`,
+  `docs/pilot-feedback-template.md`, `docs/roadmap-intake-policy.md`, and
+  `docs/pilot-review-checklist.md`: evaluator and pilot feedback discipline.
 - `docs/commercial-evaluation.md`, `docs/production-readiness-review.md`, and
   `docs/support-packages.md`: commercial evaluation and support boundaries.
 - `docs/cli.md`: CLI command reference and moved command catalog.
