@@ -73,6 +73,7 @@ func TestRunDispatchesSubcommandUsage(t *testing.T) {
 		"siem-sinks",
 		"siem-deliveries",
 		"audit",
+		"evidence",
 		"retention",
 		"schemas",
 		"dead-letter",
@@ -131,6 +132,80 @@ func TestVerifyEvidenceBundleFileAcceptsValidBundle(t *testing.T) {
 	}
 	if err := verifyEvidenceBundleFile(path); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestViewEvidenceBundleFileRequiresExplicitFile(t *testing.T) {
+	if err := viewEvidenceBundleFile(""); err == nil {
+		t.Fatal("expected missing file path error")
+	}
+}
+
+func TestViewEvidenceBundleFileSummarizesWithoutPrintingBodies(t *testing.T) {
+	bundle, err := evidence.BuildTarGzipBundle(evidence.Manifest{
+		ExportID:             "exp_1",
+		TenantID:             "ten_1",
+		CreatedAt:            time.Unix(1, 0).UTC(),
+		IncludedEvents:       []string{"evt_1"},
+		IncludedIncidents:    []string{"inc_1"},
+		IncludeRawPayloads:   true,
+		IncludePayloadBodies: true,
+		IncludeTimelines:     true,
+	}, map[string][]byte{
+		"audit_events.jsonl":   []byte(`{"action":"incident_report.generated"}` + "\n"),
+		"incident_report.json": []byte(`{"body":"do-not-print-incident-json"}` + "\n"),
+		"incident_report.md":   []byte("do-not-print-incident-markdown\n"),
+		"raw_payload.bin":      []byte("do-not-print-raw-payload\n"),
+		"timelines.jsonl": []byte(
+			`{"kind":"delivery","state":"failed"}` + "\n" +
+				`{"kind":"replay","state":"succeeded"}` + "\n",
+		),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "bundle.tar.gz")
+	if err := os.WriteFile(path, bundle.Bytes, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	oldStdout := os.Stdout
+	reader, writer, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Stdout = writer
+	defer func() { os.Stdout = oldStdout }()
+
+	err = viewEvidenceBundleFile(path)
+	_ = writer.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := io.ReadAll(reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, forbidden := range []string{"do-not-print-incident-json", "do-not-print-incident-markdown", "do-not-print-raw-payload"} {
+		if bytes.Contains(body, []byte(forbidden)) {
+			t.Fatalf("evidence view printed bundled file body %q in %s", forbidden, body)
+		}
+	}
+	var view evidence.BundleView
+	if err := json.Unmarshal(body, &view); err != nil {
+		t.Fatalf("invalid view JSON %q: %v", body, err)
+	}
+	if view.SchemaVersion != evidence.BundleViewSchemaV1 || !view.Verification.Valid {
+		t.Fatalf("unexpected view status: %+v", view)
+	}
+	if view.Summary.IncludedEventCount != 1 || view.Summary.IncludedIncidentCount != 1 || view.Summary.TimelineEntryCount != 2 || view.Summary.AuditEventCount != 1 {
+		t.Fatalf("unexpected summary counts: %+v", view.Summary)
+	}
+	if !view.Summary.HasIncidentReportJSON || !view.Summary.HasIncidentReportMarkdown || view.Summary.TimelineKinds["delivery"] != 1 || view.Summary.TimelineKinds["replay"] != 1 {
+		t.Fatalf("unexpected summary details: %+v", view.Summary)
+	}
+	if !strings.Contains(strings.Join(view.Warnings, "\n"), "raw payload bodies may be included") {
+		t.Fatalf("expected raw-payload handling warning, got %+v", view.Warnings)
 	}
 }
 
