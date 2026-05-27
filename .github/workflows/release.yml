@@ -58,6 +58,9 @@ jobs:
       - name: Provider conformance evidence
         run: make provider-conformance-check
 
+      - name: Provider proof metadata
+        run: make provider-proof-check
+
       - name: Performance smoke evidence
         run: make perf-smoke
 
@@ -143,6 +146,7 @@ jobs:
             printf '%s\n' "## Checks"
             printf '%s\n' "- make release-acceptance"
             printf '%s\n' "- make provider-conformance-check"
+            printf '%s\n' "- make provider-proof-check"
             printf '%s\n' "- make perf-smoke with local Postgres service"
             printf '%s\n' "- make rc-check with local Postgres service"
             printf '%s\n' "- Docker build and push"
@@ -156,6 +160,7 @@ jobs:
             printf '%s\n' "## Maturity Evidence"
             printf '%s\n' "- Performance smoke output: tmp/perf-smoke/perf-smoke.json and tmp/perf-smoke/perf-smoke.md"
             printf '%s\n' "- Provider conformance output: make provider-conformance-check"
+            printf '%s\n' "- Provider proof metadata output: make provider-proof-check"
             printf '%s\n' "- Failure drill output: make rc-check with local fake providers/receivers"
             printf '%s\n' "- Branch protection status: record manually or attach repository ruleset evidence"
             printf '%s\n' "- External review status: attach completed review package or accepted-risk record"

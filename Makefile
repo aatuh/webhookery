@@ -8,7 +8,7 @@ GOSEC_VERSION ?= v2.25.0
 GOVULNCHECK_VERSION ?= v1.2.0
 FUZZTIME ?= 5s
 
-.PHONY: help tools fmt lint vuln gosec test test-race coverage openapi-check test-vectors-check provider-conformance-check crypto-inventory deployment-profile-check collections-check documentation-structure-check static-site-check meta-files-check fuzz-smoke perf-smoke sdk-generate sdk-check docs-check release-acceptance rc-check compose-up compose-down migrate live-postgres-check postgres-integration-test redis-integration-test fast-check finalize clean
+.PHONY: help tools fmt lint vuln gosec test test-race coverage openapi-check test-vectors-check provider-conformance-check provider-proof-check crypto-inventory deployment-profile-check collections-check documentation-structure-check static-site-check meta-files-check fuzz-smoke perf-smoke sdk-generate sdk-check docs-check release-acceptance rc-check compose-up compose-down migrate live-postgres-check postgres-integration-test redis-integration-test fast-check finalize clean
 
 help: ## Show help
 	@awk 'BEGIN {FS=":.*## "}; /^[a-zA-Z0-9_.-]+:.*## / { printf "  %-16s %s\n", $$1, $$2 }' $(MAKEFILE_LIST)
@@ -49,6 +49,9 @@ test-vectors-check: ## Validate committed public audit test vectors
 
 provider-conformance-check: ## Validate provider conformance matrix and local vectors
 	@scripts/provider_conformance_check.sh
+
+provider-proof-check: ## Validate manual live-provider proof guide freshness
+	@scripts/provider_proof_check.sh
 
 crypto-inventory: ## Check crypto inventory evidence exists
 	@grep -q "Webhook-Signature" openapi.yaml
@@ -130,6 +133,14 @@ documentation-structure-check: ## Check canonical documentation structure
 	@test -f docs/performance-envelope.md
 	@test -f docs/provider-conformance.md
 	@test -f docs/provider-conformance.manifest.json
+	@test -f docs/provider-proof-manifest.json
+	@test -f docs/providers/stripe.md
+	@test -f docs/providers/github.md
+	@test -f docs/live-provider-proof/stripe.md
+	@test -f docs/live-provider-proof/github.md
+	@test -f docs/live-provider-proof/stripe-redaction-policy.md
+	@test -f docs/live-provider-proof/samples/stripe-incident-report.redacted.md
+	@test -f docs/live-provider-proof/samples/github-incident-report.redacted.md
 	@test -f docs/day-2-operations.md
 	@test -f docs/observability.md
 	@test -f docs/documentation-maintenance.md
@@ -181,6 +192,15 @@ documentation-structure-check: ## Check canonical documentation structure
 	@grep -q "Stability And Compatibility Policy" docs/stability.md
 	@grep -q "Performance Envelope" docs/performance-envelope.md
 	@grep -q "Provider Conformance Matrix" docs/provider-conformance.md
+	@grep -q "docs/live-provider-proof/stripe.md" README.md
+	@grep -q "docs/live-provider-proof/github.md" README.md
+	@grep -q "docs/live-provider-proof/stripe.md" docs/evaluator-quickstart.md
+	@grep -q "docs/live-provider-proof/github.md" docs/evaluator-quickstart.md
+	@grep -q "Stripe Operator Guide" docs/providers/stripe.md
+	@grep -q "GitHub Operator Guide" docs/providers/github.md
+	@grep -q "not provider certification" docs/live-provider-proof/stripe.md
+	@grep -q "not provider certification" docs/live-provider-proof/github.md
+	@grep -q "provider-proof-v1" docs/provider-proof-manifest.json
 	@grep -q "Day-2 Operations Guide" docs/day-2-operations.md
 	@grep -q "Observability Examples" docs/observability.md
 	@grep -q "Provider Claim Freshness" docs/documentation-maintenance.md
@@ -276,6 +296,7 @@ docs-check: ## Run non-mutating documentation-adjacent checks
 	@$(MAKE) openapi-check
 	@$(MAKE) test-vectors-check
 	@$(MAKE) provider-conformance-check
+	@$(MAKE) provider-proof-check
 	@$(MAKE) sdk-check
 	@$(MAKE) crypto-inventory
 	@$(MAKE) deployment-profile-check

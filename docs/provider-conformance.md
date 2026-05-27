@@ -20,6 +20,24 @@ The check uses only local deterministic vectors and documentation metadata. It
 does not call Stripe, GitHub, Shopify, Slack, AWS, Vault, or customer
 receivers.
 
+Manual sanitized live-provider proof guides are tracked separately:
+
+- Stripe operator guide: `docs/providers/stripe.md`
+- Stripe proof guide: `docs/live-provider-proof/stripe.md`
+- GitHub operator guide: `docs/providers/github.md`
+- GitHub proof guide: `docs/live-provider-proof/github.md`
+- Proof freshness metadata: `docs/provider-proof-manifest.json`
+
+Run:
+
+```sh
+make provider-proof-check
+```
+
+Those guides are external/manual evidence procedures. They are not provider
+certification, do not call live providers in repository checks, and do not
+store completed private proof artifacts in public source.
+
 ## Matrix
 
 | Provider or format | Verification evidence | Timestamp or replay window | Event ID and type extraction | Replay or recovery behavior | Current limitations |
@@ -40,6 +58,10 @@ receivers.
   <https://docs.github.com/en/webhooks/using-webhooks/validating-webhook-deliveries>
 - GitHub webhook events and delivery headers:
   <https://docs.github.com/en/webhooks/webhook-events-and-payloads>
+- GitHub webhook redelivery:
+  <https://docs.github.com/en/webhooks/testing-and-troubleshooting-webhooks/redelivering-webhooks>
+- GitHub webhook best practices:
+  <https://docs.github.com/en/webhooks/using-webhooks/best-practices-for-using-webhooks>
 - Shopify webhook HMAC verification:
   <https://shopify.dev/docs/apps/build/webhooks/verify-deliveries>
 - Slack request signing:

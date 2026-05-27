@@ -127,7 +127,21 @@ run. A successful run has `result.valid: true`.
 
 See `docs/security-promise.md` for the canonical promise and non-claims.
 
-## 6. Run Release-Candidate Acceptance
+## 6. Optional Live-Provider Proof Guides
+
+The local evaluator path above uses synthetic provider vectors. For manual
+sanitized proof against real provider test flows, use:
+
+- `docs/live-provider-proof/stripe.md`
+- `docs/live-provider-proof/github.md`
+- `docs/providers/stripe.md`
+- `docs/providers/github.md`
+
+These guides are external/manual proof procedures. They are not provider
+certification, do not require committed secrets, and do not replace the local
+release gates.
+
+## 7. Run Release-Candidate Acceptance
 
 ```bash
 make rc-check
@@ -143,7 +157,7 @@ When `WEBHOOKERY_TEST_DATABASE_URL` is set, `make rc-check` includes the
 DB-backed release-candidate E2E checks. If the variable is not set, the script
 prints that those DB-backed checks were skipped.
 
-## 7. Optional Local API Smoke
+## 8. Optional Local API Smoke
 
 Start the local API stack:
 
@@ -170,10 +184,11 @@ Expected result:
 The bootstrap key is for local development only. Do not use it for production
 or production-like evaluation.
 
-## 8. Review Before Production Decisions
+## 9. Review Before Production Decisions
 
 - `docs/security-promise.md`
 - `docs/provider-conformance.md`
+- `docs/provider-proof-manifest.json`
 - `docs/release-evidence-template.md`
 - `docs/stability.md`
 - `docs/operations.md`

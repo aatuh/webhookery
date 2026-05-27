@@ -16,6 +16,8 @@ Start here if you are evaluating Webhookery:
 
 - Evaluator walkthrough: `docs/evaluator-quickstart.md`
 - Local evidence demo: `examples/webhook-evidence-demo/`
+- Stripe proof guide: `docs/live-provider-proof/stripe.md`
+- GitHub proof guide: `docs/live-provider-proof/github.md`
 - Static product page: `site/index.html`
 - Release notes: `docs/releases/v0.1.0-rc1.md`
 - Pilot topology: `docs/pilot-topology.md`
@@ -86,6 +88,7 @@ expected output, troubleshooting, and non-claims.
 - Local API and worker: `docker compose up --build`, then `/readyz`.
 - Non-mutating docs and contract gate: `make docs-check`.
 - Provider conformance matrix and local vectors: `make provider-conformance-check`.
+- Manual provider-proof metadata: `make provider-proof-check`.
 - Full repository gate: `make finalize`.
 - Redacted production preflight:
   `WEBHOOKERY_ENVIRONMENT=production go run ./cmd/whcp doctor production`.
@@ -148,6 +151,12 @@ reviews, and support package boundaries are described in `COMMERCIAL.md`,
   storage growth, and sizing caveats.
 - `docs/documentation-maintenance.md`: provider freshness and documentation
   review checklist.
+- `docs/provider-conformance.md`: provider matrix, local vector evidence, and
+  links to manual live-provider proof guides.
+- `docs/providers/stripe.md` and `docs/providers/github.md`: operator guides
+  for the first flagship providers.
+- `docs/live-provider-proof/stripe.md` and
+  `docs/live-provider-proof/github.md`: manual sanitized proof guides.
 - `docs/deployment.md`: common self-hosted deployment posture.
 - `docs/pilot-topology.md`: narrow supported topology for initial pilots.
 - `docs/pilot-evidence-template.md`: sanitized pilot evidence packet template.

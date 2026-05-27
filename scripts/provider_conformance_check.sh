@@ -9,10 +9,13 @@ manifest="docs/provider-conformance.manifest.json"
 
 test -f "$doc"
 test -f "$manifest"
+test -f docs/provider-proof-manifest.json
 grep -q "Provider Conformance Matrix" "$doc"
 grep -q "Last official-doc verification: 2026-05-27" "$doc"
 grep -q "no provider-side completeness guarantee" "$doc"
 grep -q "does not call Stripe" "$doc"
+grep -q "docs/live-provider-proof/stripe.md" "$doc"
+grep -q "docs/live-provider-proof/github.md" "$doc"
 grep -q "https://docs.stripe.com/webhooks" "$doc"
 grep -q "https://docs.github.com/en/webhooks/using-webhooks/validating-webhook-deliveries" "$doc"
 grep -q "https://shopify.dev/docs/apps/build/webhooks/verify-deliveries" "$doc"
