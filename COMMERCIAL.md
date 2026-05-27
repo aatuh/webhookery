@@ -21,6 +21,23 @@ before relying on it.
 | Release evidence package | Yes | No | SBOMs, vulnerability scan results, OpenAPI checksum, acceptance evidence, and hardening notes. |
 | Custom integration work | Yes | No | Provider adapters, evidence workflows, deployment hardening, or receiver integration work. |
 
+## Starting Ranges
+
+These ranges are public planning anchors, not a quote. Final pricing depends on
+scope, deployment risk, provider mix, support expectations, and written
+agreement.
+
+| Offer | Starting range |
+| --- | ---: |
+| Commercial Evaluation | EUR 490-1,000 |
+| Release Evidence Package | EUR 2,500-5,000 |
+| Production Readiness Review | EUR 7,500-12,500 |
+| Commercial License + Support | EUR 9,900-24,900 per year |
+| Custom Integration / Provider Adapter | Fixed scope or EUR 150-250/hour |
+
+See `docs/commercial-evaluation.md`, `docs/production-readiness-review.md`, and
+`docs/support-packages.md` for buyer-readable scope boundaries.
+
 ## Commercial License Scope
 
 A commercial license is a separate written agreement. It does not remove or
@@ -41,6 +58,10 @@ Commercial terms can cover:
 Commercial terms do not broaden the canonical non-claims in
 `docs/security-promise.md` unless the written agreement explicitly narrows
 scope for that customer, deployment, or engagement.
+
+No SLA, compliance certification, legal evidence certification, hosted service,
+or provider-side completeness guarantee is included unless a written agreement
+explicitly says so.
 
 ## Contact
 
