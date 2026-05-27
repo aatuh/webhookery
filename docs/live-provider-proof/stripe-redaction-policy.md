@@ -1,8 +1,8 @@
-# Stripe Live-Proof Redaction Policy
+# Live-Proof Redaction Policy
 
-Use this policy before sharing any Stripe live-provider proof output from
-Webhookery. Do not commit completed live proof files unless they are reduced to
-a sample that follows this policy.
+Use this policy before sharing Stripe, GitHub, or Shopify live-provider proof
+output from Webhookery. Do not commit completed live proof files unless they
+are reduced to a sample that follows this policy.
 
 ## Remove
 

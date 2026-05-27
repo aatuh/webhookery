@@ -9,17 +9,22 @@ manifest="docs/provider-proof-manifest.json"
 test -f "$manifest"
 test -f docs/live-provider-proof/stripe.md
 test -f docs/live-provider-proof/github.md
+test -f docs/live-provider-proof/shopify.md
 test -f docs/live-provider-proof/stripe-redaction-policy.md
 test -f docs/live-provider-proof/samples/stripe-incident-report.redacted.md
 test -f docs/live-provider-proof/samples/github-incident-report.redacted.md
+test -f docs/live-provider-proof/samples/shopify-incident-report.redacted.md
 test -f docs/providers/stripe.md
 test -f docs/providers/github.md
+test -f docs/providers/shopify.md
 
 grep -q "not provider certification" docs/live-provider-proof/stripe.md
 grep -q "not provider certification" docs/live-provider-proof/github.md
+grep -q "not provider certification" docs/live-provider-proof/shopify.md
 grep -q "Do not commit" docs/live-provider-proof/stripe-redaction-policy.md
 grep -q "docs/live-provider-proof/stripe.md" docs/provider-conformance.md
 grep -q "docs/live-provider-proof/github.md" docs/provider-conformance.md
+grep -q "docs/live-provider-proof/shopify.md" docs/provider-conformance.md
 
 python3 - "$manifest" <<'PY'
 import datetime
@@ -45,7 +50,7 @@ max_age_days = data.get("max_age_days")
 if not isinstance(max_age_days, int) or max_age_days <= 0:
     raise SystemExit("provider proof manifest max_age_days must be a positive integer")
 
-required_providers = {"stripe", "github"}
+required_providers = {"stripe", "github", "shopify"}
 proofs = data.get("proofs")
 if not isinstance(proofs, list):
     raise SystemExit("provider proof manifest proofs must be an array")
@@ -95,6 +100,8 @@ for item in proofs:
             raise SystemExit(f"stripe official source must use docs.stripe.com: {source}")
         if provider == "github" and parsed.netloc != "docs.github.com":
             raise SystemExit(f"github official source must use docs.github.com: {source}")
+        if provider == "shopify" and parsed.netloc != "shopify.dev":
+            raise SystemExit(f"shopify official source must use shopify.dev: {source}")
 
     scope = item.get("scope_checked")
     if not isinstance(scope, list) or len(scope) < 2:
@@ -114,9 +121,14 @@ for sample_key in ("sample_report",):
             "whsec_",
             "github_pat_",
             "ghp_",
+            "shpat_",
+            "shpua_",
+            "shpss_",
+            "shppa_",
             "Bearer ",
             "Stripe-Signature:",
             "X-Hub-Signature-256: sha256=",
+            "X-Shopify-Hmac-SHA256:",
         ]
         leaked = [marker for marker in forbidden if marker in text]
         if leaked:
