@@ -56,6 +56,9 @@ master keys through their own secret manager.
 | `WEBHOOKERY_BOOTSTRAP_TENANT_ID` | API | `ten_bootstrap` | No | Use a stable tenant ID only for controlled bootstrap. |
 | `WEBHOOKERY_BOOTSTRAP_API_KEY_HASH` | API | empty | Sensitive | Use only for initial bootstrap. Remove or rotate after creating database-backed API keys. |
 | `WEBHOOKERY_BOOTSTRAP_API_KEY_PREFIX` | API | empty | No | Display prefix only. Do not use a real API key as the prefix. |
+| `WEBHOOKERY_PROVIDER_PROOF_MANIFEST_PATH` | `doctor pilot` | `docs/provider-proof-manifest.json` | No | Optional override for local provider-proof metadata. The doctor reports only presence and schema shape. |
+| `WEBHOOKERY_PILOT_RECEIVER_CHECK_URL` | `doctor pilot` | empty | Sensitive if it contains tenant names or URL tokens | Optional receiver URL for explicit pilot connectivity checks. Do not include URL credentials or tokens. |
+| `WEBHOOKERY_PILOT_ALLOW_RECEIVER_CHECK` | `doctor pilot` | empty | No | Must be exactly `true` before `doctor pilot` attempts receiver connectivity. SSRF validation still applies. |
 
 ## Test And Release Variables
 
@@ -111,3 +114,15 @@ Fix all blockers. The doctor reads configuration and environment values, but it
 must not print database passwords, API keys, webhook secrets, Vault tokens, AWS
 credentials, raw KMS key IDs, object-store credentials, raw payloads, or raw
 signatures.
+
+For bounded pilot readiness, run:
+
+```bash
+go run ./cmd/whcp doctor pilot --no-network
+```
+
+Remove `--no-network` only when `WEBHOOKERY_DATABASE_URL` points at a
+disposable or intended pilot database. Receiver checks require
+`WEBHOOKERY_PILOT_RECEIVER_CHECK_URL` and
+`WEBHOOKERY_PILOT_ALLOW_RECEIVER_CHECK=true`; the URL is treated as hostile
+input and is not printed.

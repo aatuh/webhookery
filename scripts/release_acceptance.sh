@@ -141,6 +141,10 @@ grep -q "backup_postgres.sh" docs/operations.md
 grep -q "restore_postgres.sh" docs/operations.md
 grep -q "Production Doctor" docs/operations.md
 grep -q "doctor production" README.md
+grep -q "doctor pilot --no-network" README.md
+grep -q "doctor pilot --no-network" docs/cli.md
+grep -q "Pilot Doctor Runbook" docs/operations.md
+grep -q "WEBHOOKERY_PILOT_ALLOW_RECEIVER_CHECK" docs/configuration.md
 grep -q "blocker" docs/operations.md
 grep -q "warning" docs/operations.md
 grep -q "WEBHOOKERY_SECRET_BOX_MODE=aws-kms" docs/operations.md

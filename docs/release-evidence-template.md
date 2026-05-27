@@ -71,6 +71,7 @@ the live third-party provider scope and risk.
 | `/readyz` readiness smoke |  |  |
 | `/openapi.yaml` or `/openapi.json` contract smoke |  |  |
 | `whcp doctor production` redacted production preflight |  |  |
+| `whcp doctor pilot --no-network` redacted pilot preflight |  |  |
 | provider ingest to signed delivery smoke with fake receiver |  |  |
 | invalid provider signature rejection/quarantine smoke |  |  |
 | replay original/current config smoke |  |  |
@@ -139,6 +140,7 @@ Attach or link sanitized artifacts:
 - `openapi.yaml` or `openapi.json`,
 - readiness response,
 - production doctor response with secrets redacted,
+- pilot doctor response with secrets redacted,
 - provider conformance output and manifest,
 - provider proof output and manifest,
 - performance smoke JSON/Markdown output,
