@@ -1634,11 +1634,16 @@ func (s *ControlService) GetEvent(ctx context.Context, actor authz.Actor, eventI
 	return s.store.GetEvent(ctx, actor.TenantID, eventID)
 }
 
-func (s *ControlService) GetRawPayload(ctx context.Context, actor authz.Actor, eventID string) (domain.RawPayload, error) {
+func (s *ControlService) GetRawPayload(ctx context.Context, actor authz.Actor, eventID, reason string) (domain.RawPayload, error) {
 	if !s.authorized(ctx, actor, "events:raw", "event", eventID, "") {
 		return domain.RawPayload{}, ErrForbidden
 	}
-	return s.store.GetRawPayload(ctx, actor.TenantID, eventID, actor.ID)
+	eventID = strings.TrimSpace(eventID)
+	reason = strings.TrimSpace(reason)
+	if eventID == "" || reason == "" {
+		return domain.RawPayload{}, fmt.Errorf("%w: event_id and reason are required", ErrInvalidInput)
+	}
+	return s.store.GetRawPayload(ctx, actor.TenantID, eventID, actor.ID, reason)
 }
 
 func (s *ControlService) GetNormalizedEvent(ctx context.Context, actor authz.Actor, eventID string, includeData bool) (domain.NormalizedEnvelope, error) {

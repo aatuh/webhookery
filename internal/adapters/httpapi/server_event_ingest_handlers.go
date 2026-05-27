@@ -32,7 +32,7 @@ func (s *Server) getEvent(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) getRawPayload(w http.ResponseWriter, r *http.Request) {
-	raw, err := s.cfg.Control.GetRawPayload(r.Context(), actorFrom(r), chi.URLParam(r, "event_id"))
+	raw, err := s.cfg.Control.GetRawPayload(r.Context(), actorFrom(r), chi.URLParam(r, "event_id"), r.URL.Query().Get("reason"))
 	if err != nil {
 		s.writeError(w, r, err)
 		return

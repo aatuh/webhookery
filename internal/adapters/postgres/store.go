@@ -2563,7 +2563,7 @@ func (s *Store) GetEvent(ctx context.Context, tenantID, eventID string) (domain.
 	return item, err
 }
 
-func (s *Store) GetRawPayload(ctx context.Context, tenantID, eventID, actorID string) (domain.RawPayload, error) {
+func (s *Store) GetRawPayload(ctx context.Context, tenantID, eventID, actorID, reason string) (domain.RawPayload, error) {
 	var raw domain.RawPayload
 	err := s.pool.QueryRow(ctx, `
 		SELECT id, tenant_id, event_id, sha256, content_type, size_bytes, body,
@@ -2600,7 +2600,9 @@ func (s *Store) GetRawPayload(ctx context.Context, tenantID, eventID, actorID st
 		}
 		raw.Body = body
 	}
-	_ = s.recordAuditEvent(ctx, auditEventInput{TenantID: tenantID, ActorID: actorID, Action: "raw_payload.read", Resource: "event", ResourceID: eventID})
+	if err := s.recordAuditEvent(ctx, auditEventInput{TenantID: tenantID, ActorID: actorID, Action: "raw_payload.read", Resource: "event", ResourceID: eventID, Reason: reason}); err != nil {
+		return domain.RawPayload{}, err
+	}
 	return raw, nil
 }
 

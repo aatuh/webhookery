@@ -689,9 +689,37 @@ func TestControlServiceRequiresRawPayloadScope(t *testing.T) {
 	svc := NewControlService(store, ssrf.Validator{Resolver: ssrf.StaticResolver{}})
 	actor := authz.Actor{ID: "usr_1", TenantID: "ten_a", Role: authz.RoleDeveloper, Scopes: []string{"events:read"}}
 
-	_, err := svc.GetRawPayload(context.Background(), actor, "evt_123")
+	_, err := svc.GetRawPayload(context.Background(), actor, "evt_123", "support investigation")
 	if err != ErrForbidden {
 		t.Fatalf("expected forbidden raw payload access, got %v", err)
+	}
+}
+
+func TestControlServiceRequiresRawPayloadReason(t *testing.T) {
+	store := &fakeControlStore{}
+	svc := NewControlService(store, ssrf.Validator{Resolver: ssrf.StaticResolver{}})
+	actor := authz.Actor{ID: "usr_1", TenantID: "ten_a", Role: authz.RoleOwner, Scopes: []string{"events:raw"}}
+
+	_, err := svc.GetRawPayload(context.Background(), actor, "evt_123", "  ")
+	if !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("expected invalid input for missing raw payload reason, got %v", err)
+	}
+	if store.rawPayloadTenantID != "" {
+		t.Fatalf("raw payload store called before reason validation: %+v", store)
+	}
+}
+
+func TestControlServicePassesRawPayloadReasonToStore(t *testing.T) {
+	store := &fakeControlStore{}
+	svc := NewControlService(store, ssrf.Validator{Resolver: ssrf.StaticResolver{}})
+	actor := authz.Actor{ID: "usr_1", TenantID: "ten_a", Role: authz.RoleOwner, Scopes: []string{"events:raw"}}
+
+	_, err := svc.GetRawPayload(context.Background(), actor, " evt_123 ", " support case review ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if store.rawPayloadTenantID != "ten_a" || store.rawPayloadEventID != "evt_123" || store.rawPayloadActorID != "usr_1" || store.rawPayloadReason != "support case review" {
+		t.Fatalf("raw payload store context mismatch: %+v", store)
 	}
 }
 
@@ -1070,7 +1098,7 @@ func TestControlServiceResourcePoliciesDenySensitiveOperations(t *testing.T) {
 		{
 			name: "raw payload read", wantAction: "events:raw", wantFamily: "event", wantID: "evt_raw",
 			run: func(svc *ControlService, actor authz.Actor) error {
-				_, err := svc.GetRawPayload(context.Background(), actor, "evt_raw")
+				_, err := svc.GetRawPayload(context.Background(), actor, "evt_raw", "support investigation")
 				return err
 			},
 		},
@@ -1157,7 +1185,7 @@ func TestControlServiceResourcePolicyAllowsBindingAndPreservesScopeLimit(t *test
 	}
 
 	scopeLimited := authz.Actor{ID: "usr_limited", TenantID: "ten_a", Role: authz.RoleOwner, Scopes: []string{"events:read"}}
-	_, err = svc.GetRawPayload(context.Background(), scopeLimited, "evt_1")
+	_, err = svc.GetRawPayload(context.Background(), scopeLimited, "evt_1", "support investigation")
 	if !errors.Is(err, ErrForbidden) {
 		t.Fatalf("expected actor scope to limit enterprise allow, got %v", err)
 	}
@@ -1794,6 +1822,10 @@ type fakeControlStore struct {
 	retryPolicyReq             UpdateRetryPolicyRequest
 	normalizedTenantID         string
 	normalizedMetadataOnly     bool
+	rawPayloadTenantID         string
+	rawPayloadEventID          string
+	rawPayloadActorID          string
+	rawPayloadReason           string
 	sourceTenantID             string
 	sourceID                   string
 	sourceReason               string
@@ -2236,8 +2268,12 @@ func (f *fakeControlStore) GetEvent(_ context.Context, tenantID, eventID string)
 		ReceivedAt:     time.Unix(100, 0).UTC(),
 	}, nil
 }
-func (f *fakeControlStore) GetRawPayload(context.Context, string, string, string) (domain.RawPayload, error) {
-	return domain.RawPayload{}, nil
+func (f *fakeControlStore) GetRawPayload(_ context.Context, tenantID, eventID, actorID, reason string) (domain.RawPayload, error) {
+	f.rawPayloadTenantID = tenantID
+	f.rawPayloadEventID = eventID
+	f.rawPayloadActorID = actorID
+	f.rawPayloadReason = reason
+	return domain.RawPayload{ID: "raw_1", TenantID: tenantID, EventID: eventID}, nil
 }
 func (f *fakeControlStore) GetNormalizedEvent(_ context.Context, tenantID, eventID, actorID string, includeData bool) (domain.NormalizedEnvelope, error) {
 	f.normalizedTenantID = tenantID

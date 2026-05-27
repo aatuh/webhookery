@@ -458,7 +458,7 @@ func TestRCE2EEvidenceLifecycleRetentionExportAndPermissionGates(t *testing.T) {
 
 	reader := authz.Actor{ID: "usr_reader_" + testSuffix(t), TenantID: actor.TenantID, Role: authz.RoleSupport}
 	createRCActorMembership(t, ctx, store, reader)
-	if _, err := control.GetRawPayload(ctx, reader, result.EventID); !errors.Is(err, app.ErrForbidden) {
+	if _, err := control.GetRawPayload(ctx, reader, result.EventID, "permission regression"); !errors.Is(err, app.ErrForbidden) {
 		t.Fatalf("expected raw payload read without events:raw to be forbidden, got %v", err)
 	}
 	if _, err := control.GetNormalizedEvent(ctx, reader, result.EventID, true); !errors.Is(err, app.ErrForbidden) {
@@ -471,7 +471,7 @@ func TestRCE2EEvidenceLifecycleRetentionExportAndPermissionGates(t *testing.T) {
 	if len(metadataOnly.Data) != 0 || metadataOnly.EnvelopeSHA256 == "" || metadataOnly.MetadataSHA256 == "" {
 		t.Fatalf("expected metadata-only normalized event with hashes and no data body: %+v", metadataOnly)
 	}
-	raw, err := control.GetRawPayload(ctx, actor, result.EventID)
+	raw, err := control.GetRawPayload(ctx, actor, result.EventID, "verify raw payload evidence")
 	if err != nil {
 		t.Fatalf("owner raw payload read before retention: %v", err)
 	}
@@ -494,7 +494,7 @@ func TestRCE2EEvidenceLifecycleRetentionExportAndPermissionGates(t *testing.T) {
 	if err := store.ApplyRetentionPolicies(ctx, "rc-retention-"+testSuffix(t), 20); err != nil {
 		t.Fatalf("apply retention policies: %v", err)
 	}
-	if _, err := control.GetRawPayload(ctx, actor, result.EventID); !errors.Is(err, app.ErrGone) {
+	if _, err := control.GetRawPayload(ctx, actor, result.EventID, "verify retention tombstone"); !errors.Is(err, app.ErrGone) {
 		t.Fatalf("expected retained raw payload body to be gone, got %v", err)
 	}
 	retainedMetadata, err := control.GetNormalizedEvent(ctx, reader, result.EventID, false)
@@ -756,7 +756,7 @@ func TestRCE2EObjectReadFailuresAreRedacted(t *testing.T) {
 		t.Fatalf("ingest object-backed event: %v", err)
 	}
 	blob.getErr = errors.New("backend timeout for bucket-secret/raw-payloads with raw body " + string(body))
-	if _, err := control.GetRawPayload(ctx, actor, result.EventID); err == nil || leaksSensitiveValue(err.Error(), "bucket-secret", string(body), "raw-payloads") {
+	if _, err := control.GetRawPayload(ctx, actor, result.EventID, "object read failure drill"); err == nil || leaksSensitiveValue(err.Error(), "bucket-secret", string(body), "raw-payloads") {
 		t.Fatalf("object raw read failure must be redacted, got %v", err)
 	}
 

@@ -790,7 +790,7 @@ func TestRawPayloadRequiresRawScopeBeforeStoreAccess(t *testing.T) {
 	}
 }
 
-func TestRawPayloadEndpointEncodesBodyAndTenantActorContext(t *testing.T) {
+func TestRawPayloadEndpointRequiresReasonBeforeStoreAccess(t *testing.T) {
 	store := &rawPayloadControlStore{}
 	server := NewServer(ServerConfig{
 		Control: app.NewControlService(store, ssrf.Validator{Resolver: ssrf.StaticResolver{}}),
@@ -804,10 +804,32 @@ func TestRawPayloadEndpointEncodesBodyAndTenantActorContext(t *testing.T) {
 
 	server.Routes().ServeHTTP(rec, req)
 
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if store.rawCalled {
+		t.Fatal("raw payload store must not be called without reason")
+	}
+}
+
+func TestRawPayloadEndpointEncodesBodyAndTenantActorContext(t *testing.T) {
+	store := &rawPayloadControlStore{}
+	server := NewServer(ServerConfig{
+		Control: app.NewControlService(store, ssrf.Validator{Resolver: ssrf.StaticResolver{}}),
+		Ingest:  app.NewIngestService(&fakeIngestStore{}, app.SystemClock{}),
+		Auth:    app.NewStaticAuthenticator("token", authz.Actor{ID: "usr_raw", TenantID: "ten_raw", Role: authz.RoleOwner, Scopes: []string{"events:raw"}}),
+		OpenAPI: []byte("openapi: 3.1.0\n"),
+	})
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/v1/events/evt_raw/raw?reason=support+case", nil)
+	req.Header.Set("Authorization", "Bearer token")
+
+	server.Routes().ServeHTTP(rec, req)
+
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d body=%s", rec.Code, rec.Body.String())
 	}
-	if !store.rawCalled || store.tenantID != "ten_raw" || store.eventID != "evt_raw" || store.actorID != "usr_raw" {
+	if !store.rawCalled || store.tenantID != "ten_raw" || store.eventID != "evt_raw" || store.actorID != "usr_raw" || store.reason != "support case" {
 		t.Fatalf("raw payload store called with wrong context: %+v", store)
 	}
 	wantBody := base64.StdEncoding.EncodeToString([]byte("raw evidence bytes"))
@@ -1361,7 +1383,7 @@ func (noopControlStore) ListEvents(context.Context, string, int) ([]domain.Event
 func (noopControlStore) GetEvent(context.Context, string, string) (domain.Event, error) {
 	return domain.Event{}, nil
 }
-func (noopControlStore) GetRawPayload(context.Context, string, string, string) (domain.RawPayload, error) {
+func (noopControlStore) GetRawPayload(context.Context, string, string, string, string) (domain.RawPayload, error) {
 	return domain.RawPayload{}, nil
 }
 func (noopControlStore) GetNormalizedEvent(_ context.Context, tenantID, eventID, actorID string, includeData bool) (domain.NormalizedEnvelope, error) {
@@ -1680,13 +1702,15 @@ type rawPayloadControlStore struct {
 	tenantID  string
 	eventID   string
 	actorID   string
+	reason    string
 }
 
-func (s *rawPayloadControlStore) GetRawPayload(_ context.Context, tenantID, eventID, actorID string) (domain.RawPayload, error) {
+func (s *rawPayloadControlStore) GetRawPayload(_ context.Context, tenantID, eventID, actorID, reason string) (domain.RawPayload, error) {
 	s.rawCalled = true
 	s.tenantID = tenantID
 	s.eventID = eventID
 	s.actorID = actorID
+	s.reason = reason
 	return domain.RawPayload{
 		ID:             "raw_1",
 		TenantID:       tenantID,

@@ -265,14 +265,26 @@ func verifyEvidenceBundleFile(path string) error {
 	return json.NewEncoder(os.Stdout).Encode(result)
 }
 
-func exportRawPayload(baseURL, apiKey, eventID, outputPath string) error {
+func exportRawPayload(baseURL, apiKey, eventID, reason, outputPath string) error {
 	if strings.TrimSpace(eventID) == "" {
 		return fmt.Errorf("event-id is required")
+	}
+	reason = strings.TrimSpace(reason)
+	if reason == "" {
+		return fmt.Errorf("reason is required")
 	}
 	endpoint, err := apiEndpoint(baseURL, "/v1/events/"+url.PathEscape(eventID)+"/raw")
 	if err != nil {
 		return err
 	}
+	parsedEndpoint, err := url.Parse(endpoint)
+	if err != nil {
+		return err
+	}
+	query := parsedEndpoint.Query()
+	query.Set("reason", reason)
+	parsedEndpoint.RawQuery = query.Encode()
+	endpoint = parsedEndpoint.String()
 	// #nosec G107,G704 -- CLI connects only to the operator-supplied Webhookery API URL after scheme/host validation.
 	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, endpoint, nil)
 	if err != nil {
