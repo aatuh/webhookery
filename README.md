@@ -99,6 +99,8 @@ commits, issues, support requests, or audit artifacts.
   non-claims.
 - `docs/stability.md`: compatibility, support-window, migration, and
   deprecation policy.
+- `docs/performance-envelope.md`: performance smoke usage, capacity inputs,
+  storage growth, and sizing caveats.
 - `docs/documentation-maintenance.md`: provider freshness and documentation
   review checklist.
 - `docs/deployment.md`: common self-hosted deployment posture.
