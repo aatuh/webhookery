@@ -8,7 +8,7 @@ GOSEC_VERSION ?= v2.25.0
 GOVULNCHECK_VERSION ?= v1.2.0
 FUZZTIME ?= 5s
 
-.PHONY: help tools fmt lint vuln gosec test test-race coverage openapi-check test-vectors-check provider-conformance-check provider-proof-check crypto-inventory deployment-profile-check collections-check documentation-structure-check static-site-check meta-files-check fuzz-smoke perf-smoke sdk-generate sdk-check docs-check release-acceptance rc-check compose-up compose-down migrate live-postgres-check postgres-integration-test redis-integration-test fast-check finalize clean
+.PHONY: help tools fmt lint vuln gosec test test-race coverage openapi-check test-vectors-check provider-conformance-check provider-proof-check crypto-inventory deployment-profile-check collections-check documentation-structure-check failure-drills-check static-site-check meta-files-check fuzz-smoke perf-smoke restore-drill sdk-generate sdk-check docs-check release-acceptance rc-check compose-up compose-down migrate live-postgres-check postgres-integration-test redis-integration-test fast-check finalize clean
 
 help: ## Show help
 	@awk 'BEGIN {FS=":.*## "}; /^[a-zA-Z0-9_.-]+:.*## / { printf "  %-16s %s\n", $$1, $$2 }' $(MAKEFILE_LIST)
@@ -86,6 +86,7 @@ deployment-profile-check: ## Check deployment profile evidence and non-claims
 	@test -x scripts/release_acceptance.sh
 	@test -x scripts/backup_postgres.sh
 	@test -x scripts/restore_postgres.sh
+	@test -x scripts/restore_drill.sh
 	@grep -q "backup_postgres.sh" docs/operations.md
 	@grep -q "restore_postgres.sh" docs/operations.md
 
@@ -154,6 +155,7 @@ documentation-structure-check: ## Check canonical documentation structure
 	@test -f docs/live-provider-proof/samples/shopify-incident-report.redacted.md
 	@test -f docs/day-2-operations.md
 	@test -f docs/observability.md
+	@test -f docs/failure-drills.md
 	@test -f docs/documentation-maintenance.md
 	@test -f docs/cli.md
 	@test -f docs/deployment.md
@@ -233,6 +235,7 @@ documentation-structure-check: ## Check canonical documentation structure
 	@grep -q "provider-proof-v1" docs/provider-proof-manifest.json
 	@grep -q "Day-2 Operations Guide" docs/day-2-operations.md
 	@grep -q "Observability Examples" docs/observability.md
+	@grep -q "Failure Drills" docs/failure-drills.md
 	@grep -q "Provider Claim Freshness" docs/documentation-maintenance.md
 	@grep -q "Documentation Review Checklist" docs/documentation-maintenance.md
 	@grep -q "CLI" docs/cli.md
@@ -245,6 +248,14 @@ documentation-structure-check: ## Check canonical documentation structure
 	@grep -q "External Review Package" docs/external-review-package.md
 	@grep -q "External Review Findings Template" docs/external-review-findings-template.md
 	@grep -q "External Review Accepted Risks" docs/external-review-accepted-risks.md
+
+failure-drills-check: ## Check failure-drill scripts and sanitized plan generation
+	@sh -n scripts/failure_drills.sh
+	@sh -n scripts/restore_drill.sh
+	@test -x scripts/failure_drills.sh
+	@test -x scripts/restore_drill.sh
+	@scripts/failure_drills.sh list | grep -q "downstream-receiver-fails"
+	@tmp_dir="$$(mktemp -d)"; scripts/failure_drills.sh plan --output "$$tmp_dir" >/dev/null; grep -q "postgres-unavailable-before-capture" "$$tmp_dir/failure-drills.md"; rm -rf "$$tmp_dir"
 
 static-site-check: ## Check static landing page assets
 	@test -f site/index.html
@@ -303,6 +314,9 @@ fuzz-smoke: ## Run short CI-safe fuzz/property smoke tests
 perf-smoke: ## Run DB-backed local performance smoke and write sanitized evidence
 	@scripts/perf_smoke.sh
 
+restore-drill: ## Run destructive restore drill against WEBHOOKERY_RESTORE_DRILL_DATABASE_URL
+	@scripts/restore_drill.sh
+
 release-acceptance: ## Run v3.3 release acceptance evidence checks
 	@scripts/release_acceptance.sh
 
@@ -335,6 +349,7 @@ docs-check: ## Run non-mutating documentation-adjacent checks
 	@$(MAKE) deployment-profile-check
 	@$(MAKE) collections-check
 	@$(MAKE) documentation-structure-check
+	@$(MAKE) failure-drills-check
 	@$(MAKE) static-site-check
 	@$(MAKE) meta-files-check
 
@@ -365,6 +380,7 @@ fast-check: ## Run non-mutating checks
 	@$(MAKE) deployment-profile-check
 	@$(MAKE) collections-check
 	@$(MAKE) documentation-structure-check
+	@$(MAKE) failure-drills-check
 	@$(MAKE) static-site-check
 	@$(MAKE) meta-files-check
 	@$(MAKE) sdk-check
@@ -382,6 +398,7 @@ finalize: ## Thorough validity check
 	@$(MAKE) deployment-profile-check
 	@$(MAKE) collections-check
 	@$(MAKE) documentation-structure-check
+	@$(MAKE) failure-drills-check
 	@$(MAKE) static-site-check
 	@$(MAKE) meta-files-check
 	@$(MAKE) sdk-check

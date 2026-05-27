@@ -135,10 +135,15 @@ test -f .api.env.example
 test -f collections/postman/webhookery.postman_collection.json
 test -f collections/bruno/Webhookery/bruno.json
 test -x scripts/backup_postgres.sh
+test -x scripts/failure_drills.sh
 test -x scripts/integration_evidence.sh
 test -x scripts/restore_postgres.sh
+test -x scripts/restore_drill.sh
+test -f docs/failure-drills.md
 grep -q "backup_postgres.sh" docs/operations.md
 grep -q "restore_postgres.sh" docs/operations.md
+grep -q "make restore-drill" docs/operations.md
+grep -q "Failure Drills" docs/failure-drills.md
 grep -q "Production Doctor" docs/operations.md
 grep -q "doctor production" README.md
 grep -q "doctor pilot --no-network" README.md
