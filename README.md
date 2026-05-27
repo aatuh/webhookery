@@ -9,6 +9,14 @@ The product promise is narrow by design: Webhookery must not return inbound
 success before durable capture, loss boundaries must be explicit, and replay,
 recovery, and audit evidence must be first-class.
 
+Start here if you are evaluating Webhookery:
+
+- Static product page: `site/index.html`
+- Evaluator walkthrough: `docs/evaluator-quickstart.md`
+- Local evidence demo: `examples/webhook-evidence-demo/`
+- Release notes: `docs/releases/v0.1.0-rc1.md`
+- Commercial evaluation: `docs/commercial-evaluation.md`
+
 ## Implementation Status
 
 This repository is implementation-bearing. The current codebase includes:
@@ -52,6 +60,9 @@ The local bootstrap key is for development only. Create a database-backed API
 key immediately and remove or rotate the bootstrap hash before any
 production-style use.
 
+For a guided evidence-focused evaluation, use `docs/evaluator-quickstart.md`
+instead of this short smoke path.
+
 ## Short Smoke Paths
 
 - Local API and worker: `docker compose up --build`, then `/readyz`.
@@ -76,6 +87,9 @@ rc-check`, and restore drills when migrations or evidence storage are touched.
 Use `docs/observability.md` for starter Prometheus rules and dashboards. Do
 not use live provider or customer credentials for local acceptance gates.
 
+Release-candidate details live in `docs/releases/v0.1.0-rc1.md`. Release
+evidence requirements live in `docs/release-evidence-template.md`.
+
 ## Security Promise And Non-Claims
 
 See `docs/security-promise.md` for the canonical promise and non-claims.
@@ -87,12 +101,21 @@ not put real API keys, provider credentials, webhook secrets, bearer tokens,
 private keys, raw signatures, raw payload bodies, or customer data into docs,
 commits, issues, support requests, or audit artifacts.
 
+Commercial license exceptions, evaluation packages, production-readiness
+reviews, and support package boundaries are described in `COMMERCIAL.md`,
+`docs/commercial-evaluation.md`, `docs/production-readiness-review.md`, and
+`docs/support-packages.md`.
+
 ## Primary Docs
 
 - `docs/index.md`: canonical documentation map by audience, purpose, and
   source-of-truth boundary.
 - `docs/configuration.md`: canonical environment variable and secret handling
   reference.
+- `docs/evaluator-quickstart.md`: guided local evaluator walkthrough.
+- `examples/webhook-evidence-demo/`: deterministic local fake-provider and
+  fake-receiver evidence demo.
+- `site/index.html`: static product landing page.
 - `docs/operations.md`: operator runbooks and production RC procedures.
 - `docs/feature-behavior.md`: behavior reference for capture, routing,
   delivery, replay, reconciliation, retention, identity, producer trust, and
@@ -110,6 +133,10 @@ commits, issues, support requests, or audit artifacts.
   compatibility guidance.
 - `docs/security-review-package.md`: security reviewer artifact map.
 - `docs/release-evidence-template.md`: canonical release evidence template.
+- `docs/releases/v0.1.0-rc1.md`: first release-candidate notes.
+- `docs/demo-media-checklist.md`: safe screenshots/video checklist.
+- `docs/commercial-evaluation.md`, `docs/production-readiness-review.md`, and
+  `docs/support-packages.md`: commercial evaluation and support boundaries.
 - `docs/cli.md`: CLI command reference and moved command catalog.
 - `sdk/README.md`: committed SDK artifact guidance.
 - `collections/README.md`: Postman and Bruno smoke request usage.
