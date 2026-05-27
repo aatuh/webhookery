@@ -72,6 +72,7 @@ List provider families and event types without real payload data.
 - Incident ID:
 - Incident report generated: `yes | no`
 - Evidence bundle generated: `yes | no`
+- Evidence bundle profile used:
 - Bundle verification command:
 - Verification result:
 - Raw payload bodies included: `no | yes with elevated approval`

@@ -14,6 +14,7 @@ remains without pretending that delivery can be exactly once.
 
 Start here if you are evaluating Webhookery:
 
+- Why Webhookery: `docs/why-webhookery.md`
 - Evaluator walkthrough: `docs/evaluator-quickstart.md`
 - Local evidence demo: `examples/webhook-evidence-demo/`
 - Stripe proof guide: `docs/live-provider-proof/stripe.md`
@@ -137,6 +138,7 @@ reviews, and support package boundaries are described in `COMMERCIAL.md`,
 
 - `docs/index.md`: canonical documentation map by audience, purpose, and
   source-of-truth boundary.
+- `docs/why-webhookery.md`: product wedge and fit/non-fit explanation.
 - `docs/configuration.md`: canonical environment variable and secret handling
   reference.
 - `docs/evaluator-quickstart.md`: guided local evaluator walkthrough.
@@ -167,6 +169,13 @@ reviews, and support package boundaries are described in `COMMERCIAL.md`,
 - `docs/deployment.md`: common self-hosted deployment posture.
 - `docs/pilot-topology.md`: narrow supported topology for initial pilots.
 - `docs/pilot-evidence-template.md`: sanitized pilot evidence packet template.
+- `docs/evidence-bundle-profiles.md`: safe bundle profile policy for support,
+  security review, commercial evaluation, and internal forensics.
+- `docs/use-cases/stripe-payment-investigation.md`,
+  `docs/use-cases/github-automation-webhooks.md`,
+  `docs/use-cases/shopify-order-webhooks.md`, and
+  `docs/use-cases/internal-integration-replay.md`: story-led evaluation
+  workflows tied to incident packets.
 - `docs/schema-migrations.md`: schema review, migration ordering, and restore
   compatibility guidance.
 - `docs/security-review-package.md`: security reviewer artifact map.

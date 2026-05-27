@@ -104,6 +104,12 @@ documentation-structure-check: ## Check canonical documentation structure
 	@test -f CHANGELOG.md
 	@test -f docs/index.md
 	@test -f docs/evaluator-quickstart.md
+	@test -f docs/why-webhookery.md
+	@test -f docs/evidence-bundle-profiles.md
+	@test -f docs/use-cases/stripe-payment-investigation.md
+	@test -f docs/use-cases/github-automation-webhooks.md
+	@test -f docs/use-cases/shopify-order-webhooks.md
+	@test -f docs/use-cases/internal-integration-replay.md
 	@test -f docs/demo-media-checklist.md
 	@test -f docs/releases/v0.1.0-rc1.md
 	@test -f docs/releases/v0.2.0-pilot.md
@@ -159,7 +165,15 @@ documentation-structure-check: ## Check canonical documentation structure
 	@test -f docs/external-review-accepted-risks.md
 	@test -f docs/release-evidence-template.md
 	@grep -q "Documentation Map" docs/index.md
+	@grep -q "Why Webhookery" docs/why-webhookery.md
+	@grep -q "Evidence Bundle Profiles" docs/evidence-bundle-profiles.md
+	@grep -q "Stripe Payment Investigation" docs/use-cases/stripe-payment-investigation.md
+	@grep -q "GitHub Automation Webhooks" docs/use-cases/github-automation-webhooks.md
+	@grep -q "Shopify Order Webhooks" docs/use-cases/shopify-order-webhooks.md
+	@grep -q "Internal Integration Replay" docs/use-cases/internal-integration-replay.md
 	@grep -q "docs/evaluator-quickstart.md" README.md
+	@grep -q "docs/why-webhookery.md" README.md
+	@grep -q "docs/evidence-bundle-profiles.md" README.md
 	@grep -q "examples/webhook-evidence-demo" README.md
 	@grep -q "site/index.html" README.md
 	@grep -q "docs/commercial-evaluation.md" README.md
