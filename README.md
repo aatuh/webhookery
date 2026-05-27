@@ -21,6 +21,7 @@ Start here if you are evaluating Webhookery:
 - Shopify proof guide: `docs/live-provider-proof/shopify.md`
 - Static product page: `site/index.html`
 - Release notes: `docs/releases/v0.1.0-rc1.md`
+- v0.2 pilot checklist: `docs/releases/v0.2.0-pilot.md`
 - Pilot topology: `docs/pilot-topology.md`
 - Commercial evaluation: `docs/commercial-evaluation.md`
 
@@ -171,10 +172,13 @@ reviews, and support package boundaries are described in `COMMERCIAL.md`,
 - `docs/release-evidence-template.md`: canonical release evidence template.
 - `docs/production-rc-checklist.md`: release-candidate readiness checklist.
 - `docs/releases/v0.1.0-rc1.md`: first release-candidate notes.
+- `docs/releases/v0.2.0-pilot.md`: pilot-readiness launch checklist.
 - `docs/demo-media-checklist.md`: safe screenshots/video checklist.
 - `docs/customer-discovery-notes-template.md`,
   `docs/pilot-feedback-template.md`, `docs/roadmap-intake-policy.md`, and
   `docs/pilot-review-checklist.md`: evaluator and pilot feedback discipline.
+- `.github/ISSUE_TEMPLATE/evaluator-feedback.yml`: public sanitized feedback
+  issue form.
 - `docs/commercial-evaluation.md`, `docs/production-readiness-review.md`, and
   `docs/support-packages.md`: commercial evaluation and support boundaries.
 - `docs/cli.md`: CLI command reference and moved command catalog.

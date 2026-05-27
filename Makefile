@@ -106,6 +106,7 @@ documentation-structure-check: ## Check canonical documentation structure
 	@test -f docs/evaluator-quickstart.md
 	@test -f docs/demo-media-checklist.md
 	@test -f docs/releases/v0.1.0-rc1.md
+	@test -f docs/releases/v0.2.0-pilot.md
 	@test -f docs/release-evidence-sample.md
 	@test -f docs/production-rc-checklist.md
 	@test -f docs/commercial-evaluation.md
@@ -126,6 +127,7 @@ documentation-structure-check: ## Check canonical documentation structure
 	@test -f docs/pilot-feedback-template.md
 	@test -f docs/roadmap-intake-policy.md
 	@test -f docs/pilot-review-checklist.md
+	@test -f .github/ISSUE_TEMPLATE/evaluator-feedback.yml
 	@test -f docs/configuration.md
 	@test -f docs/feature-behavior.md
 	@test -f docs/security-promise.md
@@ -162,6 +164,7 @@ documentation-structure-check: ## Check canonical documentation structure
 	@grep -q "site/index.html" README.md
 	@grep -q "docs/commercial-evaluation.md" README.md
 	@grep -q "docs/production-rc-checklist.md" README.md
+	@grep -q "docs/releases/v0.2.0-pilot.md" README.md
 	@grep -q "docs/customer-discovery-notes-template.md" README.md
 	@grep -q "Evaluator Quickstart" docs/evaluator-quickstart.md
 	@grep -q "Demo Media Checklist" docs/demo-media-checklist.md
@@ -169,6 +172,11 @@ documentation-structure-check: ## Check canonical documentation structure
 	@grep -q "release candidate" docs/releases/v0.1.0-rc1.md
 	@grep -q "exactly-once delivery" docs/releases/v0.1.0-rc1.md
 	@grep -q "provider-side event completeness" docs/releases/v0.1.0-rc1.md
+	@grep -q "v0.2.0 Pilot Readiness Checklist" docs/releases/v0.2.0-pilot.md
+	@grep -q "make provider-proof-check" docs/releases/v0.2.0-pilot.md
+	@grep -q "raw payload bodies" .github/ISSUE_TEMPLATE/evaluator-feedback.yml
+	@grep -q "roadmap-intake-policy.md" .github/ISSUE_TEMPLATE/evaluator-feedback.yml
+	@grep -q "no secrets" .github/ISSUE_TEMPLATE/evaluator-feedback.yml
 	@grep -q "Commercial Evaluation" docs/commercial-evaluation.md
 	@grep -q "Production Readiness Review" docs/production-readiness-review.md
 	@grep -q "Support Packages" docs/support-packages.md

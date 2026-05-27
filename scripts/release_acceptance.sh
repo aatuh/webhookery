@@ -23,6 +23,7 @@ test -f docs/release-evidence-template.md
 test -f docs/release-evidence-sample.md
 test -f docs/production-rc-checklist.md
 test -f docs/releases/v0.1.0-rc1.md
+test -f docs/releases/v0.2.0-pilot.md
 test -f docs/security-review-package.md
 test -f docs/external-review-package.md
 test -f docs/external-review-scope.md
@@ -57,6 +58,7 @@ test -f docs/customer-discovery-notes-template.md
 test -f docs/pilot-feedback-template.md
 test -f docs/roadmap-intake-policy.md
 test -f docs/pilot-review-checklist.md
+test -f .github/ISSUE_TEMPLATE/evaluator-feedback.yml
 test -f .dockerignore
 test -f .golangci.yml
 grep -q "AGPL-3.0-only" COMMERCIAL.md
@@ -66,6 +68,10 @@ grep -q "make rc-check" docs/releases/v0.1.0-rc1.md
 grep -q "fake/local providers" docs/releases/v0.1.0-rc1.md
 grep -q "exactly-once delivery" docs/releases/v0.1.0-rc1.md
 grep -q "provider-side event completeness" docs/releases/v0.1.0-rc1.md
+grep -q "v0.2.0 Pilot Readiness Checklist" docs/releases/v0.2.0-pilot.md
+grep -q "make provider-proof-check" docs/releases/v0.2.0-pilot.md
+grep -q "raw payload bodies" .github/ISSUE_TEMPLATE/evaluator-feedback.yml
+grep -q "roadmap-intake-policy.md" .github/ISSUE_TEMPLATE/evaluator-feedback.yml
 grep -q "AGPL-3.0-only" CONTRIBUTING.md
 grep -q "https://www.linkedin.com/in/aatu-harju" SECURITY.md
 grep -q "webhook secrets" SECURITY.md

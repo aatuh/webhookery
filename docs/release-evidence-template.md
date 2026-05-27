@@ -40,6 +40,7 @@ the live third-party provider scope and risk.
 - Stability policy reviewed:
 - Performance smoke output:
 - Provider conformance output:
+- Provider proof metadata output:
 - Failure drill output:
 - External review status:
 - Accepted risk status:
@@ -60,6 +61,7 @@ the live third-party provider scope and risk.
 | `make rc-check` |  |  |
 | stability policy compatibility review |  |  |
 | `make provider-conformance-check` |  |  |
+| `make provider-proof-check` |  |  |
 | `make perf-smoke` with `WEBHOOKERY_TEST_DATABASE_URL` |  |  |
 | `make live-postgres-check` with `WEBHOOKERY_TEST_DATABASE_URL` |  |  |
 | DB-backed `make rc-check` with `WEBHOOKERY_TEST_DATABASE_URL` |  |  |
@@ -138,6 +140,7 @@ Attach or link sanitized artifacts:
 - readiness response,
 - production doctor response with secrets redacted,
 - provider conformance output and manifest,
+- provider proof output and manifest,
 - performance smoke JSON/Markdown output,
 - failure drill output,
 - provider ingest response with raw payload omitted,
