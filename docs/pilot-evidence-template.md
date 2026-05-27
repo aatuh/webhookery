@@ -60,6 +60,7 @@ List provider families and event types without real payload data.
 ## Replay Scenario Tested
 
 - Replay mode:
+- Replay reason code:
 - Replay reason:
 - Actor / role:
 - Approval requirement, if any:

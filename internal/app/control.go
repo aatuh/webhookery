@@ -350,10 +350,31 @@ const (
 	ReplayConfigOriginal = "original"
 )
 
+const (
+	ReplayReasonReceiverFixed          = "receiver_fixed"
+	ReplayReasonProviderReconciliation = "provider_reconciliation"
+	ReplayReasonOperatorRequested      = "operator_requested"
+	ReplayReasonSupportInvestigation   = "support_investigation"
+	ReplayReasonCustomerDispute        = "customer_dispute"
+	ReplayReasonTestDrill              = "test_drill"
+	ReplayReasonIncidentRecovery       = "incident_recovery"
+)
+
+var replayReasonCodes = map[string]struct{}{
+	ReplayReasonReceiverFixed:          {},
+	ReplayReasonProviderReconciliation: {},
+	ReplayReasonOperatorRequested:      {},
+	ReplayReasonSupportInvestigation:   {},
+	ReplayReasonCustomerDispute:        {},
+	ReplayReasonTestDrill:              {},
+	ReplayReasonIncidentRecovery:       {},
+}
+
 type ReplayRequest struct {
 	EventID            string `json:"event_id"`
 	DeliveryID         string `json:"delivery_id"`
 	EndpointID         string `json:"endpoint_id"`
+	ReasonCode         string `json:"reason_code"`
 	Reason             string `json:"reason"`
 	DryRun             bool   `json:"dry_run"`
 	ConfigMode         string `json:"config_mode,omitempty"`
@@ -362,12 +383,14 @@ type ReplayRequest struct {
 }
 
 type DeadLetterReleaseRequest struct {
-	Reason string `json:"reason"`
+	ReasonCode string `json:"reason_code"`
+	Reason     string `json:"reason"`
 }
 
 type DeadLetterBulkReleaseRequest struct {
-	EntryIDs []string `json:"entry_ids"`
-	Reason   string   `json:"reason"`
+	EntryIDs   []string `json:"entry_ids"`
+	ReasonCode string   `json:"reason_code"`
+	Reason     string   `json:"reason"`
 }
 
 type QuarantineDecisionRequest struct {
@@ -385,6 +408,8 @@ type ReplayJob struct {
 	ID                 string     `json:"id"`
 	State              string     `json:"state"`
 	ScopeHash          string     `json:"scope_hash"`
+	ReasonCode         string     `json:"reason_code"`
+	Reason             string     `json:"reason"`
 	ConfigMode         string     `json:"config_mode,omitempty"`
 	RateLimitPerMinute int        `json:"rate_limit_per_minute,omitempty"`
 	TotalItems         int        `json:"total_items"`
@@ -393,6 +418,8 @@ type ReplayJob struct {
 	ApprovalRequired   bool       `json:"approval_required"`
 	ApprovedBy         string     `json:"approved_by,omitempty"`
 	ApprovedAt         *time.Time `json:"approved_at,omitempty"`
+	CreatedBy          string     `json:"created_by,omitempty"`
+	CreatedAt          *time.Time `json:"created_at,omitempty"`
 }
 
 type StateChangeRequest struct {
@@ -2040,7 +2067,7 @@ func (s *ControlService) DryRunReplay(ctx context.Context, actor authz.Actor, re
 	if !s.authorized(ctx, actor, "replay:read", "replay", req.EventID, "") {
 		return ReplayDryRun{}, ErrForbidden
 	}
-	if err := normalizeReplayRequest(&req, false); err != nil {
+	if err := normalizeReplayRequest(&req, false, true); err != nil {
 		return ReplayDryRun{}, err
 	}
 	return s.store.DryRunReplay(ctx, actor.TenantID, req)
@@ -2050,11 +2077,7 @@ func (s *ControlService) CreateReplay(ctx context.Context, actor authz.Actor, re
 	if !s.authorized(ctx, actor, "replay:write", "replay", req.EventID, "") {
 		return ReplayJob{}, ErrForbidden
 	}
-	req.Reason = strings.TrimSpace(req.Reason)
-	if req.Reason == "" {
-		return ReplayJob{}, fmt.Errorf("%w: reason is required", ErrInvalidInput)
-	}
-	if err := normalizeReplayRequest(&req, true); err != nil {
+	if err := normalizeReplayRequest(&req, true, true); err != nil {
 		return ReplayJob{}, err
 	}
 	return s.store.CreateReplay(ctx, actor.TenantID, actor.ID, req)
@@ -2456,20 +2479,30 @@ func (s *ControlService) ReleaseDeadLetter(ctx context.Context, actor authz.Acto
 	if !s.authorized(ctx, actor, "deliveries:retry", "dead_letter", entryID, "") {
 		return ReplayJob{}, ErrForbidden
 	}
+	req.ReasonCode = strings.TrimSpace(req.ReasonCode)
+	req.Reason = strings.TrimSpace(req.Reason)
 	if req.Reason == "" {
 		return ReplayJob{}, fmt.Errorf("%w: reason is required", ErrInvalidInput)
 	}
-	return s.store.ReleaseDeadLetter(ctx, actor.TenantID, entryID, actor.ID, req.Reason)
+	if err := validateReplayReasonCode(req.ReasonCode); err != nil {
+		return ReplayJob{}, err
+	}
+	return s.store.ReleaseDeadLetter(ctx, actor.TenantID, entryID, actor.ID, req.ReasonCode, req.Reason)
 }
 
 func (s *ControlService) BulkReleaseDeadLetter(ctx context.Context, actor authz.Actor, req DeadLetterBulkReleaseRequest) ([]ReplayJob, error) {
 	if !s.authorized(ctx, actor, "deliveries:retry", "dead_letter", "", "") {
 		return nil, ErrForbidden
 	}
-	if strings.TrimSpace(req.Reason) == "" {
+	req.ReasonCode = strings.TrimSpace(req.ReasonCode)
+	req.Reason = strings.TrimSpace(req.Reason)
+	if req.Reason == "" {
 		return nil, fmt.Errorf("%w: reason is required", ErrInvalidInput)
 	}
-	return s.store.BulkReleaseDeadLetter(ctx, actor.TenantID, req.EntryIDs, actor.ID, req.Reason)
+	if err := validateReplayReasonCode(req.ReasonCode); err != nil {
+		return nil, err
+	}
+	return s.store.BulkReleaseDeadLetter(ctx, actor.TenantID, req.EntryIDs, actor.ID, req.ReasonCode, req.Reason)
 }
 
 func (s *ControlService) ListQuarantine(ctx context.Context, actor authz.Actor, limit int) ([]map[string]any, error) {
@@ -2908,10 +2941,23 @@ func validateRetryPolicy(req CreateRetryPolicyRequest) error {
 	return nil
 }
 
-func normalizeReplayRequest(req *ReplayRequest, requireScope bool) error {
+func normalizeReplayRequest(req *ReplayRequest, requireScope, requireReason bool) error {
+	req.EventID = strings.TrimSpace(req.EventID)
+	req.DeliveryID = strings.TrimSpace(req.DeliveryID)
+	req.EndpointID = strings.TrimSpace(req.EndpointID)
+	req.ReasonCode = strings.TrimSpace(req.ReasonCode)
+	req.Reason = strings.TrimSpace(req.Reason)
 	req.ConfigMode = strings.TrimSpace(req.ConfigMode)
 	if req.ConfigMode == "" {
 		req.ConfigMode = ReplayConfigCurrent
+	}
+	if requireReason {
+		if req.Reason == "" {
+			return fmt.Errorf("%w: reason is required", ErrInvalidInput)
+		}
+		if err := validateReplayReasonCode(req.ReasonCode); err != nil {
+			return err
+		}
 	}
 	if req.ConfigMode != ReplayConfigCurrent && req.ConfigMode != ReplayConfigOriginal {
 		return fmt.Errorf("%w: config_mode must be current or original", ErrInvalidInput)
@@ -2921,6 +2967,16 @@ func normalizeReplayRequest(req *ReplayRequest, requireScope bool) error {
 	}
 	if requireScope && strings.TrimSpace(req.EventID) == "" && strings.TrimSpace(req.DeliveryID) == "" {
 		return fmt.Errorf("%w: event_id or delivery_id is required", ErrInvalidInput)
+	}
+	return nil
+}
+
+func validateReplayReasonCode(reasonCode string) error {
+	if reasonCode == "" {
+		return fmt.Errorf("%w: reason_code is required", ErrInvalidInput)
+	}
+	if _, ok := replayReasonCodes[reasonCode]; !ok {
+		return fmt.Errorf("%w: reason_code must be one of receiver_fixed, provider_reconciliation, operator_requested, support_investigation, customer_dispute, test_drill, incident_recovery", ErrInvalidInput)
 	}
 	return nil
 }

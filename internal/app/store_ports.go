@@ -185,8 +185,8 @@ type EvidenceExportStore interface {
 
 type DeadLetterStore interface {
 	ListDeadLetter(ctx context.Context, tenantID string, limit int) ([]map[string]any, error)
-	ReleaseDeadLetter(ctx context.Context, tenantID, entryID, actorID, reason string) (ReplayJob, error)
-	BulkReleaseDeadLetter(ctx context.Context, tenantID string, entryIDs []string, actorID, reason string) ([]ReplayJob, error)
+	ReleaseDeadLetter(ctx context.Context, tenantID, entryID, actorID, reasonCode, reason string) (ReplayJob, error)
+	BulkReleaseDeadLetter(ctx context.Context, tenantID string, entryIDs []string, actorID, reasonCode, reason string) ([]ReplayJob, error)
 	ListQuarantine(ctx context.Context, tenantID string, limit int) ([]map[string]any, error)
 	ApproveQuarantine(ctx context.Context, tenantID, entryID, actorID, reason string, routeAfterRelease bool) (map[string]any, error)
 	RejectQuarantine(ctx context.Context, tenantID, entryID, actorID, reason string) (map[string]any, error)

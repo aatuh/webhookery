@@ -47,6 +47,7 @@ func runReplayJobs(args []string) error {
 	eventID := fs.String("event-id", "", "event id")
 	deliveryID := fs.String("delivery-id", "", "delivery id")
 	endpointID := fs.String("endpoint-id", "", "endpoint id")
+	reasonCode := fs.String("reason-code", "", "structured replay reason code")
 	reason := fs.String("reason", "", "operator reason")
 	configMode := fs.String("config-mode", apppkg.ReplayConfigCurrent, "current or original")
 	rateLimitPerMinute := fs.Int("rate-limit-per-minute", 0, "optional replay rate limit")
@@ -58,9 +59,21 @@ func runReplayJobs(args []string) error {
 	case "list":
 		return getJSON(*baseURL, *apiKey, "/v1/replay-jobs")
 	case "dry-run":
-		return postJSON(*baseURL, *apiKey, "/v1/replay-jobs:dry-run", map[string]any{"event_id": *eventID, "delivery_id": *deliveryID, "endpoint_id": *endpointID, "reason": *reason, "config_mode": *configMode, "rate_limit_per_minute": *rateLimitPerMinute})
+		if strings.TrimSpace(*reasonCode) == "" {
+			return fmt.Errorf("reason-code is required")
+		}
+		if strings.TrimSpace(*reason) == "" {
+			return fmt.Errorf("reason is required")
+		}
+		return postJSON(*baseURL, *apiKey, "/v1/replay-jobs:dry-run", map[string]any{"event_id": *eventID, "delivery_id": *deliveryID, "endpoint_id": *endpointID, "reason_code": *reasonCode, "reason": *reason, "config_mode": *configMode, "rate_limit_per_minute": *rateLimitPerMinute})
 	case "create":
-		return postJSON(*baseURL, *apiKey, "/v1/replay-jobs", map[string]any{"event_id": *eventID, "delivery_id": *deliveryID, "endpoint_id": *endpointID, "reason": *reason, "config_mode": *configMode, "rate_limit_per_minute": *rateLimitPerMinute, "require_approval": *requireApproval})
+		if strings.TrimSpace(*reasonCode) == "" {
+			return fmt.Errorf("reason-code is required")
+		}
+		if strings.TrimSpace(*reason) == "" {
+			return fmt.Errorf("reason is required")
+		}
+		return postJSON(*baseURL, *apiKey, "/v1/replay-jobs", map[string]any{"event_id": *eventID, "delivery_id": *deliveryID, "endpoint_id": *endpointID, "reason_code": *reasonCode, "reason": *reason, "config_mode": *configMode, "rate_limit_per_minute": *rateLimitPerMinute, "require_approval": *requireApproval})
 	case "approve":
 		return postJSON(*baseURL, *apiKey, "/v1/replay-jobs/"+url.PathEscape(*replayJobID)+":approve", map[string]string{"reason": *reason})
 	case "pause":

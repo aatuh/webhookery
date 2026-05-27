@@ -337,7 +337,7 @@ func TestRCE2ERetryExhaustionDLQReleaseAndReplayModes(t *testing.T) {
 		t.Fatalf("expected dead-lettered delivery for event %s: %+v", result.EventID, deliveries)
 	}
 
-	released, err := control.ReleaseDeadLetter(ctx, actor, dlqEntryID, app.DeadLetterReleaseRequest{Reason: "RC release drill"})
+	released, err := control.ReleaseDeadLetter(ctx, actor, dlqEntryID, app.DeadLetterReleaseRequest{ReasonCode: app.ReplayReasonTestDrill, Reason: "RC release drill"})
 	if err != nil {
 		t.Fatalf("release dead letter: %v", err)
 	}
@@ -389,11 +389,11 @@ func TestRCE2ERetryExhaustionDLQReleaseAndReplayModes(t *testing.T) {
 		t.Fatalf("expected initial replay source delivery, got %d", len(successClient.calls))
 	}
 
-	currentReplay, err := control.CreateReplay(ctx, actor, app.ReplayRequest{EventID: replayIngest.EventID, Reason: "RC current replay", ConfigMode: app.ReplayConfigCurrent})
+	currentReplay, err := control.CreateReplay(ctx, actor, app.ReplayRequest{EventID: replayIngest.EventID, ReasonCode: app.ReplayReasonTestDrill, Reason: "RC current replay", ConfigMode: app.ReplayConfigCurrent})
 	if err != nil {
 		t.Fatalf("create current-config replay: %v", err)
 	}
-	originalReplay, err := control.CreateReplay(ctx, actor, app.ReplayRequest{EventID: replayIngest.EventID, Reason: "RC original replay", ConfigMode: app.ReplayConfigOriginal})
+	originalReplay, err := control.CreateReplay(ctx, actor, app.ReplayRequest{EventID: replayIngest.EventID, ReasonCode: app.ReplayReasonTestDrill, Reason: "RC original replay", ConfigMode: app.ReplayConfigOriginal})
 	if err != nil {
 		t.Fatalf("create original-config replay: %v", err)
 	}
@@ -677,7 +677,7 @@ func TestRCE2EFailedPaymentWebhookIncidentPacketDemo(t *testing.T) {
 		t.Fatalf("attach demo event to incident: %v", err)
 	}
 
-	replayJob, err := control.ReleaseDeadLetter(ctx, actor, dlqEntryID, app.DeadLetterReleaseRequest{Reason: "receiver fixed during local evidence demo"})
+	replayJob, err := control.ReleaseDeadLetter(ctx, actor, dlqEntryID, app.DeadLetterReleaseRequest{ReasonCode: app.ReplayReasonReceiverFixed, Reason: "receiver fixed during local evidence demo"})
 	if err != nil {
 		t.Fatalf("release demo DLQ entry: %v", err)
 	}

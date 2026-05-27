@@ -455,6 +455,7 @@ func runDeadLetter(args []string) error {
 	apiKey := fs.String("api-key", os.Getenv("WEBHOOKERY_API_KEY"), "API key")
 	entryID := fs.String("entry-id", "", "dead-letter entry id")
 	entryIDs := fs.String("entry-ids", "", "comma-separated dead-letter entry ids")
+	reasonCode := fs.String("reason-code", "", "structured replay reason code")
 	reason := fs.String("reason", "", "release reason")
 	if err := fs.Parse(args[1:]); err != nil {
 		return err
@@ -463,9 +464,21 @@ func runDeadLetter(args []string) error {
 	case "list":
 		return getJSON(*baseURL, *apiKey, "/v1/dead-letter")
 	case "release":
-		return postJSON(*baseURL, *apiKey, "/v1/dead-letter/"+url.PathEscape(*entryID)+":release", map[string]string{"reason": *reason})
+		if strings.TrimSpace(*reasonCode) == "" {
+			return fmt.Errorf("reason-code is required")
+		}
+		if strings.TrimSpace(*reason) == "" {
+			return fmt.Errorf("reason is required")
+		}
+		return postJSON(*baseURL, *apiKey, "/v1/dead-letter/"+url.PathEscape(*entryID)+":release", map[string]string{"reason_code": *reasonCode, "reason": *reason})
 	case "bulk-release":
-		return postJSON(*baseURL, *apiKey, "/v1/dead-letter:bulk-release", map[string]any{"entry_ids": splitCSV(*entryIDs), "reason": *reason})
+		if strings.TrimSpace(*reasonCode) == "" {
+			return fmt.Errorf("reason-code is required")
+		}
+		if strings.TrimSpace(*reason) == "" {
+			return fmt.Errorf("reason is required")
+		}
+		return postJSON(*baseURL, *apiKey, "/v1/dead-letter:bulk-release", map[string]any{"entry_ids": splitCSV(*entryIDs), "reason_code": *reasonCode, "reason": *reason})
 	default:
 		return fmt.Errorf("usage: whcp dead-letter <list|release|bulk-release>")
 	}

@@ -3295,6 +3295,7 @@ paths:
             example:
               event_id: evt_example
               endpoint_id: end_example
+              reason_code: receiver_fixed
               reason: "customer requested replay after downstream fix"
               config_mode: current
               rate_limit_per_minute: 60
@@ -3307,6 +3308,8 @@ paths:
                 id: rpl_example
                 state: scheduled
                 scope_hash: sha256:2c26b46b68ffc68ff99b453c1d304134
+                reason_code: receiver_fixed
+                reason: "customer requested replay after downstream fix"
                 config_mode: current
                 rate_limit_per_minute: 60
                 total_items: 1
@@ -3575,6 +3578,12 @@ paths:
           required: true
           schema:
             type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DeadLetterReleaseRequest"
       responses:
         "202":
           description: Replay job scheduled for dead-letter entry.
@@ -6929,10 +6938,6 @@ components:
           type: integer
           minimum: 0
           maximum: 60000
-        require_approval:
-          type: boolean
-          default: false
-          description: Create the replay job in pending_approval state. Delivery work is not enqueued until the job is approved.
         state:
           type: string
           enum: [active, disabled]
@@ -7095,9 +7100,20 @@ components:
           type: array
           items:
             type: string
+    DeadLetterReleaseRequest:
+      type: object
+      required: [reason_code, reason]
+      additionalProperties: false
+      properties:
+        reason_code:
+          type: string
+          enum: [receiver_fixed, provider_reconciliation, operator_requested, support_investigation, customer_dispute, test_drill, incident_recovery]
+        reason:
+          type: string
+          minLength: 1
     DeadLetterBulkReleaseRequest:
       type: object
-      required: [reason]
+      required: [reason_code, reason]
       additionalProperties: false
       properties:
         entry_ids:
@@ -7105,11 +7121,15 @@ components:
           description: Empty or omitted means up to 100 currently open entries.
           items:
             type: string
+        reason_code:
+          type: string
+          enum: [receiver_fixed, provider_reconciliation, operator_requested, support_investigation, customer_dispute, test_drill, incident_recovery]
         reason:
           type: string
           minLength: 1
     ReplayRequest:
       type: object
+      required: [reason_code, reason]
       additionalProperties: false
       properties:
         event_id:
@@ -7118,8 +7138,12 @@ components:
           type: string
         endpoint_id:
           type: string
+        reason_code:
+          type: string
+          enum: [receiver_fixed, provider_reconciliation, operator_requested, support_investigation, customer_dispute, test_drill, incident_recovery]
         reason:
           type: string
+          minLength: 1
         dry_run:
           type: boolean
         config_mode:
@@ -7130,6 +7154,10 @@ components:
           type: integer
           minimum: 0
           maximum: 60000
+        require_approval:
+          type: boolean
+          default: false
+          description: Create the replay job in pending_approval state. Delivery work is not enqueued until the job is approved.
     CreateAuditExportRequest:
       type: object
       additionalProperties: false

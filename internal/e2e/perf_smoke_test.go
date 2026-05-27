@@ -90,6 +90,7 @@ func TestPerfSmoke(t *testing.T) {
 	replayStart := time.Now()
 	if _, err := control.CreateReplay(ctx, actor, app.ReplayRequest{
 		EventID:    eventIDs[0],
+		ReasonCode: app.ReplayReasonTestDrill,
 		Reason:     "performance smoke replay",
 		ConfigMode: app.ReplayConfigCurrent,
 	}); err != nil {

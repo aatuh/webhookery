@@ -78,6 +78,9 @@ func TestControlServiceIncidentLifecycleScopesAndRedactsReports(t *testing.T) {
 	if !strings.Contains(snapshot.Markdown, "Inbound capture does not prove downstream business success") {
 		t.Fatalf("incident report must include non-claims, got markdown:\n%s", snapshot.Markdown)
 	}
+	if !strings.Contains(snapshot.Markdown, "reason_code=incident_recovery") || !strings.Contains(snapshot.Markdown, "receiver restored after DLQ") {
+		t.Fatalf("incident report must include replay reason code and reason, got markdown:\n%s", snapshot.Markdown)
+	}
 
 	if _, err := svc.GetIncidentReport(context.Background(), reader, incident.ID); err != nil {
 		t.Fatal(err)
@@ -312,7 +315,7 @@ func TestControlServiceOwnerHappyPathSurface(t *testing.T) {
 			if _, err := svc.ListReplayJobs(ctx, actor, 10); err != nil {
 				return err
 			}
-			if _, err := svc.DryRunReplay(ctx, actor, ReplayRequest{EventID: "evt_1"}); err != nil {
+			if _, err := svc.DryRunReplay(ctx, actor, ReplayRequest{EventID: "evt_1", ReasonCode: ReplayReasonOperatorRequested, Reason: "investigate"}); err != nil {
 				return err
 			}
 			if _, err := svc.PauseReplayJob(ctx, actor, "rpl_1", StateChangeRequest{Reason: "pause"}); err != nil {
@@ -919,13 +922,21 @@ func TestControlServiceReplayValidatesConfigModeAndRate(t *testing.T) {
 	svc := NewControlService(store, ssrf.Validator{Resolver: ssrf.StaticResolver{}})
 	actor := authz.Actor{ID: "usr_1", TenantID: "ten_a", Role: authz.RoleDeveloper, Scopes: []string{"replay:write", "replay:read"}}
 
-	_, err := svc.CreateReplay(context.Background(), actor, ReplayRequest{EventID: "evt_1", Reason: "repair", ConfigMode: "future"})
+	_, err := svc.CreateReplay(context.Background(), actor, ReplayRequest{EventID: "evt_1", ReasonCode: ReplayReasonReceiverFixed, Reason: "repair", ConfigMode: "future"})
 	if !errors.Is(err, ErrInvalidInput) {
 		t.Fatalf("expected invalid config mode, got %v", err)
 	}
-	_, err = svc.CreateReplay(context.Background(), actor, ReplayRequest{EventID: "evt_1", Reason: "repair", ConfigMode: ReplayConfigOriginal, RateLimitPerMinute: -1})
+	_, err = svc.CreateReplay(context.Background(), actor, ReplayRequest{EventID: "evt_1", ReasonCode: ReplayReasonReceiverFixed, Reason: "repair", ConfigMode: ReplayConfigOriginal, RateLimitPerMinute: -1})
 	if !errors.Is(err, ErrInvalidInput) {
 		t.Fatalf("expected invalid rate limit, got %v", err)
+	}
+	_, err = svc.CreateReplay(context.Background(), actor, ReplayRequest{EventID: "evt_1", Reason: "repair", ConfigMode: ReplayConfigOriginal})
+	if !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("expected missing reason code rejection, got %v", err)
+	}
+	_, err = svc.CreateReplay(context.Background(), actor, ReplayRequest{EventID: "evt_1", ReasonCode: "because", Reason: "repair", ConfigMode: ReplayConfigOriginal})
+	if !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("expected invalid reason code rejection, got %v", err)
 	}
 }
 
@@ -934,12 +945,15 @@ func TestControlServiceReplayApprovalValidationAndTenantScope(t *testing.T) {
 	svc := NewControlService(store, ssrf.Validator{Resolver: ssrf.StaticResolver{}})
 	actor := authz.Actor{ID: "usr_1", TenantID: "ten_a", Role: authz.RoleDeveloper, Scopes: []string{"replay:write", "replay:read"}}
 
-	job, err := svc.CreateReplay(context.Background(), actor, ReplayRequest{EventID: "evt_1", Reason: "repair", RequireApproval: true})
+	job, err := svc.CreateReplay(context.Background(), actor, ReplayRequest{EventID: "evt_1", ReasonCode: ReplayReasonIncidentRecovery, Reason: "repair", RequireApproval: true})
 	if err != nil {
 		t.Fatalf("expected replay creation to succeed, got %v", err)
 	}
 	if !store.replayReq.RequireApproval || !job.ApprovalRequired {
 		t.Fatalf("expected approval requirement to propagate, req=%+v job=%+v", store.replayReq, job)
+	}
+	if store.replayReq.ReasonCode != ReplayReasonIncidentRecovery || job.ReasonCode != ReplayReasonIncidentRecovery || job.Reason != "repair" {
+		t.Fatalf("expected reason code and reason to propagate, req=%+v job=%+v", store.replayReq, job)
 	}
 
 	_, err = svc.ApproveReplayJob(context.Background(), actor, "rpl_1", StateChangeRequest{})
@@ -1046,7 +1060,7 @@ func TestControlServiceResourcePoliciesDenySensitiveOperations(t *testing.T) {
 		{
 			name: "replay creation", wantAction: "replay:write", wantFamily: "replay", wantID: "evt_replay",
 			run: func(svc *ControlService, actor authz.Actor) error {
-				_, err := svc.CreateReplay(context.Background(), actor, ReplayRequest{EventID: "evt_replay", Reason: "investigate"})
+				_, err := svc.CreateReplay(context.Background(), actor, ReplayRequest{EventID: "evt_replay", ReasonCode: ReplayReasonSupportInvestigation, Reason: "investigate"})
 				return err
 			},
 		},
@@ -2218,6 +2232,7 @@ func (f *fakeControlStore) ListEventTimeline(context.Context, string, string, in
 		{"kind": "event", "ref_id": "evt_1", "state": "unique", "detail": "valid_signature", "occurred_at": time.Unix(100, 0).UTC()},
 		{"kind": "delivery", "ref_id": "del_1", "state": "failed", "detail": "route_version=rtv_1 subscription_version=none retry_policy=rtp_1", "occurred_at": time.Unix(101, 0).UTC()},
 		{"kind": "attempt", "ref_id": "att_1", "state": "failed", "detail": "network_error retryable=true retry_delay_ms=1000", "occurred_at": time.Unix(102, 0).UTC()},
+		{"kind": "replay", "ref_id": "rpl_1", "state": "completed", "detail": "reason_code=incident_recovery reason=receiver restored after DLQ config_mode=original event_id=evt_1", "occurred_at": time.Unix(102, 500000000).UTC()},
 		{"kind": "audit", "ref_id": "aud_1", "state": "raw_payload.read", "detail": "operator reason", "occurred_at": time.Unix(103, 0).UTC()},
 	}, nil
 }
@@ -2584,10 +2599,10 @@ func (f *fakeControlStore) DownloadAuditExport(_ context.Context, tenantID, expo
 func (f *fakeControlStore) ListDeadLetter(context.Context, string, int) ([]map[string]any, error) {
 	return nil, nil
 }
-func (f *fakeControlStore) ReleaseDeadLetter(context.Context, string, string, string, string) (ReplayJob, error) {
+func (f *fakeControlStore) ReleaseDeadLetter(context.Context, string, string, string, string, string) (ReplayJob, error) {
 	return ReplayJob{}, nil
 }
-func (f *fakeControlStore) BulkReleaseDeadLetter(context.Context, string, []string, string, string) ([]ReplayJob, error) {
+func (f *fakeControlStore) BulkReleaseDeadLetter(context.Context, string, []string, string, string, string) ([]ReplayJob, error) {
 	return nil, nil
 }
 func (f *fakeControlStore) ListQuarantine(context.Context, string, int) ([]map[string]any, error) {
@@ -2604,7 +2619,7 @@ func (f *fakeControlStore) DryRunReplay(context.Context, string, ReplayRequest) 
 }
 func (f *fakeControlStore) CreateReplay(_ context.Context, tenantID, actorID string, req ReplayRequest) (ReplayJob, error) {
 	f.replayReq = req
-	return ReplayJob{ID: "rpl_1", State: "pending_approval", ScopeHash: "sha256:abc", TotalItems: 1, ApprovalRequired: req.RequireApproval}, nil
+	return ReplayJob{ID: "rpl_1", State: "pending_approval", ScopeHash: "sha256:abc", ReasonCode: req.ReasonCode, Reason: req.Reason, TotalItems: 1, ApprovalRequired: req.RequireApproval}, nil
 }
 func (f *fakeControlStore) ListReplayJobs(context.Context, string, int) ([]ReplayJob, error) {
 	return nil, nil
