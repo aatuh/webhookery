@@ -5037,12 +5037,17 @@ func (s *Store) CreateAuditExport(ctx context.Context, tenantID, actorID string,
 		return domain.EvidenceExport{}, err
 	}
 	files["audit_chain_proof.jsonl"] = chainProof
+	eventIDs, err := s.eventIDsForExport(ctx, tenantID, req.From, req.To)
+	if err != nil {
+		return domain.EvidenceExport{}, err
+	}
 	bundle, err := evidence.BuildTarGzipBundle(evidence.Manifest{
 		ExportID:             id,
 		TenantID:             tenantID,
 		CreatedAt:            now,
-		From:                 req.From,
-		To:                   req.To,
+		From:                 manifestTime(req.From),
+		To:                   manifestTime(req.To),
+		IncludedEvents:       eventIDs,
 		IncludeRawPayloads:   req.IncludeRawPayloads,
 		IncludeTimelines:     req.IncludeTimelines,
 		IncludePayloadBodies: req.IncludePayloadBodies,
@@ -7006,6 +7011,22 @@ func (s *Store) coveringAuditChainAnchors(ctx context.Context, tenantID string, 
 }
 
 func (s *Store) timelineJSONLForExport(ctx context.Context, tenantID string, from, to time.Time) ([]byte, error) {
+	eventIDs, err := s.eventIDsForExport(ctx, tenantID, from, to)
+	if err != nil {
+		return nil, err
+	}
+	var lines []any
+	for _, eventID := range eventIDs {
+		items, err := s.ListEventTimeline(ctx, tenantID, eventID, 100)
+		if err != nil {
+			return nil, err
+		}
+		lines = append(lines, map[string]any{"event_id": eventID, "timeline": items})
+	}
+	return evidence.JSONLines(lines)
+}
+
+func (s *Store) eventIDsForExport(ctx context.Context, tenantID string, from, to time.Time) ([]string, error) {
 	query := `SELECT id FROM events WHERE tenant_id=$1`
 	args := []any{tenantID}
 	if !from.IsZero() {
@@ -7022,22 +7043,18 @@ func (s *Store) timelineJSONLForExport(ctx context.Context, tenantID string, fro
 		return nil, err
 	}
 	defer rows.Close()
-	var lines []any
+	var eventIDs []string
 	for rows.Next() {
 		var eventID string
 		if err := rows.Scan(&eventID); err != nil {
 			return nil, err
 		}
-		items, err := s.ListEventTimeline(ctx, tenantID, eventID, 100)
-		if err != nil {
-			return nil, err
-		}
-		lines = append(lines, map[string]any{"event_id": eventID, "timeline": items})
+		eventIDs = append(eventIDs, eventID)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
-	return evidence.JSONLines(lines)
+	return eventIDs, nil
 }
 
 func (s *Store) rawPayloadsJSONLForExport(ctx context.Context, tenantID string, from, to time.Time) ([]byte, error) {
@@ -7404,6 +7421,14 @@ func zeroTimeOmit(value time.Time) any {
 		return nil
 	}
 	return value
+}
+
+func manifestTime(value time.Time) *time.Time {
+	if value.IsZero() {
+		return nil
+	}
+	out := value.UTC()
+	return &out
 }
 
 func (s *Store) getAuditExportWithBundle(ctx context.Context, tenantID, exportID string) (domain.EvidenceExport, []byte, error) {

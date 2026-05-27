@@ -4,6 +4,7 @@ import (
 	"archive/tar"
 	"bytes"
 	"compress/gzip"
+	"encoding/json"
 	"sort"
 	"strings"
 	"testing"
@@ -97,6 +98,48 @@ func TestVerifyTarGzipBundleChecksManifestFiles(t *testing.T) {
 	}
 }
 
+func TestBuildTarGzipBundleWritesVersionedSanitizedManifest(t *testing.T) {
+	bundle, err := BuildTarGzipBundle(Manifest{
+		ExportID:          "exp_1",
+		TenantID:          "ten_1",
+		CreatedAt:         time.Unix(123, 0).UTC(),
+		IncludedEvents:    []string{"evt_2", "evt_1", "evt_1"},
+		IncludedIncidents: []string{"inc_1"},
+	}, map[string][]byte{
+		"audit_events.jsonl": []byte("{\"id\":\"aud_1\"}\n"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	files, err := readTarGzipFiles(bundle.Bytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifestBytes := files["manifest.json"]
+	if bytes.Contains(manifestBytes, []byte(`"tenant_id":`)) {
+		t.Fatalf("manifest leaked raw tenant id: %s", string(manifestBytes))
+	}
+	if bytes.Contains(manifestBytes, []byte(`"from":`)) || bytes.Contains(manifestBytes, []byte(`"to":`)) {
+		t.Fatalf("manifest serialized empty time window: %s", string(manifestBytes))
+	}
+	var manifest Manifest
+	if err := json.Unmarshal(manifestBytes, &manifest); err != nil {
+		t.Fatal(err)
+	}
+	if manifest.SchemaVersion != ManifestSchemaV1 {
+		t.Fatalf("unexpected schema version %q", manifest.SchemaVersion)
+	}
+	if manifest.BundleID != "exp_1" || manifest.TenantIDHash == "" || manifest.GeneratedAt.IsZero() {
+		t.Fatalf("manifest missing bundle id, tenant hash, or generated time: %+v", manifest)
+	}
+	if got := strings.Join(manifest.IncludedEvents, ","); got != "evt_1,evt_2" {
+		t.Fatalf("included events not normalized: %s", got)
+	}
+	if manifest.Hashes["audit_events.jsonl"] == "" || len(manifest.NonClaims) == 0 || manifest.RedactionPolicy.Secrets == "" {
+		t.Fatalf("manifest missing hashes, non-claims, or redaction policy: %+v", manifest)
+	}
+}
+
 func TestVerifyTarGzipBundleChecksAuditChainProof(t *testing.T) {
 	bundle, err := BuildTarGzipBundle(Manifest{ExportID: "exp_1", TenantID: "ten_1", CreatedAt: time.Unix(123, 0).UTC()}, map[string][]byte{
 		"audit_events.jsonl":      []byte("{\"id\":\"aud_1\"}\n"),
@@ -111,6 +154,40 @@ func TestVerifyTarGzipBundleChecksAuditChainProof(t *testing.T) {
 	}
 	if !result.Valid || result.CheckedChainEntries != 1 {
 		t.Fatalf("unexpected chain verification result: %+v", result)
+	}
+}
+
+func TestVerifyTarGzipBundleRejectsMissingSchemaVersion(t *testing.T) {
+	bundle, err := BuildTarGzipBundle(Manifest{ExportID: "exp_1", TenantID: "ten_1", CreatedAt: time.Unix(123, 0).UTC()}, map[string][]byte{
+		"audit_events.jsonl": []byte("{\"id\":\"aud_1\"}\n"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	files, err := readTarGzipFiles(bundle.Bytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var manifest map[string]any
+	if err := json.Unmarshal(files["manifest.json"], &manifest); err != nil {
+		t.Fatal(err)
+	}
+	delete(manifest, "schema_version")
+	files["manifest.json"], err = json.MarshalIndent(manifest, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	files["manifest.json"] = append(files["manifest.json"], '\n')
+
+	result, err := VerifyTarGzipBundle(tarGzipTestFiles(t, files))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Valid {
+		t.Fatalf("expected missing schema version to be invalid: %+v", result)
+	}
+	if !hasFailure(result.Failures, "unsupported manifest schema_version") {
+		t.Fatalf("expected schema version failure, got %+v", result.Failures)
 	}
 }
 

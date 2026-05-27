@@ -251,10 +251,17 @@ Evidence exports are tenant-scoped `tar.gz` bundles. They include:
 - optional `raw_payloads.jsonl`
 - `reconciliation_evidence.jsonl`
 
+`manifest.json` is versioned as `webhookery.evidence_bundle.v1`. It includes
+the generated time, bundle ID, tenant ID hash, included event IDs, included
+incident IDs when applicable, file hashes, audit-chain references where
+available, redaction policy, and explicit non-claims. It does not serialize the
+raw tenant ID.
+
 Raw payload bodies and payload-body exports require both audit read permission
 and raw payload permission. Export creation verifies chain proof before marking
 the export ready. `whcp audit verify-bundle --file evidence.tar.gz` checks tar
-entry safety, file hashes, and audit-chain continuity.
+entry safety, manifest schema version, file hashes, manifest hash references,
+and audit-chain continuity.
 
 ## Audit Chain
 
