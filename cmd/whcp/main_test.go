@@ -372,6 +372,13 @@ func TestCLIResourceCommandsSendExpectedRequests(t *testing.T) {
 			bodyContains: []string{`"event_id":"evt_1"`, `"endpoint_id":"end_1"`, `"reason_code":"support_investigation"`, `"reason":"debug"`, `"require_approval":true`},
 		},
 		{
+			name:         "replay preview",
+			args:         append([]string{"replay-jobs", "preview", "--event-id", "evt_1", "--reason-code", "operator_requested", "--reason", "inspect"}, common...),
+			wantMethod:   http.MethodPost,
+			wantPath:     "/v1/replay-jobs/preview",
+			bodyContains: []string{`"event_id":"evt_1"`, `"reason_code":"operator_requested"`, `"reason":"inspect"`},
+		},
+		{
 			name:       "alert firings filter",
 			args:       append([]string{"alerts", "firings", "--state", "open"}, common...),
 			wantMethod: http.MethodGet,

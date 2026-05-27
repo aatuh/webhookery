@@ -191,6 +191,7 @@ func (s *Server) Routes() http.Handler {
 			r.Post("/deliveries/{delivery_id}:cancel", s.cancelDelivery)
 			r.Get("/delivery-attempts/{attempt_id}", s.getDeliveryAttempt)
 			r.Post("/replay-jobs:dry-run", s.dryRunReplay)
+			r.Post("/replay-jobs/preview", s.dryRunReplay)
 			r.Get("/replay-jobs", s.listReplayJobs)
 			r.Post("/replay-jobs", s.createReplay)
 			r.Post("/replay-jobs/{replay_job_id}:approve", s.approveReplayJob)

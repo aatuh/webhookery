@@ -344,6 +344,7 @@ func TestAuthenticatedMutationRoutesPreserveContracts(t *testing.T) {
 		{name: "retry delivery", method: http.MethodPost, path: "/v1/deliveries/del_1:retry", body: `{"reason":"retry"}`, wantStatus: http.StatusAccepted},
 		{name: "cancel delivery", method: http.MethodPost, path: "/v1/deliveries/del_1:cancel", body: `{"reason":"cancel"}`, wantStatus: http.StatusOK},
 		{name: "dry run replay", method: http.MethodPost, path: "/v1/replay-jobs:dry-run", body: `{"event_id":"evt_1","reason_code":"operator_requested","reason":"inspect"}`, wantStatus: http.StatusOK},
+		{name: "preview replay", method: http.MethodPost, path: "/v1/replay-jobs/preview", body: `{"event_id":"evt_1","reason_code":"operator_requested","reason":"inspect"}`, wantStatus: http.StatusOK},
 		{name: "create reconciliation", method: http.MethodPost, path: "/v1/reconciliation-jobs", body: `{"connection_id":"pcn_1","reason":"recover"}`, wantStatus: http.StatusCreated},
 		{name: "approve replay", method: http.MethodPost, path: "/v1/replay-jobs/rpl_1:approve", body: `{"reason":"approve"}`, wantStatus: http.StatusOK},
 		{name: "pause replay", method: http.MethodPost, path: "/v1/replay-jobs/rpl_1:pause", body: `{"reason":"pause"}`, wantStatus: http.StatusOK},

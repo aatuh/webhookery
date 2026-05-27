@@ -119,13 +119,17 @@ Replay modes:
 Replay jobs may be paused, resumed, canceled, rate-limited, or created with
 `require_approval=true`. Approval records approver metadata and a chained audit
 event. This is a single approval gate, not a two-person approval workflow.
-Replay creation and dry-run requests require both a structured `reason_code`
-and a free-text `reason`. Implemented reason codes are `receiver_fixed`,
+Replay creation, preview, and dry-run requests require both a structured
+`reason_code` and a free-text `reason`. Implemented reason codes are `receiver_fixed`,
 `provider_reconciliation`, `operator_requested`, `support_investigation`,
 `customer_dispute`, `test_drill`, and `incident_recovery`. Replay job rows,
 scope JSON, audit evidence, event timelines, and incident reports preserve the
 reason code, free-text reason, replay mode, actor, and selected event or
 delivery scope.
+
+`POST /v1/replay-jobs/preview` is the preferred replay preview route.
+`POST /v1/replay-jobs:dry-run` remains a compatibility alias. Both return
+planning output without creating delivery jobs.
 
 `GET /v1/events/{event_id}/timeline` returns `webhookery.event_timeline.v1`
 entries for the shared investigation surface. Timeline rows include received
