@@ -49,6 +49,18 @@ owner document for a topic and linking to it from secondary docs.
 | `docs/commercial-evaluation.md` | Commercial evaluators | Evaluation path, starting ranges, required inputs, and safe information boundaries. | Commercial evaluation guide. It is not legal advice. |
 | `docs/production-readiness-review.md` | Commercial evaluators, operators | Paid production-readiness review scope, inputs, outputs, and limits. | Review-offer guide. It is not certification. |
 | `docs/support-packages.md` | Users and customers | Support options, starting ranges, request quality, and non-claims. | Support package guide. Contract terms override public examples. |
+| `docs/comparisons/build-vs-buy.md` | Evaluators, buyers | Decision guide for self-hosting Webhookery vs hosted vendors or simpler internal tools. | Buyer-fit comparison. Not a benchmark or legal recommendation. |
+| `docs/comparisons/hookdeck.md` | Evaluators, buyers | Factual buyer-fit comparison against Hookdeck based on dated official-source review. | Comparison page. Re-check official sources before publishing externally. |
+| `docs/comparisons/svix.md` | Evaluators, buyers | Factual buyer-fit comparison against Svix based on dated official-source review. | Comparison page. Re-check official sources before publishing externally. |
+| `docs/comparisons/convoy.md` | Evaluators, buyers | Factual buyer-fit comparison against Convoy based on dated official-source review. | Comparison page. Re-check official sources before publishing externally. |
+| `docs/articles/exactly-once-webhooks.md` | Evaluators, practitioners | Educational article explaining why Webhookery designs for evidence, replay, and idempotency instead of exactly-once claims. | Educational content. Keep aligned with `docs/security-promise.md`. |
+| `docs/articles/webhook-incident-report.md` | Operators, incident responders | Educational article and report outline for webhook incidents. | Educational content. Do not store real incident data here. |
+| `docs/articles/webhook-failure-modes.md` | Operators, evaluators | Educational article about webhook loss boundaries and operational checks. | Educational content. Keep provider claims aligned with conformance docs. |
+| `docs/launch-copy.md` | Maintainers, launch authors | Draft public launch copy for release announcement, communities, outreach, and product channels. | Prepared copy only. Do not treat as approval to post. |
+| `docs/launch-metrics.md` | Maintainers, commercial operators | Privacy-safe launch measurement plan focused on qualified evaluations. | Metrics plan. Does not add runtime analytics. |
+| `docs/pilot-feedback-template.md` | Maintainers, commercial operators | Sanitized template for evaluator and pilot feedback. | Feedback template. Do not store secrets or customer data. |
+| `docs/roadmap-intake-policy.md` | Maintainers | Policy for classifying pilot feedback into docs, bugs, paid work, roadmap, future, or out-of-scope. | Roadmap discipline. Does not override product invariants. |
+| `docs/pilot-review-checklist.md` | Maintainers | Checklist for reviewing pilot findings and choosing the next engineering slice. | Review checklist. Keep production claims evidence-backed. |
 | `TRADEMARKS.md` | Forks, redistributors, commercial users | Naming and trademark guidance. | Trademark policy only. |
 
 ## Maintenance Rule
