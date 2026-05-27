@@ -106,6 +106,18 @@ documentation-structure-check: ## Check canonical documentation structure
 	@test -f docs/commercial-evaluation.md
 	@test -f docs/production-readiness-review.md
 	@test -f docs/support-packages.md
+	@test -f docs/comparisons/build-vs-buy.md
+	@test -f docs/comparisons/hookdeck.md
+	@test -f docs/comparisons/svix.md
+	@test -f docs/comparisons/convoy.md
+	@test -f docs/articles/exactly-once-webhooks.md
+	@test -f docs/articles/webhook-incident-report.md
+	@test -f docs/articles/webhook-failure-modes.md
+	@test -f docs/launch-copy.md
+	@test -f docs/launch-metrics.md
+	@test -f docs/pilot-feedback-template.md
+	@test -f docs/roadmap-intake-policy.md
+	@test -f docs/pilot-review-checklist.md
 	@test -f docs/configuration.md
 	@test -f docs/feature-behavior.md
 	@test -f docs/security-promise.md
@@ -138,6 +150,18 @@ documentation-structure-check: ## Check canonical documentation structure
 	@grep -q "Commercial Evaluation" docs/commercial-evaluation.md
 	@grep -q "Production Readiness Review" docs/production-readiness-review.md
 	@grep -q "Support Packages" docs/support-packages.md
+	@grep -q "Build Vs Buy" docs/comparisons/build-vs-buy.md
+	@grep -q "Verification date: 2026-05-27" docs/comparisons/hookdeck.md
+	@grep -q "Verification date: 2026-05-27" docs/comparisons/svix.md
+	@grep -q "Verification date: 2026-05-27" docs/comparisons/convoy.md
+	@grep -q "Exactly-Once Webhooks" docs/articles/exactly-once-webhooks.md
+	@grep -q "Building A Webhook Incident Report" docs/articles/webhook-incident-report.md
+	@grep -q "Webhook Failure Modes" docs/articles/webhook-failure-modes.md
+	@grep -q "Launch Copy Templates" docs/launch-copy.md
+	@grep -q "Launch Metrics Plan" docs/launch-metrics.md
+	@grep -q "Pilot Feedback Template" docs/pilot-feedback-template.md
+	@grep -q "Roadmap Intake Policy" docs/roadmap-intake-policy.md
+	@grep -q "Pilot Review Checklist" docs/pilot-review-checklist.md
 	@grep -q "Configuration Reference" docs/configuration.md
 	@grep -q "Feature Behavior Reference" docs/feature-behavior.md
 	@grep -q "Security Promise" docs/security-promise.md

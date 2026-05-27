@@ -24,6 +24,19 @@ test -f docs/external-review-findings-template.md
 test -f docs/external-review-accepted-risks.md
 test -f docs/provider-conformance.md
 test -f docs/provider-conformance.manifest.json
+test -f docs/evaluator-quickstart.md
+test -f examples/webhook-evidence-demo/run.sh
+test -f site/index.html
+test -f docs/commercial-evaluation.md
+test -f docs/production-readiness-review.md
+test -f docs/support-packages.md
+test -f docs/comparisons/build-vs-buy.md
+test -f docs/articles/exactly-once-webhooks.md
+test -f docs/launch-copy.md
+test -f docs/launch-metrics.md
+test -f docs/pilot-feedback-template.md
+test -f docs/roadmap-intake-policy.md
+test -f docs/pilot-review-checklist.md
 test -f .dockerignore
 test -f .golangci.yml
 grep -q "AGPL-3.0-only" COMMERCIAL.md
@@ -49,6 +62,19 @@ grep -q "External Review Scope Template" docs/external-review-scope.md
 grep -q "External Review Findings Template" docs/external-review-findings-template.md
 grep -q "Provider Conformance Matrix" docs/provider-conformance.md
 grep -q "no provider-side completeness guarantee" docs/provider-conformance.md
+grep -q "Evaluator Quickstart" docs/evaluator-quickstart.md
+grep -q "webhook evidence demo" examples/webhook-evidence-demo/README.md
+grep -q "Self-hosted webhook evidence infrastructure" site/index.html
+grep -q "EUR 490-1,000" docs/commercial-evaluation.md
+grep -q "Production Readiness Review" docs/production-readiness-review.md
+grep -q "Support Packages" docs/support-packages.md
+grep -q "Build Vs Buy" docs/comparisons/build-vs-buy.md
+grep -q "Exactly-Once Webhooks" docs/articles/exactly-once-webhooks.md
+grep -q "Launch Copy Templates" docs/launch-copy.md
+grep -q "Launch Metrics Plan" docs/launch-metrics.md
+grep -q "Pilot Feedback Template" docs/pilot-feedback-template.md
+grep -q "Roadmap Intake Policy" docs/roadmap-intake-policy.md
+grep -q "Pilot Review Checklist" docs/pilot-review-checklist.md
 grep -q ".refs" .dockerignore
 grep -q "release-evidence" .dockerignore
 grep -q "backups" .dockerignore
