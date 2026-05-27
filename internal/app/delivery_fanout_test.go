@@ -155,6 +155,40 @@ func TestDeliveryFanoutReplayOriginalClonesPayloadsAndCompletesJob(t *testing.T)
 	if req.ConfigMode != ReplayConfigOriginal || req.ReplayJobID != "rpl_1" {
 		t.Fatalf("expected original replay evidence context, got %+v", req)
 	}
+	if store.originals[0].ID != "del_original" || store.originals[0].DeliveryPayloadID != "dpl_1" {
+		t.Fatalf("original replay source must remain unchanged, got %+v", store.originals[0])
+	}
+}
+
+func TestDeliveryFanoutReplayOriginalKeepsDuplicateSourcesVisible(t *testing.T) {
+	now := time.Date(2026, 5, 26, 12, 0, 0, 0, time.UTC)
+	store := &fakeDeliveryFanoutStore{
+		replayWork: ReplayJobWork{
+			State:              "scheduled",
+			ConfigMode:         ReplayConfigOriginal,
+			RateLimitPerMinute: 60,
+			Request:            ReplayRequest{EventID: "evt_1", ConfigMode: ReplayConfigOriginal},
+		},
+		originals: []DeliveryReplaySource{
+			{ID: "del_duplicate_a", EventID: "evt_1", EndpointID: "end_1", RouteID: "rte_1", RouteVersionID: "rv_1", RetryPolicyID: "rtp_1", DeliveryPayloadID: "dpl_a"},
+			{ID: "del_duplicate_b", EventID: "evt_1", EndpointID: "end_1", RouteID: "rte_1", RouteVersionID: "rv_1", RetryPolicyID: "rtp_1", DeliveryPayloadID: "dpl_b"},
+		},
+	}
+	svc := NewDeliveryFanoutService(store, fixedFanoutClock{now: now})
+
+	err := svc.ProcessOutbox(context.Background(), worker.OutboxItem{TenantID: "ten_1", Kind: OutboxKindReplayJob, ResourceID: "rpl_1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if store.completedReplayItems != 2 || len(store.creates) != 2 {
+		t.Fatalf("duplicate original deliveries must each create replay evidence, completed=%d creates=%d", store.completedReplayItems, len(store.creates))
+	}
+	if store.creates[0].OriginalDeliveryID != "del_duplicate_a" || store.creates[0].SourceDeliveryPayloadID != "dpl_a" {
+		t.Fatalf("first duplicate replay linkage lost: %+v", store.creates[0])
+	}
+	if store.creates[1].OriginalDeliveryID != "del_duplicate_b" || store.creates[1].SourceDeliveryPayloadID != "dpl_b" {
+		t.Fatalf("second duplicate replay linkage lost: %+v", store.creates[1])
+	}
 }
 
 func TestDeliveryFanoutReplayCurrentUsesCurrentRouteConfig(t *testing.T) {
