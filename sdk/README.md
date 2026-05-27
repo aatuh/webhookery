@@ -18,6 +18,14 @@ These clients cover a deliberately small surface:
 
 Use `openapi.yaml` for the full REST contract.
 
+Evidence workflow examples live in:
+
+- `sdk/examples/evidence-workflow-go/main.go`
+- `sdk/typescript/examples/evidence-workflow.ts`
+
+They show how to combine the narrow committed clients with direct OpenAPI
+calls for incident report and evidence export workflows.
+
 ## Authentication
 
 All committed clients use bearer API keys:

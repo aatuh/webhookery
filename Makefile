@@ -333,8 +333,11 @@ sdk-check: ## Validate committed SDK artifacts are present and aligned
 	@test -f sdk/openapi.yaml
 	@cmp -s openapi.yaml sdk/openapi.yaml
 	@test -f sdk/README.md
+	@test -f sdk/examples/evidence-workflow-go/main.go
+	@test -f sdk/typescript/examples/evidence-workflow.ts
 	@test -f pkg/client/client.go
 	@$(GO) test ./pkg/client
+	@$(GO) test ./sdk/examples/evidence-workflow-go
 	@test -f sdk/python/webhookery/__init__.py
 	@PYTHONPATH=sdk/python python3 -m unittest discover -s sdk/python/tests
 	@test -f sdk/typescript/src/index.ts
