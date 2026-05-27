@@ -17,6 +17,9 @@ func TestProblemDoesNotExposeInternalDetail(t *testing.T) {
 	if p.Status != 500 || p.Code != "internal_error" || p.RequestID != "req_123" {
 		t.Fatalf("unexpected internal problem: %+v", p)
 	}
+	if p.StableCode != CodeInternalError {
+		t.Fatalf("unexpected stable code %q", p.StableCode)
+	}
 }
 
 func TestProblemConstructorsSetStableStatusCodesAndRequestIDs(t *testing.T) {
@@ -25,6 +28,7 @@ func TestProblemConstructorsSetStableStatusCodesAndRequestIDs(t *testing.T) {
 		problem Problem
 		status  int
 		code    string
+		stable  string
 		title   string
 		detail  string
 	}{
@@ -33,6 +37,7 @@ func TestProblemConstructorsSetStableStatusCodesAndRequestIDs(t *testing.T) {
 			problem: Unauthorized("req_auth"),
 			status:  401,
 			code:    "authentication_error",
+			stable:  CodeAuthenticationRequired,
 			title:   "Authentication required",
 			detail:  "A valid bearer token is required.",
 		},
@@ -41,6 +46,7 @@ func TestProblemConstructorsSetStableStatusCodesAndRequestIDs(t *testing.T) {
 			problem: Forbidden("req_forbidden"),
 			status:  403,
 			code:    "authorization_error",
+			stable:  CodeTenantAccessDenied,
 			title:   "Forbidden",
 			detail:  "The authenticated actor is not allowed to perform this action.",
 		},
@@ -49,6 +55,7 @@ func TestProblemConstructorsSetStableStatusCodesAndRequestIDs(t *testing.T) {
 			problem: BadRequest("req_bad", "invalid_json", "body must be JSON"),
 			status:  400,
 			code:    "invalid_json",
+			stable:  CodeValidationFailed,
 			title:   "Bad request",
 			detail:  "body must be JSON",
 		},
@@ -56,7 +63,7 @@ func TestProblemConstructorsSetStableStatusCodesAndRequestIDs(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if tt.problem.Status != tt.status || tt.problem.Code != tt.code || tt.problem.Title != tt.title || tt.problem.Detail != tt.detail {
+			if tt.problem.Status != tt.status || tt.problem.Code != tt.code || tt.problem.StableCode != tt.stable || tt.problem.Title != tt.title || tt.problem.Detail != tt.detail {
 				t.Fatalf("unexpected problem: %+v", tt.problem)
 			}
 			if tt.problem.Type != "https://docs.webhookery.local/errors/"+tt.code {
@@ -69,6 +76,23 @@ func TestProblemConstructorsSetStableStatusCodesAndRequestIDs(t *testing.T) {
 				t.Fatal("client error constructors must not mark problems retryable")
 			}
 		})
+	}
+}
+
+func TestStableCodeForKnownProblemCodes(t *testing.T) {
+	tests := map[string]string{
+		"invalid_signature":                CodeProviderSignatureInvalid,
+		"not_ready":                        CodeDurableCaptureUnavailable,
+		"storage_unavailable":              CodeDurableCaptureUnavailable,
+		"payload_expired":                  CodeRawPayloadRetainedMetadataOnly,
+		"notification_channel_url_blocked": CodeSSRFBlockedDestination,
+		"siem_sink_url_blocked":            CodeSSRFBlockedDestination,
+		"unknown_future_code":              CodeUnknownError,
+	}
+	for input, want := range tests {
+		if got := StableCodeFor(input); got != want {
+			t.Fatalf("StableCodeFor(%q)=%q want %q", input, got, want)
+		}
 	}
 }
 

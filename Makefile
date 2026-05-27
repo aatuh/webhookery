@@ -138,6 +138,7 @@ documentation-structure-check: ## Check canonical documentation structure
 	@test -f docs/configuration.md
 	@test -f docs/feature-behavior.md
 	@test -f docs/security-promise.md
+	@test -f docs/error-codes.md
 	@test -f docs/stability.md
 	@test -f docs/performance-envelope.md
 	@test -f docs/provider-conformance.md
@@ -217,6 +218,7 @@ documentation-structure-check: ## Check canonical documentation structure
 	@grep -q "WEBHOOKERY_PILOT_ALLOW_RECEIVER_CHECK" docs/configuration.md
 	@grep -q "Feature Behavior Reference" docs/feature-behavior.md
 	@grep -q "Security Promise" docs/security-promise.md
+	@grep -q "WEBHOOKERY_PROVIDER_SIGNATURE_INVALID" docs/error-codes.md
 	@grep -q "Stability And Compatibility Policy" docs/stability.md
 	@grep -q "Performance Envelope" docs/performance-envelope.md
 	@grep -q "Provider Conformance Matrix" docs/provider-conformance.md

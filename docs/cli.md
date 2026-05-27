@@ -10,6 +10,11 @@ Most API-backed commands accept:
 - `--base-url`, defaulting to `http://localhost:8080`
 - `--api-key`, defaulting to `$WEBHOOKERY_API_KEY`
 
+When API calls fail, `whcp` surfaces the HTTP status, `stable_code` when the
+server returns one, and `request_id` when present. The CLI must not include
+bearer tokens, raw request bodies, webhook secrets, or payload bodies in those
+errors. Stable codes are listed in `docs/error-codes.md`.
+
 Do not paste real API keys, provider credentials, webhook secrets, bearer
 tokens, private keys, raw signatures, raw payload bodies, customer data,
 database URLs with real credentials, or evidence bundles into examples,

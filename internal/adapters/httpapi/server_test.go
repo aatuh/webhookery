@@ -94,7 +94,7 @@ func TestReadyRouteReportsDependencyFailureAsRetryableProblem(t *testing.T) {
 	if rec.Code != http.StatusServiceUnavailable {
 		t.Fatalf("expected 503, got %d body=%s", rec.Code, rec.Body.String())
 	}
-	for _, want := range []string{`"code":"not_ready"`, `"request_id":"req_ready"`, `"retryable":true`} {
+	for _, want := range []string{`"code":"not_ready"`, `"stable_code":"WEBHOOKERY_DURABLE_CAPTURE_UNAVAILABLE"`, `"request_id":"req_ready"`, `"retryable":true`} {
 		if !strings.Contains(rec.Body.String(), want) {
 			t.Fatalf("readiness problem %s did not contain %s", rec.Body.String(), want)
 		}

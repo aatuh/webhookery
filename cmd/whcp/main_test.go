@@ -569,6 +569,25 @@ func TestDownloadAuditExportWritesPrivateFile(t *testing.T) {
 	}
 }
 
+func TestProblemResponseErrorIncludesStableCodeAndRequestID(t *testing.T) {
+	body := []byte(`{"code":"authorization_error","stable_code":"WEBHOOKERY_TENANT_ACCESS_DENIED","request_id":"req_cli","detail":"redacted detail"}`)
+	err := problemResponseError("request failed", http.StatusForbidden, body)
+	if err == nil {
+		t.Fatal("expected problem response error")
+	}
+	got := err.Error()
+	for _, want := range []string{"403", "WEBHOOKERY_TENANT_ACCESS_DENIED", "req_cli"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("error %q did not contain %q", got, want)
+		}
+	}
+	for _, forbidden := range []string{"whkey_test", "redacted detail"} {
+		if strings.Contains(got, forbidden) {
+			t.Fatalf("error %q leaked %q", got, forbidden)
+		}
+	}
+}
+
 func TestExportRawPayloadDecodesBase64ToPrivateFile(t *testing.T) {
 	rawBody := []byte("raw evidence bytes")
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
