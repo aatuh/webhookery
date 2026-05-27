@@ -1,0 +1,13 @@
+{
+  "id": "evt_demo_invoice_paid",
+  "type": "invoice.paid",
+  "account": "acct_demo",
+  "data": {
+    "object": {
+      "id": "in_demo",
+      "customer": "cus_demo",
+      "amount_paid": 4200,
+      "currency": "eur"
+    }
+  }
+}
