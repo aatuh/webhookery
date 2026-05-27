@@ -57,11 +57,22 @@ production-style use.
 - Local API and worker: `docker compose up --build`, then `/readyz`.
 - Non-mutating docs and contract gate: `make docs-check`.
 - Full repository gate: `make finalize`.
+- Redacted production preflight:
+  `WEBHOOKERY_ENVIRONMENT=production go run ./cmd/whcp doctor production`.
 - Disposable live database gate:
   `WEBHOOKERY_TEST_DATABASE_URL=postgres://... make live-postgres-check`.
 - Release-candidate acceptance:
   `WEBHOOKERY_TEST_DATABASE_URL=postgres://... make rc-check`.
 - Postman and Bruno smoke collections: see `collections/`.
+
+## Production RC Readiness
+
+Use `docs/operations.md`, `docs/stability.md`, and
+`docs/release-evidence-template.md` as the canonical release-candidate
+readiness path. The short version is: run the production doctor, `make
+finalize`, live PostgreSQL checks against a disposable database, `make
+rc-check`, and restore drills when migrations or evidence storage are touched.
+Do not use live provider or customer credentials for local acceptance gates.
 
 ## Security Promise And Non-Claims
 
@@ -86,6 +97,8 @@ commits, issues, support requests, or audit artifacts.
   SSRF.
 - `docs/security-promise.md`: canonical durable-capture promise and
   non-claims.
+- `docs/stability.md`: compatibility, support-window, migration, and
+  deprecation policy.
 - `docs/documentation-maintenance.md`: provider freshness and documentation
   review checklist.
 - `docs/deployment.md`: common self-hosted deployment posture.
