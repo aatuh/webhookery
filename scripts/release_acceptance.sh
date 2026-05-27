@@ -4,7 +4,10 @@ set -eu
 repo_root="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
 cd "$repo_root"
 
-make fast-check
+# Keep release acceptance's baseline gate non-live and deterministic. Workflows
+# may provide WEBHOOKERY_TEST_DATABASE_URL for later RC/performance checks; do
+# not let the broad package test fan out DB-backed E2E migrations in parallel.
+WEBHOOKERY_TEST_DATABASE_URL= WEBHOOKERY_RC_RESTORE_DATABASE_URL= make fast-check
 
 test -f LICENSE
 test -f CHANGELOG.md
