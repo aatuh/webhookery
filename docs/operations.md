@@ -216,6 +216,22 @@ make rc-check
 The restore target is destructive. The restore script refuses to run without
 `WEBHOOKERY_RESTORE_CONFIRM=restore`.
 
+For a repeatable wrapper that backs up a source database, restores into an
+explicitly separate disposable target, applies migrations, and writes sanitized
+JSON evidence, run:
+
+```bash
+WEBHOOKERY_DATABASE_URL=postgres://source \
+WEBHOOKERY_RESTORE_DRILL_DATABASE_URL=postgres://disposable-restore \
+make restore-drill
+```
+
+The wrapper writes `tmp/restore-drill/restore-drill.json` and does not print
+database URLs. PostgreSQL restore drills do not verify S3 or MinIO object
+bodies; record that storage drill separately when object storage is enabled.
+
+Failure drill planning lives in `docs/failure-drills.md`.
+
 ## Upgrade And Restore Drill
 
 Back up PostgreSQL before upgrading, changing retention policies, rotating

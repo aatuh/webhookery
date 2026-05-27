@@ -146,6 +146,8 @@ reviews, and support package boundaries are described in `COMMERCIAL.md`,
   fake-receiver evidence demo.
 - `site/index.html`: static product landing page.
 - `docs/operations.md`: operator runbooks and production RC procedures.
+- `docs/failure-drills.md`: local and pilot failure-drill plan, script usage,
+  and restore-drill evidence rules.
 - `docs/feature-behavior.md`: behavior reference for capture, routing,
   delivery, replay, reconciliation, retention, identity, producer trust, and
   SSRF.
