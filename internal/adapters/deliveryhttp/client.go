@@ -146,10 +146,8 @@ func safeHTTPClient(base *http.Client, timeout time.Duration, resolver ssrf.Reso
 		return HTTPClient(timeout, resolver), nil
 	}
 	copy := *base
-	if copy.CheckRedirect == nil {
-		copy.CheckRedirect = func(req *http.Request, via []*http.Request) error {
-			return http.ErrUseLastResponse
-		}
+	copy.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+		return http.ErrUseLastResponse
 	}
 	switch transport := copy.Transport.(type) {
 	case nil:

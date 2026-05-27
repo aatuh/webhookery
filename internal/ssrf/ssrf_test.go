@@ -38,6 +38,36 @@ func TestValidateURLRejectsCredentialsAndHTTP(t *testing.T) {
 	}
 }
 
+func TestValidateURLRejectsAddressAndParserEdgeCases(t *testing.T) {
+	validator := Validator{Resolver: StaticResolver{
+		"localhost":            {netip.MustParseAddr("127.0.0.1")},
+		"loopback.example.com": {netip.MustParseAddr("::1")},
+	}}
+	tests := []string{
+		"https://localhost/hook",
+		"https://loopback.example.com/hook",
+		"https://10.0.0.1/hook",
+		"https://[fd00::1]/hook",
+		"https://[fe80::1]/hook",
+		"https://169.254.169.254/latest/meta-data",
+		"https://[::ffff:169.254.169.254]/latest/meta-data",
+		"https://0177.0.0.1/hook",
+		"gopher://customer.example.com/hook",
+		"ftp://customer.example.com/hook",
+	}
+	for _, rawURL := range tests {
+		t.Run(rawURL, func(t *testing.T) {
+			result := validator.Validate(context.Background(), rawURL, DefaultPolicy())
+			if result.Allowed {
+				t.Fatalf("expected %q to be blocked", rawURL)
+			}
+			if len(result.BlockedReasons) == 0 {
+				t.Fatalf("expected blocked reason for %q", rawURL)
+			}
+		})
+	}
+}
+
 func TestValidateURLAllowsPublicHTTPS(t *testing.T) {
 	validator := Validator{Resolver: StaticResolver{
 		"customer.example.com": {netip.MustParseAddr("93.184.216.34")},
