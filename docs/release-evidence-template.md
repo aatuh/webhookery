@@ -39,6 +39,7 @@ the live third-party provider scope and risk.
 - Migration checksum summary:
 - Stability policy reviewed:
 - Performance smoke output:
+- Provider conformance output:
 - Release workflow URL:
 - CI workflow URL:
 - Integration workflow URL:
@@ -54,6 +55,7 @@ the live third-party provider scope and risk.
 | `make release-acceptance` |  |  |
 | `make rc-check` |  |  |
 | stability policy compatibility review |  |  |
+| `make provider-conformance-check` |  |  |
 | `make perf-smoke` with `WEBHOOKERY_TEST_DATABASE_URL` |  |  |
 | `make live-postgres-check` with `WEBHOOKERY_TEST_DATABASE_URL` |  |  |
 | DB-backed `make rc-check` with `WEBHOOKERY_TEST_DATABASE_URL` |  |  |
@@ -101,6 +103,7 @@ Attach or link sanitized artifacts:
 - `openapi.yaml` or `openapi.json`,
 - readiness response,
 - production doctor response with secrets redacted,
+- provider conformance output and manifest,
 - provider ingest response with raw payload omitted,
 - outbound delivery attempt metadata with request body omitted unless the
   evidence package is explicitly body-inclusive,

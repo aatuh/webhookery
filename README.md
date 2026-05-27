@@ -56,6 +56,7 @@ production-style use.
 
 - Local API and worker: `docker compose up --build`, then `/readyz`.
 - Non-mutating docs and contract gate: `make docs-check`.
+- Provider conformance matrix and local vectors: `make provider-conformance-check`.
 - Full repository gate: `make finalize`.
 - Redacted production preflight:
   `WEBHOOKERY_ENVIRONMENT=production go run ./cmd/whcp doctor production`.
