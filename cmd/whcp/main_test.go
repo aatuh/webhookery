@@ -184,6 +184,13 @@ func TestParseOptionalTimeRequiresRFC3339AndNormalizesUTC(t *testing.T) {
 	}
 }
 
+func TestReplayCreateRequiresReasonCodeBeforeRequest(t *testing.T) {
+	err := runReplayJobs([]string{"create", "--event-id", "evt_1", "--reason", "debug", "--base-url", "https://api.example", "--api-key", "whkey_test"})
+	if err == nil || !strings.Contains(err.Error(), "reason-code is required") {
+		t.Fatalf("expected missing reason-code validation, got %v", err)
+	}
+}
+
 func TestPostJSONSendsBearerAndJSONBody(t *testing.T) {
 	var gotAuth, gotContentType, gotBody string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -311,10 +318,10 @@ func TestCLIResourceCommandsSendExpectedRequests(t *testing.T) {
 		},
 		{
 			name:         "replay create",
-			args:         append([]string{"replay-jobs", "create", "--event-id", "evt_1", "--endpoint-id", "end_1", "--reason", "debug", "--require-approval"}, common...),
+			args:         append([]string{"replay-jobs", "create", "--event-id", "evt_1", "--endpoint-id", "end_1", "--reason-code", "support_investigation", "--reason", "debug", "--require-approval"}, common...),
 			wantMethod:   http.MethodPost,
 			wantPath:     "/v1/replay-jobs",
-			bodyContains: []string{`"event_id":"evt_1"`, `"endpoint_id":"end_1"`, `"reason":"debug"`, `"require_approval":true`},
+			bodyContains: []string{`"event_id":"evt_1"`, `"endpoint_id":"end_1"`, `"reason_code":"support_investigation"`, `"reason":"debug"`, `"require_approval":true`},
 		},
 		{
 			name:       "alert firings filter",
@@ -415,10 +422,10 @@ func TestCLIResourceCommandsSendExpectedRequests(t *testing.T) {
 		},
 		{
 			name:         "dead letter bulk release",
-			args:         append([]string{"dead-letter", "bulk-release", "--entry-ids", "dlq_1,dlq_2", "--reason", "recovered"}, common...),
+			args:         append([]string{"dead-letter", "bulk-release", "--entry-ids", "dlq_1,dlq_2", "--reason-code", "incident_recovery", "--reason", "recovered"}, common...),
 			wantMethod:   http.MethodPost,
 			wantPath:     "/v1/dead-letter:bulk-release",
-			bodyContains: []string{`"entry_ids":["dlq_1","dlq_2"]`, `"reason":"recovered"`},
+			bodyContains: []string{`"entry_ids":["dlq_1","dlq_2"]`, `"reason_code":"incident_recovery"`, `"reason":"recovered"`},
 		},
 		{
 			name:         "quarantine approve",

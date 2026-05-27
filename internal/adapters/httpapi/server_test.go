@@ -306,7 +306,7 @@ func TestAuthenticatedMutationRoutesPreserveContracts(t *testing.T) {
 		{name: "activate transformation version", method: http.MethodPost, path: "/v1/transformations/trn_1/versions/trv_1:activate", body: `{"reason":"publish"}`, wantStatus: http.StatusOK},
 		{name: "retry delivery", method: http.MethodPost, path: "/v1/deliveries/del_1:retry", body: `{"reason":"retry"}`, wantStatus: http.StatusAccepted},
 		{name: "cancel delivery", method: http.MethodPost, path: "/v1/deliveries/del_1:cancel", body: `{"reason":"cancel"}`, wantStatus: http.StatusOK},
-		{name: "dry run replay", method: http.MethodPost, path: "/v1/replay-jobs:dry-run", body: `{"event_id":"evt_1","reason":"inspect"}`, wantStatus: http.StatusOK},
+		{name: "dry run replay", method: http.MethodPost, path: "/v1/replay-jobs:dry-run", body: `{"event_id":"evt_1","reason_code":"operator_requested","reason":"inspect"}`, wantStatus: http.StatusOK},
 		{name: "create reconciliation", method: http.MethodPost, path: "/v1/reconciliation-jobs", body: `{"connection_id":"pcn_1","reason":"recover"}`, wantStatus: http.StatusCreated},
 		{name: "approve replay", method: http.MethodPost, path: "/v1/replay-jobs/rpl_1:approve", body: `{"reason":"approve"}`, wantStatus: http.StatusOK},
 		{name: "pause replay", method: http.MethodPost, path: "/v1/replay-jobs/rpl_1:pause", body: `{"reason":"pause"}`, wantStatus: http.StatusOK},
@@ -314,7 +314,7 @@ func TestAuthenticatedMutationRoutesPreserveContracts(t *testing.T) {
 		{name: "cancel replay", method: http.MethodPost, path: "/v1/replay-jobs/rpl_1:cancel", body: `{"reason":"cancel"}`, wantStatus: http.StatusOK},
 		{name: "dry run reconciliation", method: http.MethodPost, path: "/v1/reconciliation-jobs:dry-run", body: `{"connection_id":"pcn_1","reason":"preview"}`, wantStatus: http.StatusOK},
 		{name: "cancel reconciliation", method: http.MethodPost, path: "/v1/reconciliation-jobs/rec_1:cancel", body: `{"reason":"stop"}`, wantStatus: http.StatusOK},
-		{name: "bulk release dead letter", method: http.MethodPost, path: "/v1/dead-letter:bulk-release", body: `{"entry_ids":["dlq_1"],"reason":"release"}`, wantStatus: http.StatusAccepted},
+		{name: "bulk release dead letter", method: http.MethodPost, path: "/v1/dead-letter:bulk-release", body: `{"entry_ids":["dlq_1"],"reason_code":"incident_recovery","reason":"release"}`, wantStatus: http.StatusAccepted},
 		{name: "approve quarantine", method: http.MethodPost, path: "/v1/quarantine/qrn_1:approve", body: `{"reason":"safe","route_after_release":true}`, wantStatus: http.StatusOK},
 		{name: "reject quarantine", method: http.MethodPost, path: "/v1/quarantine/qrn_1:reject", body: `{"reason":"reject"}`, wantStatus: http.StatusOK},
 		{name: "verify audit chain", method: http.MethodPost, path: "/v1/audit-chain:verify", body: `{"from_sequence":1,"to_sequence":2}`, wantStatus: http.StatusOK},
@@ -819,7 +819,7 @@ func TestRawPayloadEndpointEncodesBodyAndTenantActorContext(t *testing.T) {
 	}
 }
 
-func TestCreateReplayPropagatesReasonAndConfig(t *testing.T) {
+func TestCreateReplayPropagatesReasonCodeReasonAndConfig(t *testing.T) {
 	store := &replayControlStore{}
 	server := NewServer(ServerConfig{
 		Control: app.NewControlService(store, ssrf.Validator{Resolver: ssrf.StaticResolver{}}),
@@ -828,7 +828,7 @@ func TestCreateReplayPropagatesReasonAndConfig(t *testing.T) {
 		OpenAPI: []byte("openapi: 3.1.0\n"),
 	})
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/v1/replay-jobs", bytes.NewBufferString(`{"event_id":"evt_1","reason":"customer fixed receiver","config_mode":"original","rate_limit_per_minute":25}`))
+	req := httptest.NewRequest(http.MethodPost, "/v1/replay-jobs", bytes.NewBufferString(`{"event_id":"evt_1","reason_code":"receiver_fixed","reason":"customer fixed receiver","config_mode":"original","rate_limit_per_minute":25}`))
 	req.Header.Set("Authorization", "Bearer token")
 	req.Header.Set("Content-Type", "application/json")
 
@@ -840,7 +840,7 @@ func TestCreateReplayPropagatesReasonAndConfig(t *testing.T) {
 	if !store.replayCalled || store.tenantID != "ten_replay" || store.actorID != "usr_replay" {
 		t.Fatalf("replay store called with wrong context: %+v", store)
 	}
-	if store.replayReq.EventID != "evt_1" || store.replayReq.Reason != "customer fixed receiver" || store.replayReq.ConfigMode != app.ReplayConfigOriginal || store.replayReq.RateLimitPerMinute != 25 {
+	if store.replayReq.EventID != "evt_1" || store.replayReq.ReasonCode != app.ReplayReasonReceiverFixed || store.replayReq.Reason != "customer fixed receiver" || store.replayReq.ConfigMode != app.ReplayConfigOriginal || store.replayReq.RateLimitPerMinute != 25 {
 		t.Fatalf("replay request was not propagated: %+v", store.replayReq)
 	}
 }
@@ -868,7 +868,30 @@ func TestCreateReplayRejectsMissingReasonBeforeStoreAccess(t *testing.T) {
 	}
 }
 
-func TestDeadLetterReleasePropagatesReason(t *testing.T) {
+func TestCreateReplayRejectsMissingReasonCodeBeforeStoreAccess(t *testing.T) {
+	store := &replayControlStore{}
+	server := NewServer(ServerConfig{
+		Control: app.NewControlService(store, ssrf.Validator{Resolver: ssrf.StaticResolver{}}),
+		Ingest:  app.NewIngestService(&fakeIngestStore{}, app.SystemClock{}),
+		Auth:    app.NewStaticAuthenticator("token", authz.Actor{ID: "usr_replay", TenantID: "ten_replay", Role: authz.RoleOperator, Scopes: []string{"replay:write"}}),
+		OpenAPI: []byte("openapi: 3.1.0\n"),
+	})
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/v1/replay-jobs", bytes.NewBufferString(`{"event_id":"evt_1","reason":"customer fixed receiver"}`))
+	req.Header.Set("Authorization", "Bearer token")
+	req.Header.Set("Content-Type", "application/json")
+
+	server.Routes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if store.replayCalled {
+		t.Fatal("missing replay reason code must be rejected before store side effects")
+	}
+}
+
+func TestDeadLetterReleasePropagatesReasonCodeAndReason(t *testing.T) {
 	store := &replayControlStore{}
 	server := NewServer(ServerConfig{
 		Control: app.NewControlService(store, ssrf.Validator{Resolver: ssrf.StaticResolver{}}),
@@ -877,7 +900,7 @@ func TestDeadLetterReleasePropagatesReason(t *testing.T) {
 		OpenAPI: []byte("openapi: 3.1.0\n"),
 	})
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/v1/dead-letter/dlq_1:release", bytes.NewBufferString(`{"reason":"receiver recovered"}`))
+	req := httptest.NewRequest(http.MethodPost, "/v1/dead-letter/dlq_1:release", bytes.NewBufferString(`{"reason_code":"receiver_fixed","reason":"receiver recovered"}`))
 	req.Header.Set("Authorization", "Bearer token")
 	req.Header.Set("Content-Type", "application/json")
 
@@ -886,7 +909,7 @@ func TestDeadLetterReleasePropagatesReason(t *testing.T) {
 	if rec.Code != http.StatusAccepted {
 		t.Fatalf("expected 202, got %d body=%s", rec.Code, rec.Body.String())
 	}
-	if !store.deadLetterCalled || store.entryID != "dlq_1" || store.reason != "receiver recovered" || store.tenantID != "ten_ops" || store.actorID != "usr_ops" {
+	if !store.deadLetterCalled || store.entryID != "dlq_1" || store.reasonCode != app.ReplayReasonReceiverFixed || store.reason != "receiver recovered" || store.tenantID != "ten_ops" || store.actorID != "usr_ops" {
 		t.Fatalf("dead-letter release used wrong context: %+v", store)
 	}
 }
@@ -900,7 +923,7 @@ func TestDeadLetterReleaseRequiresRetryScopeBeforeStoreAccess(t *testing.T) {
 		OpenAPI: []byte("openapi: 3.1.0\n"),
 	})
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/v1/dead-letter/dlq_1:release", bytes.NewBufferString(`{"reason":"receiver recovered"}`))
+	req := httptest.NewRequest(http.MethodPost, "/v1/dead-letter/dlq_1:release", bytes.NewBufferString(`{"reason_code":"receiver_fixed","reason":"receiver recovered"}`))
 	req.Header.Set("Authorization", "Bearer token")
 	req.Header.Set("Content-Type", "application/json")
 
@@ -1595,10 +1618,10 @@ func (noopControlStore) DownloadAuditExport(_ context.Context, tenantID, exportI
 func (noopControlStore) ListDeadLetter(context.Context, string, int) ([]map[string]any, error) {
 	return nil, nil
 }
-func (noopControlStore) ReleaseDeadLetter(context.Context, string, string, string, string) (app.ReplayJob, error) {
+func (noopControlStore) ReleaseDeadLetter(context.Context, string, string, string, string, string) (app.ReplayJob, error) {
 	return app.ReplayJob{}, nil
 }
-func (noopControlStore) BulkReleaseDeadLetter(context.Context, string, []string, string, string) ([]app.ReplayJob, error) {
+func (noopControlStore) BulkReleaseDeadLetter(context.Context, string, []string, string, string, string) ([]app.ReplayJob, error) {
 	return nil, nil
 }
 func (noopControlStore) ListQuarantine(context.Context, string, int) ([]map[string]any, error) {
@@ -1683,6 +1706,7 @@ type replayControlStore struct {
 	tenantID         string
 	actorID          string
 	entryID          string
+	reasonCode       string
 	reason           string
 	replayReq        app.ReplayRequest
 }
@@ -1692,14 +1716,15 @@ func (s *replayControlStore) CreateReplay(_ context.Context, tenantID, actorID s
 	s.tenantID = tenantID
 	s.actorID = actorID
 	s.replayReq = req
-	return app.ReplayJob{ID: "rpl_1", State: "scheduled", ConfigMode: req.ConfigMode, RateLimitPerMinute: req.RateLimitPerMinute, TotalItems: 1}, nil
+	return app.ReplayJob{ID: "rpl_1", State: "scheduled", ReasonCode: req.ReasonCode, Reason: req.Reason, ConfigMode: req.ConfigMode, RateLimitPerMinute: req.RateLimitPerMinute, TotalItems: 1}, nil
 }
 
-func (s *replayControlStore) ReleaseDeadLetter(_ context.Context, tenantID, entryID, actorID, reason string) (app.ReplayJob, error) {
+func (s *replayControlStore) ReleaseDeadLetter(_ context.Context, tenantID, entryID, actorID, reasonCode, reason string) (app.ReplayJob, error) {
 	s.deadLetterCalled = true
 	s.tenantID = tenantID
 	s.actorID = actorID
 	s.entryID = entryID
+	s.reasonCode = reasonCode
 	s.reason = reason
-	return app.ReplayJob{ID: "rpl_dlq_1", State: "scheduled", TotalItems: 1}, nil
+	return app.ReplayJob{ID: "rpl_dlq_1", State: "scheduled", ReasonCode: reasonCode, Reason: reason, TotalItems: 1}, nil
 }
