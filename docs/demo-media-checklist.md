@@ -7,12 +7,23 @@ The approved source demo is `examples/webhook-evidence-demo/`. It uses
 synthetic provider payloads and fake local evidence paths. Do not record real
 providers, customer receivers, or production databases.
 
+Prepare recording material with:
+
+```bash
+scripts/demo_media.sh plan --output tmp/demo-media
+WEBHOOKERY_TEST_DATABASE_URL=postgres://... make demo-media
+```
+
+`plan` writes a sanitized script outline without running Webhookery. `make
+demo-media` regenerates the local evidence demo under `tmp/demo-media/output`
+and requires a disposable PostgreSQL URL.
+
 ## Before Recording
 
 - [ ] Use a clean checkout or disposable branch.
 - [ ] Run `make docs-check`.
-- [ ] Run `examples/webhook-evidence-demo/run.sh` against a disposable local
-      PostgreSQL database.
+- [ ] Run `WEBHOOKERY_TEST_DATABASE_URL=postgres://... make demo-media`
+      against a disposable local PostgreSQL database.
 - [ ] Use only fixture data from `examples/webhook-evidence-demo/fixtures/`.
 - [ ] Set terminal scrollback low enough that old secrets cannot appear.
 - [ ] Disable shell history capture if commands contain local connection URLs.
