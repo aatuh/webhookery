@@ -134,8 +134,10 @@ sanitized proof against real provider test flows, use:
 
 - `docs/live-provider-proof/stripe.md`
 - `docs/live-provider-proof/github.md`
+- `docs/live-provider-proof/shopify.md`
 - `docs/providers/stripe.md`
 - `docs/providers/github.md`
+- `docs/providers/shopify.md`
 
 These guides are external/manual proof procedures. They are not provider
 certification, do not require committed secrets, and do not replace the local

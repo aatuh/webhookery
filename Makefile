@@ -136,11 +136,14 @@ documentation-structure-check: ## Check canonical documentation structure
 	@test -f docs/provider-proof-manifest.json
 	@test -f docs/providers/stripe.md
 	@test -f docs/providers/github.md
+	@test -f docs/providers/shopify.md
 	@test -f docs/live-provider-proof/stripe.md
 	@test -f docs/live-provider-proof/github.md
+	@test -f docs/live-provider-proof/shopify.md
 	@test -f docs/live-provider-proof/stripe-redaction-policy.md
 	@test -f docs/live-provider-proof/samples/stripe-incident-report.redacted.md
 	@test -f docs/live-provider-proof/samples/github-incident-report.redacted.md
+	@test -f docs/live-provider-proof/samples/shopify-incident-report.redacted.md
 	@test -f docs/day-2-operations.md
 	@test -f docs/observability.md
 	@test -f docs/documentation-maintenance.md
@@ -194,12 +197,16 @@ documentation-structure-check: ## Check canonical documentation structure
 	@grep -q "Provider Conformance Matrix" docs/provider-conformance.md
 	@grep -q "docs/live-provider-proof/stripe.md" README.md
 	@grep -q "docs/live-provider-proof/github.md" README.md
+	@grep -q "docs/live-provider-proof/shopify.md" README.md
 	@grep -q "docs/live-provider-proof/stripe.md" docs/evaluator-quickstart.md
 	@grep -q "docs/live-provider-proof/github.md" docs/evaluator-quickstart.md
+	@grep -q "docs/live-provider-proof/shopify.md" docs/evaluator-quickstart.md
 	@grep -q "Stripe Operator Guide" docs/providers/stripe.md
 	@grep -q "GitHub Operator Guide" docs/providers/github.md
+	@grep -q "Shopify Operator Guide" docs/providers/shopify.md
 	@grep -q "not provider certification" docs/live-provider-proof/stripe.md
 	@grep -q "not provider certification" docs/live-provider-proof/github.md
+	@grep -q "not provider certification" docs/live-provider-proof/shopify.md
 	@grep -q "provider-proof-v1" docs/provider-proof-manifest.json
 	@grep -q "Day-2 Operations Guide" docs/day-2-operations.md
 	@grep -q "Observability Examples" docs/observability.md

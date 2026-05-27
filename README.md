@@ -18,6 +18,7 @@ Start here if you are evaluating Webhookery:
 - Local evidence demo: `examples/webhook-evidence-demo/`
 - Stripe proof guide: `docs/live-provider-proof/stripe.md`
 - GitHub proof guide: `docs/live-provider-proof/github.md`
+- Shopify proof guide: `docs/live-provider-proof/shopify.md`
 - Static product page: `site/index.html`
 - Release notes: `docs/releases/v0.1.0-rc1.md`
 - Pilot topology: `docs/pilot-topology.md`
@@ -155,8 +156,11 @@ reviews, and support package boundaries are described in `COMMERCIAL.md`,
   links to manual live-provider proof guides.
 - `docs/providers/stripe.md` and `docs/providers/github.md`: operator guides
   for the first flagship providers.
+- `docs/providers/shopify.md`: operator guide for the first ecommerce
+  follow-up provider.
 - `docs/live-provider-proof/stripe.md` and
   `docs/live-provider-proof/github.md`: manual sanitized proof guides.
+- `docs/live-provider-proof/shopify.md`: manual sanitized Shopify proof guide.
 - `docs/deployment.md`: common self-hosted deployment posture.
 - `docs/pilot-topology.md`: narrow supported topology for initial pilots.
 - `docs/pilot-evidence-template.md`: sanitized pilot evidence packet template.

@@ -33,11 +33,14 @@ test -f docs/provider-conformance.manifest.json
 test -f docs/provider-proof-manifest.json
 test -f docs/providers/stripe.md
 test -f docs/providers/github.md
+test -f docs/providers/shopify.md
 test -f docs/live-provider-proof/stripe.md
 test -f docs/live-provider-proof/github.md
+test -f docs/live-provider-proof/shopify.md
 test -f docs/live-provider-proof/stripe-redaction-policy.md
 test -f docs/live-provider-proof/samples/stripe-incident-report.redacted.md
 test -f docs/live-provider-proof/samples/github-incident-report.redacted.md
+test -f docs/live-provider-proof/samples/shopify-incident-report.redacted.md
 test -f docs/evaluator-quickstart.md
 test -f examples/webhook-evidence-demo/run.sh
 test -f site/index.html
@@ -85,8 +88,10 @@ grep -q "Provider Conformance Matrix" docs/provider-conformance.md
 grep -q "no provider-side completeness guarantee" docs/provider-conformance.md
 grep -q "docs/live-provider-proof/stripe.md" docs/provider-conformance.md
 grep -q "docs/live-provider-proof/github.md" docs/provider-conformance.md
+grep -q "docs/live-provider-proof/shopify.md" docs/provider-conformance.md
 grep -q "not provider certification" docs/live-provider-proof/stripe.md
 grep -q "not provider certification" docs/live-provider-proof/github.md
+grep -q "not provider certification" docs/live-provider-proof/shopify.md
 grep -q "provider-proof-v1" docs/provider-proof-manifest.json
 grep -q "Evaluator Quickstart" docs/evaluator-quickstart.md
 grep -q "webhook evidence demo" examples/webhook-evidence-demo/README.md
