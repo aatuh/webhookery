@@ -54,6 +54,7 @@ test -f docs/articles/self-hosted-webhook-gateway-architecture.md
 test -f docs/articles/webhook-security-review-checklist.md
 test -f docs/launch-copy.md
 test -f docs/launch-metrics.md
+test -f docs/demo-media-checklist.md
 test -f docs/customer-discovery-notes-template.md
 test -f docs/pilot-feedback-template.md
 test -f docs/roadmap-intake-policy.md
@@ -135,11 +136,13 @@ test -f .api.env.example
 test -f collections/postman/webhookery.postman_collection.json
 test -f collections/bruno/Webhookery/bruno.json
 test -x scripts/backup_postgres.sh
+test -x scripts/demo_media.sh
 test -x scripts/failure_drills.sh
 test -x scripts/integration_evidence.sh
 test -x scripts/restore_postgres.sh
 test -x scripts/restore_drill.sh
 test -f docs/failure-drills.md
+grep -q "make demo-media" docs/demo-media-checklist.md
 grep -q "backup_postgres.sh" docs/operations.md
 grep -q "restore_postgres.sh" docs/operations.md
 grep -q "make restore-drill" docs/operations.md

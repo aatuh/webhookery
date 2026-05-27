@@ -8,7 +8,7 @@ GOSEC_VERSION ?= v2.25.0
 GOVULNCHECK_VERSION ?= v1.2.0
 FUZZTIME ?= 5s
 
-.PHONY: help tools fmt lint vuln gosec test test-race coverage openapi-check test-vectors-check provider-conformance-check provider-proof-check crypto-inventory deployment-profile-check collections-check documentation-structure-check failure-drills-check static-site-check meta-files-check fuzz-smoke perf-smoke restore-drill sdk-generate sdk-check docs-check release-acceptance rc-check compose-up compose-down migrate live-postgres-check postgres-integration-test redis-integration-test fast-check finalize clean
+.PHONY: help tools fmt lint vuln gosec test test-race coverage openapi-check test-vectors-check provider-conformance-check provider-proof-check crypto-inventory deployment-profile-check collections-check documentation-structure-check failure-drills-check demo-media-check static-site-check meta-files-check fuzz-smoke perf-smoke demo-media restore-drill sdk-generate sdk-check docs-check release-acceptance rc-check compose-up compose-down migrate live-postgres-check postgres-integration-test redis-integration-test fast-check finalize clean
 
 help: ## Show help
 	@awk 'BEGIN {FS=":.*## "}; /^[a-zA-Z0-9_.-]+:.*## / { printf "  %-16s %s\n", $$1, $$2 }' $(MAKEFILE_LIST)
@@ -253,11 +253,18 @@ documentation-structure-check: ## Check canonical documentation structure
 
 failure-drills-check: ## Check failure-drill scripts and sanitized plan generation
 	@sh -n scripts/failure_drills.sh
+	@sh -n scripts/demo_media.sh
 	@sh -n scripts/restore_drill.sh
 	@test -x scripts/failure_drills.sh
+	@test -x scripts/demo_media.sh
 	@test -x scripts/restore_drill.sh
 	@scripts/failure_drills.sh list | grep -q "downstream-receiver-fails"
 	@tmp_dir="$$(mktemp -d)"; scripts/failure_drills.sh plan --output "$$tmp_dir" >/dev/null; grep -q "postgres-unavailable-before-capture" "$$tmp_dir/failure-drills.md"; rm -rf "$$tmp_dir"
+
+demo-media-check: ## Check demo media script and sanitized outline generation
+	@sh -n scripts/demo_media.sh
+	@test -x scripts/demo_media.sh
+	@tmp_dir="$$(mktemp -d)"; scripts/demo_media.sh plan --output "$$tmp_dir" >/dev/null; grep -q "Webhookery Demo Media Script" "$$tmp_dir/demo-script.md"; grep -q "Do not record" "$$tmp_dir/demo-script.md"; rm -rf "$$tmp_dir"
 
 static-site-check: ## Check static landing page assets
 	@test -f site/index.html
@@ -316,6 +323,9 @@ fuzz-smoke: ## Run short CI-safe fuzz/property smoke tests
 perf-smoke: ## Run DB-backed local performance smoke and write sanitized evidence
 	@scripts/perf_smoke.sh
 
+demo-media: ## Prepare deterministic local demo media state
+	@scripts/demo_media.sh run
+
 restore-drill: ## Run destructive restore drill against WEBHOOKERY_RESTORE_DRILL_DATABASE_URL
 	@scripts/restore_drill.sh
 
@@ -355,6 +365,7 @@ docs-check: ## Run non-mutating documentation-adjacent checks
 	@$(MAKE) collections-check
 	@$(MAKE) documentation-structure-check
 	@$(MAKE) failure-drills-check
+	@$(MAKE) demo-media-check
 	@$(MAKE) static-site-check
 	@$(MAKE) meta-files-check
 
@@ -386,6 +397,7 @@ fast-check: ## Run non-mutating checks
 	@$(MAKE) collections-check
 	@$(MAKE) documentation-structure-check
 	@$(MAKE) failure-drills-check
+	@$(MAKE) demo-media-check
 	@$(MAKE) static-site-check
 	@$(MAKE) meta-files-check
 	@$(MAKE) sdk-check
@@ -404,6 +416,7 @@ finalize: ## Thorough validity check
 	@$(MAKE) collections-check
 	@$(MAKE) documentation-structure-check
 	@$(MAKE) failure-drills-check
+	@$(MAKE) demo-media-check
 	@$(MAKE) static-site-check
 	@$(MAKE) meta-files-check
 	@$(MAKE) sdk-check
