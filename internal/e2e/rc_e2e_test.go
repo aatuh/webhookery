@@ -1,9 +1,15 @@
 package e2e
 
 import (
+	"archive/tar"
+	"bytes"
+	"compress/gzip"
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
+	"fmt"
+	"io"
 	"net/http"
 	"net/netip"
 	"os"
@@ -594,6 +600,136 @@ func TestRCE2EStorageFailureDrillsRejectInboundSuccess(t *testing.T) {
 	}
 }
 
+func TestRCE2EFailedPaymentWebhookIncidentPacketDemo(t *testing.T) {
+	outputDir := os.Getenv("WEBHOOKERY_DEMO_OUTPUT_DIR")
+	if outputDir == "" {
+		t.Skip("WEBHOOKERY_DEMO_OUTPUT_DIR is required to write demo artifacts")
+	}
+	ctx, store, actor := openRCStore(t)
+	defer store.Close()
+
+	now := time.Date(2026, 5, 26, 16, 0, 0, 0, time.UTC)
+	control := app.NewControlService(store, ssrf.Validator{Resolver: rcResolver})
+	retryPolicy, err := control.CreateRetryPolicy(ctx, actor, app.CreateRetryPolicyRequest{
+		Name:                "Demo single attempt",
+		MaxAttempts:         1,
+		MaxDurationSeconds:  60,
+		InitialDelaySeconds: 1,
+		MaxDelaySeconds:     1,
+		State:               domain.StateActive,
+	})
+	if err != nil {
+		t.Fatalf("create demo retry policy: %v", err)
+	}
+	source, endpoint := createRCRouteWithOptions(t, ctx, control, actor, "stripe", "stripe", "invoice.paid", rcRouteOptions{RetryPolicyID: retryPolicy.ID})
+	body := []byte(`{"id":"evt_demo_payment_` + testSuffix(t) + `","type":"invoice.paid","account":"acct_demo","data":{"object":{"id":"in_demo","customer":"cus_demo"}}}`)
+
+	ingest := app.NewIngestService(store, fixedClock{now: now})
+	result, err := ingest.Ingest(ctx, app.IngestRequest{
+		TenantID:    actor.TenantID,
+		SourceID:    source.ID,
+		Provider:    "stripe",
+		RawBody:     body,
+		Headers:     []domain.HeaderPair{{Name: "Stripe-Signature", Value: verifier.TimestampedHeader("v1", now, []byte("whsec_rc"), body)}},
+		ContentType: "application/json",
+		RemoteIP:    "198.51.100.20",
+	})
+	if err != nil {
+		t.Fatalf("ingest demo payment event: %v", err)
+	}
+	if !result.Accepted {
+		t.Fatalf("expected demo event to be accepted after durable capture: %+v", result)
+	}
+
+	failingDelivery := &recordingDeliveryClient{
+		t:   t,
+		now: now.Add(time.Second),
+		result: worker.DeliveryResult{
+			StatusCode:   http.StatusInternalServerError,
+			ResponseBody: []byte("demo receiver is down"),
+			FailureClass: "temporary_http",
+		},
+	}
+	runWorkerOnce(t, ctx, store, failingDelivery, "demo-fail-"+testSuffix(t))
+	if len(failingDelivery.calls) != 1 {
+		t.Fatalf("expected one failed downstream delivery, got %d", len(failingDelivery.calls))
+	}
+	deadLetters, err := control.ListDeadLetter(ctx, actor, 20)
+	if err != nil {
+		t.Fatalf("list demo dead letters: %v", err)
+	}
+	dlqEntryID := findMapID(deadLetters, "event_id", result.EventID)
+	if dlqEntryID == "" {
+		t.Fatalf("expected demo event %s to enter DLQ: %+v", result.EventID, deadLetters)
+	}
+
+	incident, err := control.CreateIncident(ctx, actor, app.CreateIncidentRequest{
+		Title:  "Stripe payment webhook failed",
+		Reason: "local demo failure/replay investigation",
+	})
+	if err != nil {
+		t.Fatalf("create demo incident: %v", err)
+	}
+	if _, err := control.AddIncidentEvent(ctx, actor, incident.ID, app.AddIncidentEventRequest{
+		EventID: result.EventID,
+		Reason:  "attach failed payment webhook evidence",
+	}); err != nil {
+		t.Fatalf("attach demo event to incident: %v", err)
+	}
+
+	replayJob, err := control.ReleaseDeadLetter(ctx, actor, dlqEntryID, app.DeadLetterReleaseRequest{Reason: "receiver fixed during local evidence demo"})
+	if err != nil {
+		t.Fatalf("release demo DLQ entry: %v", err)
+	}
+	recoveredName := "Demo receiver recovered"
+	if _, _, err := control.UpdateEndpoint(ctx, actor, endpoint.ID, app.UpdateEndpointRequest{Name: &recoveredName, Reason: "receiver fixed during local evidence demo"}); err != nil {
+		t.Fatalf("record demo endpoint recovery: %v", err)
+	}
+	resetDemoEndpointCircuit(t, ctx, actor.TenantID, endpoint.ID)
+	successDelivery := &recordingDeliveryClient{
+		t:   t,
+		now: now.Add(2 * time.Second),
+		result: worker.DeliveryResult{
+			StatusCode:   http.StatusAccepted,
+			ResponseBody: []byte("ok"),
+			FailureClass: "success",
+		},
+	}
+	runWorkerUntilDeliveryCalls(t, ctx, store, successDelivery, "demo-replay-"+testSuffix(t), 1, 3)
+	if len(successDelivery.calls) == 0 {
+		t.Fatalf("expected at least one successful replay delivery, got %d", len(successDelivery.calls))
+	}
+	deadLetters, err = control.ListDeadLetter(ctx, actor, 20)
+	if err != nil {
+		t.Fatalf("list released demo dead letters: %v", err)
+	}
+	if !containsMapState(deadLetters, dlqEntryID, "released") {
+		t.Fatalf("expected demo DLQ entry to be released: %+v", deadLetters)
+	}
+
+	report, err := control.GenerateIncidentReport(ctx, actor, incident.ID, app.IncidentReportRequest{Reason: "generate local demo incident packet"})
+	if err != nil {
+		t.Fatalf("generate demo incident report: %v", err)
+	}
+	assertDemoReportSections(t, report.Markdown)
+	_, export, err := control.CreateIncidentEvidenceExport(ctx, actor, incident.ID, app.CreateIncidentEvidenceExportRequest{Reason: "export local demo incident packet"})
+	if err != nil {
+		t.Fatalf("create demo incident evidence export: %v", err)
+	}
+	download, err := control.DownloadAuditExport(ctx, actor, export.ID)
+	if err != nil {
+		t.Fatalf("download demo incident evidence export: %v", err)
+	}
+	verification, err := evidence.VerifyTarGzipBundle(download.Body)
+	if err != nil {
+		t.Fatalf("verify demo evidence bundle: %v", err)
+	}
+	if !verification.Valid || verification.CheckedFiles == 0 {
+		t.Fatalf("expected valid demo evidence bundle: %+v", verification)
+	}
+	writeDemoPacketOutput(t, outputDir, actor.TenantID, incident, result.EventID, dlqEntryID, replayJob, report, download, verification)
+}
+
 func TestRCE2EObjectReadFailuresAreRedacted(t *testing.T) {
 	blob := &flakyBlobStore{}
 	ctx, store, actor := openRCStoreWithOptions(t, postgres.StoreOptions{
@@ -962,6 +1098,33 @@ func runWorkerOnce(t *testing.T, ctx context.Context, store *postgres.Store, del
 	}
 }
 
+func runWorkerUntilDeliveryCalls(t *testing.T, ctx context.Context, store *postgres.Store, delivery *recordingDeliveryClient, workerID string, wantCalls, maxRuns int) {
+	t.Helper()
+	for i := 0; i < maxRuns && len(delivery.calls) < wantCalls; i++ {
+		runWorkerOnce(t, ctx, store, delivery, fmt.Sprintf("%s-%d", workerID, i+1))
+	}
+}
+
+func resetDemoEndpointCircuit(t *testing.T, ctx context.Context, tenantID, endpointID string) {
+	t.Helper()
+	databaseURL := os.Getenv("WEBHOOKERY_TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Fatal("WEBHOOKERY_TEST_DATABASE_URL is required to reset demo endpoint circuit")
+	}
+	pool, err := pgxpool.New(ctx, databaseURL)
+	if err != nil {
+		t.Fatalf("open demo endpoint reset pool: %v", err)
+	}
+	defer pool.Close()
+	tag, err := pool.Exec(ctx, `UPDATE endpoints SET circuit_state='closed', failure_count=0, disabled_until=NULL WHERE tenant_id=$1 AND id=$2`, tenantID, endpointID)
+	if err != nil {
+		t.Fatalf("reset demo endpoint circuit: %v", err)
+	}
+	if tag.RowsAffected() != 1 {
+		t.Fatalf("expected to reset one demo endpoint circuit, reset %d", tag.RowsAffected())
+	}
+}
+
 func assertTimelineKinds(t *testing.T, timeline []map[string]any, expected ...string) {
 	t.Helper()
 	for _, kind := range expected {
@@ -1056,6 +1219,233 @@ func leaksSensitiveValue(text string, values ...string) bool {
 		}
 	}
 	return false
+}
+
+func assertDemoReportSections(t *testing.T, markdown string) {
+	t.Helper()
+	for _, section := range []string{
+		"## 1. Summary",
+		"## 2. Event Identity",
+		"## 3. Provider Verification",
+		"## 4. Raw Capture Evidence",
+		"## 5. Route And Configuration Snapshot",
+		"## 6. Delivery Attempt Timeline",
+		"## 7. Retry And DLQ State",
+		"## 8. Replay History",
+		"## 9. Retention And Raw-Payload Access State",
+		"## 10. Audit-Chain Proof References",
+		"## 11. Known Gaps And Non-Claims",
+	} {
+		if !strings.Contains(markdown, section) {
+			t.Fatalf("demo incident report missing section %q", section)
+		}
+	}
+	for _, text := range []string{
+		"Inbound capture does not prove downstream business success.",
+		"does not claim exactly-once delivery",
+		"whcp audit verify-bundle --file evidence.tar.gz",
+	} {
+		if !strings.Contains(markdown, text) {
+			t.Fatalf("demo incident report missing non-claim or verification text %q", text)
+		}
+	}
+}
+
+func writeDemoPacketOutput(t *testing.T, outputDir, tenantID string, incident domain.Incident, eventID, dlqEntryID string, replayJob app.ReplayJob, report domain.IncidentReportSnapshot, download app.EvidenceExportDownload, verification evidence.BundleVerification) {
+	t.Helper()
+	if err := os.MkdirAll(outputDir, 0o700); err != nil {
+		t.Fatalf("create demo output directory: %v", err)
+	}
+	manifestBytes := readDemoBundleFile(t, download.Body, "manifest.json")
+	var manifest evidence.Manifest
+	if err := json.Unmarshal(manifestBytes, &manifest); err != nil {
+		t.Fatalf("decode demo evidence manifest: %v", err)
+	}
+	writeDemoBytes(t, filepath.Join(outputDir, "incident-report.md"), []byte(report.Markdown))
+	writeDemoJSON(t, filepath.Join(outputDir, "incident-report.json"), sanitizedDemoReportJSON(t, report.Report, tenantID))
+	writeDemoJSON(t, filepath.Join(outputDir, "evidence-manifest.json"), map[string]any{
+		"schema_version":          "webhookery.demo_evidence_manifest.v1",
+		"source_manifest_sha256":  evidence.SHA256(manifestBytes),
+		"bundle_sha256":           download.Export.SHA256,
+		"export_id":               manifest.ExportID,
+		"tenant_id_hash":          domain.HashSHA256([]byte(manifest.TenantID)),
+		"created_at":              manifest.CreatedAt,
+		"include_raw_payloads":    manifest.IncludeRawPayloads,
+		"include_payload_bodies":  manifest.IncludePayloadBodies,
+		"include_timelines":       manifest.IncludeTimelines,
+		"files":                   manifest.Files,
+		"redaction_policy":        "raw payload bodies, webhook secrets, provider signatures, bearer tokens, private keys, and tenant identifiers are omitted or hashed in demo-visible files",
+		"local_verification_file": "verify-output.json",
+		"non_claims": []string{
+			"Inbound capture does not prove downstream business success.",
+			"Webhookery records at-least-once delivery evidence and does not claim exactly-once delivery.",
+			"The local demo does not prove provider-side completeness or provider certification.",
+		},
+	})
+	writeDemoJSON(t, filepath.Join(outputDir, "verify-output.json"), map[string]any{
+		"schema_version": "webhookery.demo_verify_output.v1",
+		"command":        "whcp audit verify-bundle --file evidence.tar.gz",
+		"bundle_sha256":  download.Export.SHA256,
+		"result":         verification,
+	})
+	writeDemoBytes(t, filepath.Join(outputDir, "evidence.tar.gz"), download.Body)
+	writeDemoBytes(t, filepath.Join(outputDir, "README.md"), []byte(demoPacketREADME(incident, eventID, dlqEntryID, replayJob, download.Export)))
+	assertDemoPacketOutputRedacted(t, outputDir)
+}
+
+func sanitizedDemoReportJSON(t *testing.T, raw json.RawMessage, tenantID string) any {
+	t.Helper()
+	var value any
+	if err := json.Unmarshal(raw, &value); err != nil {
+		t.Fatalf("decode demo incident report: %v", err)
+	}
+	return redactDemoValue(value, tenantID)
+}
+
+func redactDemoValue(value any, tenantID string) any {
+	switch v := value.(type) {
+	case map[string]any:
+		out := make(map[string]any, len(v))
+		for key, item := range v {
+			lower := strings.ToLower(key)
+			switch {
+			case lower == "tenant_id":
+				out["tenant_id_hash"] = domain.HashSHA256([]byte(fmt.Sprint(item)))
+			case lower == "raw_body":
+				out[key] = "omitted"
+			case lower == "body" || strings.Contains(lower, "secret") || strings.Contains(lower, "token") || strings.Contains(lower, "authorization") || strings.Contains(lower, "signature_header") || strings.Contains(lower, "signature_value"):
+				out[key] = "[redacted]"
+			default:
+				out[key] = redactDemoValue(item, tenantID)
+			}
+		}
+		return out
+	case []any:
+		out := make([]any, 0, len(v))
+		for _, item := range v {
+			out = append(out, redactDemoValue(item, tenantID))
+		}
+		return out
+	case string:
+		if v == tenantID {
+			return domain.HashSHA256([]byte(v))
+		}
+		return v
+	default:
+		return value
+	}
+}
+
+func readDemoBundleFile(t *testing.T, body []byte, name string) []byte {
+	t.Helper()
+	gz, err := gzip.NewReader(bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("open demo evidence bundle: %v", err)
+	}
+	defer func() { _ = gz.Close() }()
+	tr := tar.NewReader(gz)
+	for {
+		header, err := tr.Next()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			t.Fatalf("read demo evidence bundle: %v", err)
+		}
+		if header.Name != name {
+			continue
+		}
+		data, err := io.ReadAll(tr)
+		if err != nil {
+			t.Fatalf("read demo bundle file %s: %v", name, err)
+		}
+		return data
+	}
+	t.Fatalf("demo evidence bundle missing %s", name)
+	return nil
+}
+
+func writeDemoJSON(t *testing.T, path string, value any) {
+	t.Helper()
+	body, err := json.MarshalIndent(value, "", "  ")
+	if err != nil {
+		t.Fatalf("marshal demo output %s: %v", path, err)
+	}
+	body = append(body, '\n')
+	writeDemoBytes(t, path, body)
+}
+
+func writeDemoBytes(t *testing.T, path string, body []byte) {
+	t.Helper()
+	if err := os.WriteFile(path, body, 0o600); err != nil {
+		t.Fatalf("write demo output %s: %v", path, err)
+	}
+}
+
+func demoPacketREADME(incident domain.Incident, eventID, dlqEntryID string, replayJob app.ReplayJob, export domain.EvidenceExport) string {
+	return fmt.Sprintf(`# Failed Payment Webhook Evidence Packet
+
+This folder was generated by `+"`examples/webhook-evidence-demo/run.sh`"+`.
+
+## Scenario
+
+1. A synthetic Stripe-style `+"`invoice.paid`"+` webhook was signed with a local test secret and ingested by Webhookery.
+2. Webhookery durably captured the event before returning success.
+3. The downstream receiver returned HTTP 500, so the delivery attempt failed and the event entered DLQ.
+4. The operator released the DLQ entry after the receiver was fixed.
+5. Replay created new delivery work linked to the original event, and replay delivery succeeded.
+6. Webhookery generated an incident report and a local evidence bundle.
+
+## Local IDs
+
+- Incident: `+"`%s`"+`
+- Event: `+"`%s`"+`
+- DLQ entry: `+"`%s`"+`
+- Replay job: `+"`%s`"+`
+- Evidence export: `+"`%s`"+`
+
+These IDs are local disposable demo identifiers. Tenant identifiers are hashed in human-visible demo files.
+
+## Files
+
+- `+"`incident-report.md`"+`: support/SRE-readable report.
+- `+"`incident-report.json`"+`: sanitized JSON report.
+- `+"`evidence-manifest.json`"+`: sanitized manifest summary for the generated bundle.
+- `+"`verify-output.json`"+`: local bundle verification result. A successful demo has `+"`result.valid: true`"+`.
+- `+"`evidence.tar.gz`"+`: generated local evidence bundle used for verification.
+
+## What This Proves
+
+- Inbound success followed durable capture in the local PostgreSQL-backed test path.
+- The downstream failure, DLQ transition, replay, and successful replay delivery are visible as evidence.
+- The evidence bundle hash and included file hashes verify locally.
+
+## What This Does Not Prove
+
+- It does not prove provider-side completeness or Stripe certification.
+- It does not prove downstream business success.
+- It does not claim exactly-once delivery or global ordering.
+- It does not replace restore drills, deployment review, or live-provider proof.
+
+## Safety
+
+The demo output omits raw payload bodies, webhook secrets, provider signature headers, bearer tokens, private keys, and database URLs. Do not replace the synthetic fixture with real customer data for screenshots, issues, support packets, or launch materials.
+`, incident.ID, eventID, dlqEntryID, replayJob.ID, export.ID)
+}
+
+func assertDemoPacketOutputRedacted(t *testing.T, outputDir string) {
+	t.Helper()
+	for _, name := range []string{"incident-report.md", "incident-report.json", "evidence-manifest.json", "verify-output.json", "README.md"} {
+		body, err := os.ReadFile(filepath.Join(outputDir, name)) // #nosec G304 -- test reads files it just wrote under an explicit demo output directory.
+		if err != nil {
+			t.Fatalf("read demo output %s: %v", name, err)
+		}
+		for _, marker := range []string{"whsec_rc", "acct_demo", "cus_demo", "in_demo", "Stripe-Signature", "v1="} {
+			if strings.Contains(string(body), marker) {
+				t.Fatalf("demo output %s leaked sensitive marker %q", name, marker)
+			}
+		}
+	}
 }
 
 func testSuffix(t *testing.T) string {

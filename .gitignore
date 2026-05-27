@@ -13,6 +13,7 @@ dist/
 tmp/
 release-evidence/
 backups/
+examples/webhook-evidence-demo/output/
 __pycache__/
 sdk/typescript/.build/
 .terraform/
