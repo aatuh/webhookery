@@ -1,11 +1,22 @@
 # Webhookery Vs Hookdeck
 
-Verification date: 2026-05-27
+Verification date: 2026-06-04
 
 Official sources reviewed:
 
 - <https://hookdeck.com/>
 - <https://hookdeck.com/outpost>
+- <https://github.com/hookdeck/outpost>
+
+Current source notes:
+
+- Hookdeck positions Outpost as managed and self-hosted infrastructure for
+  outbound webhooks and event destinations.
+- The Outpost page and repository describe a Go binary/Docker image, managed
+  or self-hosted operation, event destinations beyond HTTP webhooks, retries,
+  tenant isolation, observability, and a user portal.
+- Hookdeck's public navigation also distinguishes receiving webhooks through
+  Event Gateway from sending webhooks through Outpost.
 
 This page is a buyer-fit comparison, not a claim that one product is generally
 better. Product surfaces change; re-check official sources before publishing or
@@ -14,10 +25,10 @@ using this page in sales material.
 ## Public Positioning Summary
 
 Hookdeck positions itself around reliable webhook infrastructure for working
-with webhooks and external events without managing the infrastructure yourself.
-Its public site describes an Event Gateway for receiving webhooks, tools for
-testing/debugging/monitoring, and Outpost for sending webhooks as managed or
-self-hosted infrastructure.
+with webhooks and external events. Its public site describes an Event Gateway
+for receiving webhooks, tools for testing/debugging/monitoring, and Outpost
+for sending webhooks and event destinations as managed or self-hosted
+infrastructure.
 
 ## Where Webhookery Differs
 

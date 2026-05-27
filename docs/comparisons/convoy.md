@@ -1,11 +1,22 @@
 # Webhookery Vs Convoy
 
-Verification date: 2026-05-27
+Verification date: 2026-06-04
 
 Official sources reviewed:
 
+- <https://www.getconvoy.io/>
 - <https://convoy.mintlify.dev/docs/home/introduction>
 - <https://www.getconvoy.io/docs/product-manual/sources>
+
+Current source notes:
+
+- Convoy's public site positions it as a webhook gateway for sending and
+  receiving events reliably.
+- Convoy docs describe an open-source, high-performance, multi-tenant webhook
+  gateway for sending and receiving webhooks.
+- The docs navigation includes endpoint management, signatures, sources,
+  subscriptions, events/deliveries, portal links, rate limits, filters,
+  metrics, circuit breaker, retention, and deployment topics.
 
 This page is a buyer-fit comparison, not a claim that one product is generally
 better. Product surfaces change; re-check official sources before publishing or

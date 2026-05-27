@@ -198,9 +198,9 @@ documentation-structure-check: ## Check canonical documentation structure
 	@grep -q "Production Readiness Review" docs/production-readiness-review.md
 	@grep -q "Support Packages" docs/support-packages.md
 	@grep -q "Build Vs Buy" docs/comparisons/build-vs-buy.md
-	@grep -q "Verification date: 2026-05-27" docs/comparisons/hookdeck.md
-	@grep -q "Verification date: 2026-05-27" docs/comparisons/svix.md
-	@grep -q "Verification date: 2026-05-27" docs/comparisons/convoy.md
+	@grep -q "Verification date: 2026-06-04" docs/comparisons/hookdeck.md
+	@grep -q "Verification date: 2026-06-04" docs/comparisons/svix.md
+	@grep -q "Verification date: 2026-06-04" docs/comparisons/convoy.md
 	@grep -q "Exactly-Once Webhooks" docs/articles/exactly-once-webhooks.md
 	@grep -q "Building A Webhook Incident Report" docs/articles/webhook-incident-report.md
 	@grep -q "Webhook Failure Modes" docs/articles/webhook-failure-modes.md
