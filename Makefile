@@ -8,7 +8,7 @@ GOSEC_VERSION ?= v2.25.0
 GOVULNCHECK_VERSION ?= v1.2.0
 FUZZTIME ?= 5s
 
-.PHONY: help tools fmt lint vuln gosec test test-race coverage openapi-check test-vectors-check crypto-inventory deployment-profile-check collections-check documentation-structure-check meta-files-check fuzz-smoke sdk-generate sdk-check docs-check release-acceptance rc-check compose-up compose-down migrate live-postgres-check postgres-integration-test redis-integration-test fast-check finalize clean
+.PHONY: help tools fmt lint vuln gosec test test-race coverage openapi-check test-vectors-check crypto-inventory deployment-profile-check collections-check documentation-structure-check meta-files-check fuzz-smoke perf-smoke sdk-generate sdk-check docs-check release-acceptance rc-check compose-up compose-down migrate live-postgres-check postgres-integration-test redis-integration-test fast-check finalize clean
 
 help: ## Show help
 	@awk 'BEGIN {FS=":.*## "}; /^[a-zA-Z0-9_.-]+:.*## / { printf "  %-16s %s\n", $$1, $$2 }' $(MAKEFILE_LIST)
@@ -155,6 +155,9 @@ fuzz-smoke: ## Run short CI-safe fuzz/property smoke tests
 	@$(GO) test ./internal/adapters/httpapi -run '^$$' -fuzz=Fuzz -fuzztime=$(FUZZTIME)
 	@$(GO) test ./pkg/verifier -run '^$$' -fuzz=Fuzz -fuzztime=$(FUZZTIME)
 	@$(GO) test ./internal/random -run '^$$' -fuzz=Fuzz -fuzztime=$(FUZZTIME)
+
+perf-smoke: ## Run DB-backed local performance smoke and write sanitized evidence
+	@scripts/perf_smoke.sh
 
 release-acceptance: ## Run v3.3 release acceptance evidence checks
 	@scripts/release_acceptance.sh
