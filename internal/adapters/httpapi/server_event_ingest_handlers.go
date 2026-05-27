@@ -3,8 +3,10 @@ package httpapi
 import (
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strings"
+	"time"
 
 	"webhookery/internal/app"
 	"webhookery/internal/domain"
@@ -14,12 +16,61 @@ import (
 )
 
 func (s *Server) listEvents(w http.ResponseWriter, r *http.Request) {
-	items, err := s.cfg.Control.ListEvents(r.Context(), actorFrom(r), queryLimit(r))
+	search, err := eventSearchRequestFromQuery(r)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	items, err := s.cfg.Control.SearchEvents(r.Context(), actorFrom(r), search)
 	if err != nil {
 		s.writeError(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, page(items))
+}
+
+func eventSearchRequestFromQuery(r *http.Request) (app.EventSearchRequest, error) {
+	q := r.URL.Query()
+	single := func(name string) (string, error) {
+		values, ok := q[name]
+		if !ok {
+			return "", nil
+		}
+		if len(values) > 1 {
+			return "", fmt.Errorf("%w: %s must not be repeated", app.ErrInvalidInput, name)
+		}
+		return strings.TrimSpace(values[0]), nil
+	}
+	for _, name := range []string{"limit", "provider", "external_id", "delivery_id", "status", "verification", "received_after", "route_id"} {
+		if _, err := single(name); err != nil {
+			return app.EventSearchRequest{}, err
+		}
+	}
+	receivedAfterRaw, _ := single("received_after")
+	var receivedAfter time.Time
+	if receivedAfterRaw != "" {
+		parsed, err := time.Parse(time.RFC3339, receivedAfterRaw)
+		if err != nil {
+			return app.EventSearchRequest{}, fmt.Errorf("%w: received_after must be RFC3339", app.ErrInvalidInput)
+		}
+		receivedAfter = parsed
+	}
+	provider, _ := single("provider")
+	externalID, _ := single("external_id")
+	deliveryID, _ := single("delivery_id")
+	status, _ := single("status")
+	verification, _ := single("verification")
+	routeID, _ := single("route_id")
+	return app.EventSearchRequest{
+		Limit:         queryLimit(r),
+		Provider:      provider,
+		ExternalID:    externalID,
+		DeliveryID:    deliveryID,
+		Status:        status,
+		Verification:  verification,
+		ReceivedAfter: receivedAfter,
+		RouteID:       routeID,
+	}, nil
 }
 
 func (s *Server) getEvent(w http.ResponseWriter, r *http.Request) {

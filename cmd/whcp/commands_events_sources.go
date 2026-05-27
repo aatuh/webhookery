@@ -14,7 +14,7 @@ import (
 
 func runEvents(args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: whcp events <list|get|timeline|raw-export|normalized>")
+		return fmt.Errorf("usage: whcp events <list|search|get|timeline|raw-export|normalized>")
 	}
 	fs := flag.NewFlagSet("events "+args[0], flag.ContinueOnError)
 	baseURL := fs.String("base-url", "http://localhost:8080", "API base URL")
@@ -23,12 +23,31 @@ func runEvents(args []string) error {
 	output := fs.String("output", "-", "raw output path, or '-' for stdout")
 	format := fs.String("format", "json", "timeline output format: json, table, or markdown")
 	reason := fs.String("reason", "", "operator reason for elevated raw payload access")
+	limit := fs.Int("limit", 0, "optional result limit")
+	providerName := fs.String("provider", "", "provider filter")
+	externalID := fs.String("external-id", "", "provider event id filter")
+	deliveryID := fs.String("delivery-id", "", "delivery id filter")
+	status := fs.String("status", "", "status filter, such as dlq")
+	verification := fs.String("verification", "", "verification filter: valid or invalid")
+	receivedAfter := fs.String("received-after", "", "RFC3339 lower bound for received_at")
+	since := fs.String("since", "", "relative lower bound duration, such as 24h")
+	routeID := fs.String("route-id", "", "route id filter")
 	if err := fs.Parse(args[1:]); err != nil {
 		return err
 	}
 	switch args[0] {
 	case "list":
 		return getJSON(*baseURL, *apiKey, "/v1/events")
+	case "search":
+		query, err := eventSearchQuery(*limit, *providerName, *externalID, *deliveryID, *status, *verification, *receivedAfter, *since, *routeID)
+		if err != nil {
+			return err
+		}
+		path := "/v1/events"
+		if query != "" {
+			path += "?" + query
+		}
+		return getJSON(*baseURL, *apiKey, path)
 	case "get":
 		return getJSON(*baseURL, *apiKey, "/v1/events/"+url.PathEscape(*eventID))
 	case "timeline":
@@ -38,8 +57,45 @@ func runEvents(args []string) error {
 	case "raw-export":
 		return exportRawPayload(*baseURL, *apiKey, *eventID, *reason, *output)
 	default:
-		return fmt.Errorf("usage: whcp events <list|get|timeline|raw-export|normalized>")
+		return fmt.Errorf("usage: whcp events <list|search|get|timeline|raw-export|normalized>")
 	}
+}
+
+func eventSearchQuery(limit int, providerName, externalID, deliveryID, status, verification, receivedAfter, since, routeID string) (string, error) {
+	q := url.Values{}
+	if limit > 0 {
+		q.Set("limit", fmt.Sprintf("%d", limit))
+	}
+	add := func(name, value string) {
+		if strings.TrimSpace(value) != "" {
+			q.Set(name, strings.TrimSpace(value))
+		}
+	}
+	add("provider", providerName)
+	add("external_id", externalID)
+	add("delivery_id", deliveryID)
+	add("status", status)
+	add("verification", verification)
+	add("route_id", routeID)
+	receivedAfter = strings.TrimSpace(receivedAfter)
+	since = strings.TrimSpace(since)
+	if receivedAfter != "" && since != "" {
+		return "", fmt.Errorf("received-after and since cannot both be set")
+	}
+	if since != "" {
+		d, err := time.ParseDuration(since)
+		if err != nil || d <= 0 {
+			return "", fmt.Errorf("since must be a positive duration")
+		}
+		receivedAfter = time.Now().UTC().Add(-d).Format(time.RFC3339)
+	}
+	if receivedAfter != "" {
+		if _, err := time.Parse(time.RFC3339, receivedAfter); err != nil {
+			return "", fmt.Errorf("received-after must be RFC3339")
+		}
+		q.Set("received_after", receivedAfter)
+	}
+	return q.Encode(), nil
 }
 
 type eventTimelinePage struct {

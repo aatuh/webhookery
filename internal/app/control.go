@@ -1620,11 +1620,30 @@ func (s *ControlService) RotateEndpointSecret(ctx context.Context, actor authz.A
 	return s.store.RotateEndpointSecret(ctx, actor.TenantID, endpointID, actor.ID, req)
 }
 
+type EventSearchRequest struct {
+	Limit         int       `json:"limit,omitempty"`
+	Provider      string    `json:"provider,omitempty"`
+	ExternalID    string    `json:"external_id,omitempty"`
+	DeliveryID    string    `json:"delivery_id,omitempty"`
+	Status        string    `json:"status,omitempty"`
+	Verification  string    `json:"verification,omitempty"`
+	ReceivedAfter time.Time `json:"received_after,omitempty"`
+	RouteID       string    `json:"route_id,omitempty"`
+}
+
 func (s *ControlService) ListEvents(ctx context.Context, actor authz.Actor, limit int) ([]domain.Event, error) {
+	return s.SearchEvents(ctx, actor, EventSearchRequest{Limit: limit})
+}
+
+func (s *ControlService) SearchEvents(ctx context.Context, actor authz.Actor, req EventSearchRequest) ([]domain.Event, error) {
 	if !s.authorized(ctx, actor, "events:read", "event", "", "") {
 		return nil, ErrForbidden
 	}
-	return s.store.ListEvents(ctx, actor.TenantID, normalizeLimit(limit))
+	normalized, err := normalizeEventSearchRequest(req)
+	if err != nil {
+		return nil, err
+	}
+	return s.store.ListEvents(ctx, actor.TenantID, normalized)
 }
 
 func (s *ControlService) GetEvent(ctx context.Context, actor authz.Actor, eventID string) (domain.Event, error) {
@@ -2558,6 +2577,43 @@ func normalizeLimit(limit int) int {
 		return 50
 	}
 	return limit
+}
+
+func normalizeEventSearchRequest(req EventSearchRequest) (EventSearchRequest, error) {
+	req.Limit = normalizeLimit(req.Limit)
+	req.Provider = strings.TrimSpace(req.Provider)
+	req.ExternalID = strings.TrimSpace(req.ExternalID)
+	req.DeliveryID = strings.TrimSpace(req.DeliveryID)
+	req.Status = strings.ToLower(strings.TrimSpace(req.Status))
+	req.Verification = strings.ToLower(strings.TrimSpace(req.Verification))
+	req.RouteID = strings.TrimSpace(req.RouteID)
+	for name, value := range map[string]string{
+		"provider":     req.Provider,
+		"external_id":  req.ExternalID,
+		"delivery_id":  req.DeliveryID,
+		"status":       req.Status,
+		"verification": req.Verification,
+		"route_id":     req.RouteID,
+	} {
+		if len(value) > 256 {
+			return EventSearchRequest{}, fmt.Errorf("%w: %s is too long", ErrInvalidInput, name)
+		}
+	}
+	switch req.Verification {
+	case "", "valid", "invalid":
+	default:
+		return EventSearchRequest{}, fmt.Errorf("%w: verification must be valid or invalid", ErrInvalidInput)
+	}
+	switch req.Status {
+	case "", "dlq", "dead_lettered":
+	default:
+		return EventSearchRequest{}, fmt.Errorf("%w: status must be dlq or dead_lettered", ErrInvalidInput)
+	}
+	if req.ReceivedAfter.IsZero() {
+		return req, nil
+	}
+	req.ReceivedAfter = req.ReceivedAfter.UTC()
+	return req, nil
 }
 
 func normalizeEventTimelineEntries(items []EventTimelineEntry) []EventTimelineEntry {

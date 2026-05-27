@@ -70,7 +70,7 @@ type SchemaStore interface {
 }
 
 type EventStore interface {
-	ListEvents(ctx context.Context, tenantID string, limit int) ([]domain.Event, error)
+	ListEvents(ctx context.Context, tenantID string, req EventSearchRequest) ([]domain.Event, error)
 	GetEvent(ctx context.Context, tenantID, eventID string) (domain.Event, error)
 	GetRawPayload(ctx context.Context, tenantID, eventID, actorID, reason string) (domain.RawPayload, error)
 	GetNormalizedEvent(ctx context.Context, tenantID, eventID, actorID string, includeData bool) (domain.NormalizedEnvelope, error)
