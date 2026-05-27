@@ -65,7 +65,7 @@ non-zero because a command is required. The groups are:
 | Task | Required scope | Example | Expected outcome | Elevated risk |
 |------|----------------|---------|------------------|---------------|
 | List events | `events:read` | `go run ./cmd/whcp events list --api-key "$WEBHOOKERY_API_KEY"` | Paginated event metadata. | No raw body |
-| View timeline | `events:read` | `go run ./cmd/whcp events timeline --event-id evt_... --api-key "$WEBHOOKERY_API_KEY"` | Receipt, delivery, attempt, and audit timeline. | No raw body |
+| View timeline | `events:read` | `go run ./cmd/whcp events timeline --event-id evt_... --format table --api-key "$WEBHOOKERY_API_KEY"` | Versioned event timeline in `json`, `table`, or `markdown` format. | No raw body |
 | Export raw payload | `events:raw` | `go run ./cmd/whcp events raw-export --event-id evt_... --output payload.bin --api-key "$WEBHOOKERY_API_KEY"` | Writes raw bytes to a private local file. | Raw payload |
 | Rotate source secret | `security:write` | `go run ./cmd/whcp sources rotate-secret --source-id src_... --secret "$NEXT_WEBHOOK_SECRET" --reason "scheduled rotation" --api-key "$WEBHOOKERY_API_KEY"` | New active secret version and bounded grace for prior version. | Secret rotation |
 | Disable source | `sources:write` | `go run ./cmd/whcp sources update --source-id src_... --state disabled --reason "retire old webhook" --api-key "$WEBHOOKERY_API_KEY"` | Future ingress is rejected; historical evidence remains. | Ingress interruption |

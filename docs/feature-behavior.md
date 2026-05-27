@@ -124,6 +124,13 @@ scope JSON, audit evidence, event timelines, and incident reports preserve the
 reason code, free-text reason, replay mode, actor, and selected event or
 delivery scope.
 
+`GET /v1/events/{event_id}/timeline` returns `webhookery.event_timeline.v1`
+entries for the shared investigation surface. Timeline rows include received
+events, provider receipts, raw payload metadata, normalized envelope evidence,
+delivery decisions, delivery payload hashes, delivery attempts, reconciliation,
+replay, and audit references when present. `whcp events timeline` renders the
+same response as `json`, `table`, or `markdown`.
+
 Dead-letter entries can be released individually or in bounded batches with an
 operator reason code and reason because release creates replay work.
 

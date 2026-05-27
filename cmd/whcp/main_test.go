@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	apppkg "webhookery/internal/app"
 	"webhookery/internal/config"
 	"webhookery/internal/evidence"
 )
@@ -181,6 +182,46 @@ func TestParseOptionalTimeRequiresRFC3339AndNormalizesUTC(t *testing.T) {
 	}
 	if _, err := parseOptionalTime("2026-05-28"); err == nil {
 		t.Fatal("expected non-RFC3339 time rejection")
+	}
+}
+
+func TestFormatEventTimelineSupportsTableMarkdownAndJSON(t *testing.T) {
+	entries := []apppkg.EventTimelineEntry{{
+		SchemaVersion: apppkg.EventTimelineSchemaV1,
+		Sequence:      1,
+		Kind:          "replay",
+		RefID:         "rpl_1",
+		State:         "completed",
+		Detail:        "reason_code=incident_recovery reason=receiver fixed",
+		OccurredAt:    time.Unix(123, 0).UTC(),
+	}}
+
+	table, err := formatEventTimeline(entries, "table")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(table), "SEQ\tOCCURRED_AT\tKIND\tREF_ID\tSTATE\tDETAIL") || !strings.Contains(string(table), "1\t1970-01-01T00:02:03Z\treplay\trpl_1\tcompleted\treason_code=incident_recovery") {
+		t.Fatalf("unexpected table timeline:\n%s", table)
+	}
+
+	markdown, err := formatEventTimeline(entries, "markdown")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(markdown), "## Event Timeline") || !strings.Contains(string(markdown), "`webhookery.event_timeline.v1`") || !strings.Contains(string(markdown), "| 1 | `1970-01-01T00:02:03Z` | `replay` | `rpl_1` | `completed` |") {
+		t.Fatalf("unexpected markdown timeline:\n%s", markdown)
+	}
+
+	jsonBody, err := formatEventTimeline(entries, "json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(jsonBody), `"schema_version":"webhookery.event_timeline.v1"`) {
+		t.Fatalf("unexpected json timeline:\n%s", jsonBody)
+	}
+
+	if _, err := formatEventTimeline(entries, "xml"); err == nil {
+		t.Fatal("expected unknown timeline format rejection")
 	}
 }
 

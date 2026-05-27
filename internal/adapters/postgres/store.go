@@ -2633,7 +2633,7 @@ func (s *Store) GetNormalizedEvent(ctx context.Context, tenantID, eventID, actor
 	return item, nil
 }
 
-func (s *Store) ListEventTimeline(ctx context.Context, tenantID, eventID string, limit int) ([]map[string]any, error) {
+func (s *Store) ListEventTimeline(ctx context.Context, tenantID, eventID string, limit int) ([]app.EventTimelineEntry, error) {
 	var exists bool
 	if err := s.pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM events WHERE tenant_id=$1 AND id=$2)`, tenantID, eventID).Scan(&exists); err != nil {
 		return nil, err
@@ -2641,8 +2641,8 @@ func (s *Store) ListEventTimeline(ctx context.Context, tenantID, eventID string,
 	if !exists {
 		return nil, app.ErrNotFound
 	}
-	return listRows(ctx, s.pool, `
-		SELECT kind, ref_id, state, detail, occurred_at FROM (
+	rows, err := s.pool.Query(ctx, `
+		SELECT 'webhookery.event_timeline.v1' AS schema_version, kind, ref_id, state, detail, occurred_at FROM (
 			SELECT 'event' AS kind, id AS ref_id, dedupe_status AS state, verification_reason AS detail, received_at AS occurred_at
 			FROM events WHERE tenant_id=$1 AND id=$2
 			UNION ALL
@@ -2732,6 +2732,22 @@ func (s *Store) ListEventTimeline(ctx context.Context, tenantID, eventID string,
 		) timeline
 		ORDER BY occurred_at ASC
 		LIMIT $3`, tenantID, eventID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []app.EventTimelineEntry
+	sequence := 1
+	for rows.Next() {
+		var item app.EventTimelineEntry
+		if err := rows.Scan(&item.SchemaVersion, &item.Kind, &item.RefID, &item.State, &item.Detail, &item.OccurredAt); err != nil {
+			return nil, err
+		}
+		item.Sequence = sequence
+		sequence++
+		out = append(out, item)
+	}
+	return out, rows.Err()
 }
 
 func (s *Store) ListDeliveries(ctx context.Context, tenantID string, limit int) ([]domain.Delivery, error) {

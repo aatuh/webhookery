@@ -34,6 +34,23 @@ func TestControlServiceScopesEventReadsToActorTenant(t *testing.T) {
 	}
 }
 
+func TestControlServiceListEventTimelineReturnsVersionedEntries(t *testing.T) {
+	store := &fakeControlStore{}
+	svc := NewControlService(store, ssrf.Validator{Resolver: ssrf.StaticResolver{}})
+	actor := authz.Actor{ID: "usr_1", TenantID: "ten_a", Role: authz.RoleDeveloper, Scopes: []string{"events:read"}}
+
+	items, err := svc.ListEventTimeline(context.Background(), actor, "evt_1", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) == 0 {
+		t.Fatal("expected timeline entries")
+	}
+	if items[0].SchemaVersion != EventTimelineSchemaV1 || items[0].Sequence != 1 || items[0].OccurredAt.Location() != time.UTC {
+		t.Fatalf("timeline entry was not normalized: %+v", items[0])
+	}
+}
+
 func TestControlServiceIncidentLifecycleScopesAndRedactsReports(t *testing.T) {
 	store := &fakeControlStore{}
 	svc := NewControlService(store, ssrf.Validator{Resolver: ssrf.StaticResolver{}})
@@ -2227,13 +2244,13 @@ func (f *fakeControlStore) GetNormalizedEvent(_ context.Context, tenantID, event
 	f.normalizedMetadataOnly = !includeData
 	return domain.NormalizedEnvelope{ID: "nenv_1", TenantID: tenantID, EventID: eventID}, nil
 }
-func (f *fakeControlStore) ListEventTimeline(context.Context, string, string, int) ([]map[string]any, error) {
-	return []map[string]any{
-		{"kind": "event", "ref_id": "evt_1", "state": "unique", "detail": "valid_signature", "occurred_at": time.Unix(100, 0).UTC()},
-		{"kind": "delivery", "ref_id": "del_1", "state": "failed", "detail": "route_version=rtv_1 subscription_version=none retry_policy=rtp_1", "occurred_at": time.Unix(101, 0).UTC()},
-		{"kind": "attempt", "ref_id": "att_1", "state": "failed", "detail": "network_error retryable=true retry_delay_ms=1000", "occurred_at": time.Unix(102, 0).UTC()},
-		{"kind": "replay", "ref_id": "rpl_1", "state": "completed", "detail": "reason_code=incident_recovery reason=receiver restored after DLQ config_mode=original event_id=evt_1", "occurred_at": time.Unix(102, 500000000).UTC()},
-		{"kind": "audit", "ref_id": "aud_1", "state": "raw_payload.read", "detail": "operator reason", "occurred_at": time.Unix(103, 0).UTC()},
+func (f *fakeControlStore) ListEventTimeline(context.Context, string, string, int) ([]EventTimelineEntry, error) {
+	return []EventTimelineEntry{
+		{SchemaVersion: EventTimelineSchemaV1, Sequence: 1, Kind: "event", RefID: "evt_1", State: "unique", Detail: "valid_signature", OccurredAt: time.Unix(100, 0).UTC()},
+		{SchemaVersion: EventTimelineSchemaV1, Sequence: 2, Kind: "delivery", RefID: "del_1", State: "failed", Detail: "route_version=rtv_1 subscription_version=none retry_policy=rtp_1", OccurredAt: time.Unix(101, 0).UTC()},
+		{SchemaVersion: EventTimelineSchemaV1, Sequence: 3, Kind: "attempt", RefID: "att_1", State: "failed", Detail: "network_error retryable=true retry_delay_ms=1000", OccurredAt: time.Unix(102, 0).UTC()},
+		{SchemaVersion: EventTimelineSchemaV1, Sequence: 4, Kind: "replay", RefID: "rpl_1", State: "completed", Detail: "reason_code=incident_recovery reason=receiver restored after DLQ config_mode=original event_id=evt_1", OccurredAt: time.Unix(102, 500000000).UTC()},
+		{SchemaVersion: EventTimelineSchemaV1, Sequence: 5, Kind: "audit", RefID: "aud_1", State: "raw_payload.read", Detail: "operator reason", OccurredAt: time.Unix(103, 0).UTC()},
 	}, nil
 }
 func (f *fakeControlStore) CreateIncident(_ context.Context, incident domain.Incident) (domain.Incident, error) {

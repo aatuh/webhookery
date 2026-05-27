@@ -49,7 +49,7 @@ type IncidentReportEvent struct {
 	EventIdentity        map[string]any       `json:"event_identity"`
 	ProviderVerification map[string]any       `json:"provider_verification"`
 	RawCaptureEvidence   map[string]any       `json:"raw_capture_evidence"`
-	Timeline             []map[string]any     `json:"timeline"`
+	Timeline             []EventTimelineEntry `json:"timeline"`
 }
 
 func (s *ControlService) CreateIncident(ctx context.Context, actor authz.Actor, req CreateIncidentRequest) (domain.Incident, error) {
@@ -247,19 +247,19 @@ func marshalIncidentReport(report IncidentReport) ([]byte, error) {
 	return raw, nil
 }
 
-func sanitizeTimeline(entries []map[string]any) []map[string]any {
-	out := make([]map[string]any, 0, len(entries))
+func sanitizeTimeline(entries []EventTimelineEntry) []EventTimelineEntry {
+	out := make([]EventTimelineEntry, 0, len(entries))
 	for _, entry := range entries {
-		clean := make(map[string]any, len(entry))
-		for key, value := range entry {
-			lower := strings.ToLower(key)
-			if strings.Contains(lower, "body") || strings.Contains(lower, "secret") || strings.Contains(lower, "signature") || strings.Contains(lower, "token") {
-				clean[key] = "[redacted]"
-				continue
-			}
-			clean[key] = value
+		if entry.SchemaVersion == "" {
+			entry.SchemaVersion = EventTimelineSchemaV1
 		}
-		out = append(out, clean)
+		if strings.Contains(strings.ToLower(entry.Detail), "body=") ||
+			strings.Contains(strings.ToLower(entry.Detail), "secret=") ||
+			strings.Contains(strings.ToLower(entry.Detail), "signature=") ||
+			strings.Contains(strings.ToLower(entry.Detail), "token=") {
+			entry.Detail = "[redacted]"
+		}
+		out = append(out, entry)
 	}
 	return out
 }
@@ -310,14 +310,14 @@ func markdownIncidentReport(report IncidentReport) string {
 	return b.String()
 }
 
-func writeTimelineKind(b *strings.Builder, timeline []map[string]any, kind string) {
+func writeTimelineKind(b *strings.Builder, timeline []EventTimelineEntry, kind string) {
 	wrote := false
 	for _, entry := range timeline {
-		if fmt.Sprint(entry["kind"]) != kind {
+		if entry.Kind != kind {
 			continue
 		}
 		wrote = true
-		fmt.Fprintf(b, "- `%s` `%s` `%s`: %s\n", fmt.Sprint(entry["occurred_at"]), fmt.Sprint(entry["ref_id"]), fmt.Sprint(entry["state"]), markdownText(fmt.Sprint(entry["detail"])))
+		fmt.Fprintf(b, "- `%s` `%s` `%s`: %s\n", entry.OccurredAt.Format(time.RFC3339), entry.RefID, entry.State, markdownText(entry.Detail))
 	}
 	if !wrote {
 		fmt.Fprintf(b, "- No `%s` entries recorded in the event timeline.\n", kind)
