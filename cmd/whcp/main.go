@@ -88,6 +88,8 @@ func run(args []string) error {
 		return runSIEMDeliveries(args[1:])
 	case "audit":
 		return runAudit(args[1:])
+	case "evidence":
+		return runEvidence(args[1:])
 	case "retention":
 		return runRetention(args[1:])
 	case "schemas":
@@ -106,7 +108,7 @@ func run(args []string) error {
 }
 
 func usage() error {
-	return fmt.Errorf("usage: whcp <api|worker|scheduler|migrate|admin|api-keys|producer-clients|producer-mtls-identities|key-custody|doctor|identity-providers|scim-tokens|role-bindings|access-policies|authz|events|sources|provider-connections|adapters|endpoints|subscriptions|retry-policies|routes|transformations|deliveries|replay-jobs|reconciliation-jobs|ops|alerts|notification-channels|notification-deliveries|siem-sinks|siem-deliveries|audit|retention|schemas|dead-letter|quarantine|incidents|signatures>")
+	return fmt.Errorf("usage: whcp <api|worker|scheduler|migrate|admin|api-keys|producer-clients|producer-mtls-identities|key-custody|doctor|identity-providers|scim-tokens|role-bindings|access-policies|authz|events|sources|provider-connections|adapters|endpoints|subscriptions|retry-policies|routes|transformations|deliveries|replay-jobs|reconciliation-jobs|ops|alerts|notification-channels|notification-deliveries|siem-sinks|siem-deliveries|audit|evidence|retention|schemas|dead-letter|quarantine|incidents|signatures>")
 }
 
 type doctorFinding struct {

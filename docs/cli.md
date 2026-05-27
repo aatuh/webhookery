@@ -38,7 +38,7 @@ non-zero because a command is required. The groups are:
 | `deliveries`, `replay-jobs`, `reconciliation-jobs`, `dead-letter`, `quarantine` | Delivery recovery, replay, provider reconciliation, DLQ, and quarantine decisions. | `deliveries:retry`, `replay:write`, or `security:write`. | Duplicate side effects and recovery claims. |
 | `alerts`, `notification-channels`, `notification-deliveries` | Alert rules and signed notification egress. | `ops:read` or `ops:write`. | External egress and signing secrets. |
 | `siem-sinks`, `siem-deliveries` | Signed audit metadata streaming. | `audit:read` for reads, `security:write` for mutations. | External egress and audit disclosure. |
-| `audit`, `retention`, `schemas`, `signatures` | Audit evidence, retention, schema checks, and signature helpers. | `audit:read`, `events:raw`, `security:write`, or `schemas:write`. | Evidence export, retention, raw payload inclusion. |
+| `audit`, `evidence`, `retention`, `schemas`, `signatures` | Audit evidence, local evidence-bundle inspection, retention, schema checks, and signature helpers. | `audit:read`, `events:raw`, `security:write`, `schemas:write`, or local file access. | Evidence export, retention, raw payload inclusion. |
 
 ## Local And Validation
 
@@ -135,6 +135,7 @@ contracts. Keep them out of commits unless deliberately sanitized.
 | Export evidence | `audit:read`; add `events:raw` for payload bodies | `go run ./cmd/whcp audit export --include-timelines --include-payloads --reason "support case" --api-key "$WEBHOOKERY_API_KEY"` | Evidence bundle is created with manifest and hashes. | Raw payload inclusion |
 | Download export | `audit:read`; add `events:raw` when export includes bodies | `go run ./cmd/whcp audit download --export-id exp_... --output evidence.tar.gz --api-key "$WEBHOOKERY_API_KEY"` | Bundle is written locally. | Evidence disclosure |
 | Verify bundle locally | Local file | `go run ./cmd/whcp audit verify-bundle --file evidence.tar.gz` | Manifest schema, file hashes, and audit-chain proof verify. | Sensitive local file |
+| View bundle locally | Local file | `go run ./cmd/whcp evidence view --file evidence.tar.gz` | Prints a JSON summary of manifest metadata, included files, timeline counts, audit-chain status, verification result, and redaction warnings without printing bundled file bodies. | Sensitive local file |
 | Verify audit chain | `audit:read` | `go run ./cmd/whcp audit verify-chain --api-key "$WEBHOOKERY_API_KEY"` | Chain verification result is returned. | No raw body |
 | Anchor audit chain | `security:write` | `go run ./cmd/whcp audit anchor --reason "daily anchor" --api-key "$WEBHOOKERY_API_KEY"` | Anchor is written after verification. | Evidence governance |
 | Create retention policy | `security:write` | `go run ./cmd/whcp retention create --resource-type raw_payload --retention-days 30 --api-key "$WEBHOOKERY_API_KEY"` | Retention policy is created and audited. | Destructive retention |

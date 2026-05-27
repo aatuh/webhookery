@@ -19,6 +19,7 @@ import (
 )
 
 const ManifestSchemaV1 = "webhookery.evidence_bundle.v1"
+const BundleViewSchemaV1 = "webhookery.evidence_bundle_view.v1"
 
 type Manifest struct {
 	SchemaVersion        string                  `json:"schema_version"`
@@ -85,6 +86,28 @@ type BundleVerification struct {
 	CheckedFiles        int      `json:"checked_files"`
 	CheckedChainEntries int      `json:"checked_chain_entries"`
 	Failures            []string `json:"failures"`
+}
+
+type BundleView struct {
+	SchemaVersion string             `json:"schema_version"`
+	Manifest      Manifest           `json:"manifest"`
+	Summary       BundleViewSummary  `json:"summary"`
+	Verification  BundleVerification `json:"verification"`
+	Warnings      []string           `json:"warnings,omitempty"`
+}
+
+type BundleViewSummary struct {
+	FileCount                 int            `json:"file_count"`
+	TotalSizeBytes            int64          `json:"total_size_bytes"`
+	IncludedEventCount        int            `json:"included_event_count"`
+	IncludedIncidentCount     int            `json:"included_incident_count"`
+	TimelineEntryCount        int            `json:"timeline_entry_count"`
+	TimelineKinds             map[string]int `json:"timeline_kinds,omitempty"`
+	AuditEventCount           int            `json:"audit_event_count"`
+	HasIncidentReportJSON     bool           `json:"has_incident_report_json"`
+	HasIncidentReportMarkdown bool           `json:"has_incident_report_markdown"`
+	HasAuditChainProof        bool           `json:"has_audit_chain_proof"`
+	AuditChainStatus          string         `json:"audit_chain_status"`
 }
 
 func JSONLines(items []any) ([]byte, error) {
@@ -154,11 +177,43 @@ func BuildTarGzipBundle(manifest Manifest, files map[string][]byte) (Bundle, err
 }
 
 func VerifyTarGzipBundle(body []byte) (BundleVerification, error) {
-	result := BundleVerification{Valid: true}
 	files, err := readTarGzipFiles(body)
 	if err != nil {
 		return BundleVerification{}, err
 	}
+	return verifyTarGzipFiles(files)
+}
+
+func InspectTarGzipBundle(body []byte) (BundleView, error) {
+	view := BundleView{SchemaVersion: BundleViewSchemaV1}
+	files, err := readTarGzipFiles(body)
+	if err != nil {
+		return BundleView{}, err
+	}
+	verification, err := verifyTarGzipFiles(files)
+	if err != nil {
+		return BundleView{}, err
+	}
+	view.Verification = verification
+
+	manifestBytes, ok := files["manifest.json"]
+	if !ok {
+		view.Warnings = append(view.Warnings, "manifest.json is missing")
+		return view, nil
+	}
+	var manifest Manifest
+	if err := json.Unmarshal(manifestBytes, &manifest); err != nil {
+		return BundleView{}, err
+	}
+	manifest = cleanInspectedManifest(manifest)
+	view.Manifest = manifest
+	view.Summary = bundleViewSummary(manifest, files, verification)
+	view.Warnings = bundleViewWarnings(manifest, files, verification)
+	return view, nil
+}
+
+func verifyTarGzipFiles(files map[string][]byte) (BundleVerification, error) {
+	result := BundleVerification{Valid: true}
 	manifestBytes, ok := files["manifest.json"]
 	if !ok {
 		result.Valid = false
@@ -207,6 +262,87 @@ func VerifyTarGzipBundle(body []byte) (BundleVerification, error) {
 		}
 	}
 	return result, nil
+}
+
+func bundleViewSummary(manifest Manifest, files map[string][]byte, verification BundleVerification) BundleViewSummary {
+	_, hasIncidentReportJSON := files["incident_report.json"]
+	_, hasIncidentReportMarkdown := files["incident_report.md"]
+	_, hasAuditChainProof := files["audit_chain_proof.jsonl"]
+	summary := BundleViewSummary{
+		FileCount:                 len(manifest.Files),
+		IncludedEventCount:        len(manifest.IncludedEvents),
+		IncludedIncidentCount:     len(manifest.IncludedIncidents),
+		HasIncidentReportJSON:     hasIncidentReportJSON,
+		HasIncidentReportMarkdown: hasIncidentReportMarkdown,
+		HasAuditChainProof:        hasAuditChainProof,
+		AuditChainStatus:          "not_included",
+	}
+	for _, file := range manifest.Files {
+		summary.TotalSizeBytes += file.SizeBytes
+	}
+	if raw, ok := files["timelines.jsonl"]; ok {
+		count, kinds, err := countTimelineJSONLines(raw)
+		if err == nil {
+			summary.TimelineEntryCount = count
+			summary.TimelineKinds = kinds
+		}
+	}
+	if raw, ok := files["audit_events.jsonl"]; ok {
+		count, err := countJSONLines(raw)
+		if err == nil {
+			summary.AuditEventCount = count
+		}
+	}
+	if summary.HasAuditChainProof {
+		summary.AuditChainStatus = "included"
+		if verification.CheckedChainEntries > 0 {
+			summary.AuditChainStatus = "verified"
+		}
+		for _, failure := range verification.Failures {
+			if strings.Contains(failure, "chain proof") {
+				summary.AuditChainStatus = "invalid"
+				break
+			}
+		}
+	}
+	return summary
+}
+
+func bundleViewWarnings(manifest Manifest, files map[string][]byte, verification BundleVerification) []string {
+	var warnings []string
+	if manifest.IncludeRawPayloads {
+		warnings = append(warnings, "bundle manifest indicates raw payload bodies may be included; handle as sensitive")
+	}
+	if manifest.IncludePayloadBodies {
+		warnings = append(warnings, "bundle manifest indicates normalized or delivery payload bodies may be included; handle as sensitive")
+	}
+	if _, ok := files["timelines.jsonl"]; ok {
+		if _, _, err := countTimelineJSONLines(files["timelines.jsonl"]); err != nil {
+			warnings = append(warnings, "timelines.jsonl could not be summarized: "+err.Error())
+		}
+	}
+	if _, ok := files["audit_events.jsonl"]; ok {
+		if _, err := countJSONLines(files["audit_events.jsonl"]); err != nil {
+			warnings = append(warnings, "audit_events.jsonl could not be summarized: "+err.Error())
+		}
+	}
+	if !verification.Valid {
+		warnings = append(warnings, "bundle verification failed; inspect verification.failures")
+	}
+	if !manifest.IncludeRawPayloads && !manifest.IncludePayloadBodies {
+		warnings = append(warnings, "raw payload bodies and payload bodies are omitted according to the manifest")
+	}
+	return warnings
+}
+
+func cleanInspectedManifest(manifest Manifest) Manifest {
+	if manifest.From != nil && manifest.From.IsZero() {
+		manifest.From = nil
+	}
+	if manifest.To != nil && manifest.To.IsZero() {
+		manifest.To = nil
+	}
+	return manifest
 }
 
 func normalizeManifest(manifest Manifest) Manifest {
@@ -324,6 +460,42 @@ func normalizedStringSet(values []string) []string {
 func SHA256(data []byte) string {
 	sum := sha256.Sum256(data)
 	return "sha256:" + hex.EncodeToString(sum[:])
+}
+
+func countJSONLines(raw []byte) (int, error) {
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	count := 0
+	for {
+		var item map[string]any
+		if err := dec.Decode(&item); err != nil {
+			if errors.Is(err, io.EOF) {
+				break
+			}
+			return count, err
+		}
+		count++
+	}
+	return count, nil
+}
+
+func countTimelineJSONLines(raw []byte) (int, map[string]int, error) {
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	kinds := map[string]int{}
+	count := 0
+	for {
+		var item map[string]any
+		if err := dec.Decode(&item); err != nil {
+			if errors.Is(err, io.EOF) {
+				break
+			}
+			return count, kinds, err
+		}
+		count++
+		if kind, ok := item["kind"].(string); ok && strings.TrimSpace(kind) != "" {
+			kinds[kind]++
+		}
+	}
+	return count, kinds, nil
 }
 
 func readTarGzipFiles(body []byte) (map[string][]byte, error) {

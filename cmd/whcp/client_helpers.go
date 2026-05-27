@@ -305,6 +305,23 @@ func verifyEvidenceBundleFile(path string) error {
 	return json.NewEncoder(os.Stdout).Encode(result)
 }
 
+func viewEvidenceBundleFile(path string) error {
+	if strings.TrimSpace(path) == "" {
+		return fmt.Errorf("file is required")
+	}
+	body, err := os.ReadFile(path) // #nosec G304,G703 -- CLI inspects an operator-selected local evidence bundle without printing file bodies.
+	if err != nil {
+		return err
+	}
+	view, err := evidence.InspectTarGzipBundle(body)
+	if err != nil {
+		return err
+	}
+	enc := json.NewEncoder(os.Stdout)
+	enc.SetIndent("", "  ")
+	return enc.Encode(view)
+}
+
 func exportRawPayload(baseURL, apiKey, eventID, reason, outputPath string) error {
 	if strings.TrimSpace(eventID) == "" {
 		return fmt.Errorf("event-id is required")
