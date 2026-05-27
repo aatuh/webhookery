@@ -17,8 +17,11 @@ test -f GOVERNANCE.md
 test -f TRADEMARKS.md
 test -f RELEASE_EVIDENCE.md
 test -f docs/release-evidence-template.md
+test -f docs/release-evidence-sample.md
+test -f docs/production-rc-checklist.md
 test -f docs/releases/v0.1.0-rc1.md
 test -f docs/security-review-package.md
+test -f docs/external-review-package.md
 test -f docs/external-review-scope.md
 test -f docs/external-review-findings-template.md
 test -f docs/external-review-accepted-risks.md
@@ -32,8 +35,11 @@ test -f docs/production-readiness-review.md
 test -f docs/support-packages.md
 test -f docs/comparisons/build-vs-buy.md
 test -f docs/articles/exactly-once-webhooks.md
+test -f docs/articles/self-hosted-webhook-gateway-architecture.md
+test -f docs/articles/webhook-security-review-checklist.md
 test -f docs/launch-copy.md
 test -f docs/launch-metrics.md
+test -f docs/customer-discovery-notes-template.md
 test -f docs/pilot-feedback-template.md
 test -f docs/roadmap-intake-policy.md
 test -f docs/pilot-review-checklist.md
@@ -55,8 +61,12 @@ grep -q "no provider-side event completeness" RELEASE_EVIDENCE.md
 grep -q "compliance" RELEASE_EVIDENCE.md
 grep -q "not a certification" RELEASE_EVIDENCE.md
 grep -q "live third-party provider" docs/release-evidence-template.md
+grep -q "Release Evidence Sample" docs/release-evidence-sample.md
+grep -q "Production RC Checklist" docs/production-rc-checklist.md
+grep -q "exactly-once delivery" docs/production-rc-checklist.md
 grep -q "External Review" docs/release-evidence-template.md
 grep -q "Branch Protection" docs/release-evidence-template.md
+grep -q "External Review Package" docs/external-review-package.md
 grep -q "accepted_risk" docs/external-review-accepted-risks.md
 grep -q "External Review Scope Template" docs/external-review-scope.md
 grep -q "External Review Findings Template" docs/external-review-findings-template.md
@@ -70,8 +80,11 @@ grep -q "Production Readiness Review" docs/production-readiness-review.md
 grep -q "Support Packages" docs/support-packages.md
 grep -q "Build Vs Buy" docs/comparisons/build-vs-buy.md
 grep -q "Exactly-Once Webhooks" docs/articles/exactly-once-webhooks.md
+grep -q "Self-Hosted Webhook Gateway Architecture" docs/articles/self-hosted-webhook-gateway-architecture.md
+grep -q "Webhook Security Review Checklist" docs/articles/webhook-security-review-checklist.md
 grep -q "Launch Copy Templates" docs/launch-copy.md
 grep -q "Launch Metrics Plan" docs/launch-metrics.md
+grep -q "Customer Discovery Notes Template" docs/customer-discovery-notes-template.md
 grep -q "Pilot Feedback Template" docs/pilot-feedback-template.md
 grep -q "Roadmap Intake Policy" docs/roadmap-intake-policy.md
 grep -q "Pilot Review Checklist" docs/pilot-review-checklist.md
