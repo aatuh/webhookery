@@ -34,6 +34,13 @@ Several provider behavior claims there were originally captured during planning
 and include May 25, 2026 examples. Treat them as design context until current
 official docs are checked and the maintained docs or implementation are updated.
 
+## Freshness Records
+
+| Area | Owner | Review date | Official sources | Scope checked | Follow-up |
+|------|-------|-------------|------------------|---------------|-----------|
+| Stripe operator and live-proof docs | Codex | 2026-06-04 | <https://docs.stripe.com/webhooks>, <https://docs.stripe.com/webhooks/signature> | Signature verification with exact raw body, timestamp replay context, Stripe CLI test-mode forwarding, retry and manual resend boundaries. | Before v0.2 pilot release evidence or by 2026-09-02. |
+| GitHub operator and live-proof docs | Codex | 2026-06-04 | <https://docs.github.com/en/webhooks/using-webhooks/validating-webhook-deliveries>, <https://docs.github.com/en/webhooks/webhook-events-and-payloads>, <https://docs.github.com/en/webhooks/testing-and-troubleshooting-webhooks/redelivering-webhooks>, <https://docs.github.com/en/webhooks/using-webhooks/best-practices-for-using-webhooks> | `X-Hub-Signature-256` verification with exact raw body, `X-GitHub-Delivery` identity, repository ping/push proof flow, manual redelivery boundaries. | Before v0.2 pilot release evidence or by 2026-09-02. |
+
 ## Official Source Registry
 
 These are the current official source locations to start from. URL availability

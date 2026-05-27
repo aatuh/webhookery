@@ -1,0 +1,61 @@
+{
+  "schema_version": "provider-proof-v1",
+  "project": "webhookery",
+  "no_live_provider_calls": true,
+  "max_age_days": 90,
+  "generated_private_evidence_policy": "completed live-provider proof artifacts stay outside public source control; committed samples must be redacted",
+  "proofs": [
+    {
+      "provider": "stripe",
+      "status": "manual_external",
+      "checked_date": "2026-06-04",
+      "expires_after": "2026-09-02",
+      "operator_guide": "docs/providers/stripe.md",
+      "proof_guide": "docs/live-provider-proof/stripe.md",
+      "redaction_policy": "docs/live-provider-proof/stripe-redaction-policy.md",
+      "sample_report": "docs/live-provider-proof/samples/stripe-incident-report.redacted.md",
+      "official_sources": [
+        "https://docs.stripe.com/webhooks",
+        "https://docs.stripe.com/webhooks/signature"
+      ],
+      "scope_checked": [
+        "Stripe-Signature raw-body verification",
+        "timestamp replay window context",
+        "test-mode CLI forwarding",
+        "provider retry and manual resend boundaries"
+      ],
+      "non_claims": [
+        "not provider certification",
+        "no provider-side completeness guarantee",
+        "no exactly-once delivery claim"
+      ]
+    },
+    {
+      "provider": "github",
+      "status": "manual_external",
+      "checked_date": "2026-06-04",
+      "expires_after": "2026-09-02",
+      "operator_guide": "docs/providers/github.md",
+      "proof_guide": "docs/live-provider-proof/github.md",
+      "redaction_policy": "docs/live-provider-proof/stripe-redaction-policy.md",
+      "sample_report": "docs/live-provider-proof/samples/github-incident-report.redacted.md",
+      "official_sources": [
+        "https://docs.github.com/en/webhooks/using-webhooks/validating-webhook-deliveries",
+        "https://docs.github.com/en/webhooks/webhook-events-and-payloads",
+        "https://docs.github.com/en/webhooks/testing-and-troubleshooting-webhooks/redelivering-webhooks",
+        "https://docs.github.com/en/webhooks/using-webhooks/best-practices-for-using-webhooks"
+      ],
+      "scope_checked": [
+        "X-Hub-Signature-256 raw-body verification",
+        "X-GitHub-Delivery identity",
+        "repository ping and push proof flow",
+        "manual redelivery boundaries"
+      ],
+      "non_claims": [
+        "not provider certification",
+        "no provider-side completeness guarantee",
+        "no exactly-once delivery claim"
+      ]
+    }
+  ]
+}
