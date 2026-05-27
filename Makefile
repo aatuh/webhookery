@@ -8,7 +8,7 @@ GOSEC_VERSION ?= v2.25.0
 GOVULNCHECK_VERSION ?= v1.2.0
 FUZZTIME ?= 5s
 
-.PHONY: help tools fmt lint vuln gosec test test-race coverage openapi-check test-vectors-check provider-conformance-check crypto-inventory deployment-profile-check collections-check documentation-structure-check meta-files-check fuzz-smoke perf-smoke sdk-generate sdk-check docs-check release-acceptance rc-check compose-up compose-down migrate live-postgres-check postgres-integration-test redis-integration-test fast-check finalize clean
+.PHONY: help tools fmt lint vuln gosec test test-race coverage openapi-check test-vectors-check provider-conformance-check crypto-inventory deployment-profile-check collections-check documentation-structure-check static-site-check meta-files-check fuzz-smoke perf-smoke sdk-generate sdk-check docs-check release-acceptance rc-check compose-up compose-down migrate live-postgres-check postgres-integration-test redis-integration-test fast-check finalize clean
 
 help: ## Show help
 	@awk 'BEGIN {FS=":.*## "}; /^[a-zA-Z0-9_.-]+:.*## / { printf "  %-16s %s\n", $$1, $$2 }' $(MAKEFILE_LIST)
@@ -142,6 +142,16 @@ documentation-structure-check: ## Check canonical documentation structure
 	@grep -q "External Review Findings Template" docs/external-review-findings-template.md
 	@grep -q "External Review Accepted Risks" docs/external-review-accepted-risks.md
 
+static-site-check: ## Check static landing page assets
+	@test -f site/index.html
+	@test -f site/styles.css
+	@grep -q "Self-hosted webhook evidence infrastructure" site/index.html
+	@grep -q "Try the self-hosted quickstart" site/index.html
+	@grep -q "Request commercial evaluation" site/index.html
+	@grep -q "Review commercial options" site/index.html
+	@grep -q "No exactly-once delivery claim" site/index.html
+	@! grep -qi "<script" site/index.html
+
 meta-files-check: ## Check governance, licensing, and release-evidence metadata
 	@test -f LICENSE
 	@grep -q "GNU AFFERO GENERAL PUBLIC LICENSE" LICENSE
@@ -219,6 +229,7 @@ docs-check: ## Run non-mutating documentation-adjacent checks
 	@$(MAKE) deployment-profile-check
 	@$(MAKE) collections-check
 	@$(MAKE) documentation-structure-check
+	@$(MAKE) static-site-check
 	@$(MAKE) meta-files-check
 
 compose-up: ## Start local dependencies and API
@@ -248,6 +259,7 @@ fast-check: ## Run non-mutating checks
 	@$(MAKE) deployment-profile-check
 	@$(MAKE) collections-check
 	@$(MAKE) documentation-structure-check
+	@$(MAKE) static-site-check
 	@$(MAKE) meta-files-check
 	@$(MAKE) sdk-check
 
@@ -264,6 +276,7 @@ finalize: ## Thorough validity check
 	@$(MAKE) deployment-profile-check
 	@$(MAKE) collections-check
 	@$(MAKE) documentation-structure-check
+	@$(MAKE) static-site-check
 	@$(MAKE) meta-files-check
 	@$(MAKE) sdk-check
 

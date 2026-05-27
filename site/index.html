@@ -1,0 +1,145 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Webhookery - Self-hosted webhook evidence infrastructure</title>
+  <meta name="description" content="Webhookery is a self-hosted webhook evidence and delivery control plane for durable capture, replay, delivery evidence, and audit trails.">
+  <link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="#top" aria-label="Webhookery home">
+      <span class="brand-mark" aria-hidden="true">W</span>
+      <span>Webhookery</span>
+    </a>
+    <nav aria-label="Primary">
+      <a href="#quickstart">Quickstart</a>
+      <a href="#evidence">Evidence</a>
+      <a href="#commercial">Commercial</a>
+      <a href="#boundaries">Boundaries</a>
+    </nav>
+  </header>
+
+  <main id="top">
+    <section class="hero">
+      <div class="hero-copy">
+        <p class="eyebrow">Release-candidate self-hosted control plane</p>
+        <h1>Self-hosted webhook evidence infrastructure</h1>
+        <p class="lede">Durable capture, replay, delivery evidence, and audit trails for teams that need to prove what happened to webhook events.</p>
+        <div class="actions" aria-label="Primary actions">
+          <a class="button primary" href="../docs/evaluator-quickstart.md">Try the self-hosted quickstart</a>
+          <a class="button secondary" href="../COMMERCIAL.md">Request commercial evaluation</a>
+        </div>
+      </div>
+      <figure class="evidence-visual" aria-label="Webhookery evidence flow">
+        <div class="flow-row verified">
+          <span class="node">Provider event</span>
+          <span class="arrow">verified raw bytes</span>
+          <span class="node">Durable receipt</span>
+        </div>
+        <div class="flow-row routed">
+          <span class="node">Route version</span>
+          <span class="arrow">payload snapshot</span>
+          <span class="node">Signed delivery</span>
+        </div>
+        <div class="flow-row audited">
+          <span class="node">Retry / replay</span>
+          <span class="arrow">reason captured</span>
+          <span class="node">Audit proof</span>
+        </div>
+        <figcaption>Evidence survives delivery failure, replay, retention, and review.</figcaption>
+      </figure>
+    </section>
+
+    <section class="band" id="evidence">
+      <div class="section-head">
+        <p class="eyebrow">What Webhookery proves</p>
+        <h2>Designed around inspectable webhook history</h2>
+      </div>
+      <div class="grid three">
+        <article>
+          <h3>Durable capture</h3>
+          <p>Inbound success means raw request evidence and verification metadata were durably recorded.</p>
+        </article>
+        <article>
+          <h3>Delivery control</h3>
+          <p>Routes, retries, payload snapshots, delivery attempts, DLQ, and replay keep downstream outcomes visible.</p>
+        </article>
+        <article>
+          <h3>Audit evidence</h3>
+          <p>Audit-chain verification, retention metadata, and export packages help reviewers reconstruct decisions later.</p>
+        </article>
+      </div>
+    </section>
+
+    <section class="band muted">
+      <div class="section-head">
+        <p class="eyebrow">How it works</p>
+        <h2>Receive, verify, store, route, deliver, replay, audit</h2>
+      </div>
+      <ol class="steps">
+        <li><strong>Receive</strong><span>Preserve raw bytes and headers before trusting content.</span></li>
+        <li><strong>Verify</strong><span>Apply provider-specific signatures and timestamp rules.</span></li>
+        <li><strong>Store</strong><span>Commit receipts, payload hashes, dedupe records, and audit events.</span></li>
+        <li><strong>Deliver</strong><span>Send signed payload snapshots with retry and DLQ evidence.</span></li>
+        <li><strong>Recover</strong><span>Replay or reconcile where provider APIs make recovery possible.</span></li>
+      </ol>
+    </section>
+
+    <section class="band split" id="quickstart">
+      <div>
+        <p class="eyebrow">Evaluator path</p>
+        <h2>Run the evidence loop locally</h2>
+        <p>Use the deterministic local demo to see valid ingest, invalid signature quarantine, retry, DLQ release, replay, retention, and audit-chain verification.</p>
+      </div>
+      <div class="command-box" aria-label="Quickstart commands">
+        <code>docker compose up -d postgres</code>
+        <code>export WEBHOOKERY_TEST_DATABASE_URL=...</code>
+        <code>examples/webhook-evidence-demo/run.sh</code>
+        <code>make rc-check</code>
+      </div>
+    </section>
+
+    <section class="band" id="commercial">
+      <div class="section-head">
+        <p class="eyebrow">Commercial path</p>
+        <h2>AGPL public project, commercial exceptions available</h2>
+      </div>
+      <div class="grid two">
+        <article>
+          <h3>Self-host under AGPL</h3>
+          <p>Use the public repository when AGPL obligations fit your deployment and distribution model.</p>
+          <a href="../LICENSE">Read the license</a>
+        </article>
+        <article>
+          <h3>Use commercially</h3>
+          <p>Commercial evaluation, release evidence packages, production-readiness reviews, and support are available by written agreement.</p>
+          <a href="../docs/commercial-evaluation.md">Review commercial options</a>
+        </article>
+      </div>
+    </section>
+
+    <section class="band muted" id="boundaries">
+      <div class="section-head">
+        <p class="eyebrow">What this is not</p>
+        <h2>Honest boundaries are part of the product</h2>
+      </div>
+      <ul class="boundaries">
+        <li>No exactly-once delivery claim.</li>
+        <li>No provider-side event completeness guarantee.</li>
+        <li>No claim that downstream business processing succeeded.</li>
+        <li>No compliance certification or legal evidence certification.</li>
+        <li>No live-provider calls in local release acceptance.</li>
+      </ul>
+    </section>
+  </main>
+
+  <footer>
+    <span>Webhookery</span>
+    <a href="../docs/release-evidence-template.md">Release evidence</a>
+    <a href="../docs/security-promise.md">Security promise</a>
+    <a href="../docs/production-readiness-review.md">Production-readiness review</a>
+  </footer>
+</body>
+</html>
