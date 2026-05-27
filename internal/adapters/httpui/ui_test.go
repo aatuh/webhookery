@@ -21,4 +21,12 @@ func TestIndexAvoidsPersistentTokenStorage(t *testing.T) {
 	if !strings.Contains(body, "/v1/replay-jobs") || !strings.Contains(body, "/v1/ops/metrics") || !strings.Contains(body, "/v1/audit-chain/head") || !strings.Contains(body, "/v1/notification-channels") || !strings.Contains(body, "/v1/siem-sinks") {
 		t.Fatal("operator UI should expose replay, ops, audit chain, and signal egress surfaces")
 	}
+	for _, want := range []string{"/v1/incidents", "/timeline", "renderEventSearchControls", "showIncidentReport"} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("operator UI missing investigation surface %q", want)
+		}
+	}
+	if strings.Contains(body, "report_markdown.innerHTML") || strings.Contains(body, "markdown.innerHTML") {
+		t.Fatal("incident markdown must not be injected as HTML")
+	}
 }
