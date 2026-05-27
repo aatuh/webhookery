@@ -53,6 +53,7 @@ owner document for a topic and linking to it from secondary docs.
 | `docs/release-evidence-sample.md` | Release managers, evaluators, security reviewers | Public example of a completed release evidence packet. | Reader aid only. Keep required fields in `docs/release-evidence-template.md`. |
 | `docs/production-rc-checklist.md` | Release managers, operators | Ordered release-candidate readiness checklist for controlled self-hosted adoption. | RC checklist. Link to canonical operations docs instead of duplicating runbooks. |
 | `docs/releases/v0.1.0-rc1.md` | Evaluators, release managers, commercial reviewers | First release-candidate notes, implemented behavior, limitations, and validation commands. | Release-specific narrative. Keep canonical release gates in `docs/release-evidence-template.md`. |
+| `docs/releases/v0.2.0-pilot.md` | Evaluators, release managers, commercial reviewers | Pilot-readiness checklist, launch blockers, known limitations, and required pre-tag gates. | Pilot checklist. It is not a tagged release note or production certification. |
 | `RELEASE_EVIDENCE.md` | Release readers | Short router to the release evidence template. | Current release evidence pointer, not a parallel checklist. |
 | `SECURITY.md` | Security researchers | Vulnerability reporting policy and sensitive-data handling. | Reporting process. Keep project architecture details elsewhere. |
 | `CONTRIBUTING.md` | Contributors | Contribution policy, checks, and sensitive-data rules. | Contribution entry point. Link to canonical docs for details. |
@@ -75,6 +76,7 @@ owner document for a topic and linking to it from secondary docs.
 | `docs/launch-metrics.md` | Maintainers, commercial operators | Privacy-safe launch measurement plan focused on qualified evaluations. | Metrics plan. Does not add runtime analytics. |
 | `docs/customer-discovery-notes-template.md` | Maintainers, commercial operators | Sanitized early discovery-call template before a formal pilot. | Discovery notes template. Do not store secrets or customer data. |
 | `docs/pilot-feedback-template.md` | Maintainers, commercial operators | Sanitized template for evaluator and pilot feedback. | Feedback template. Do not store secrets or customer data. |
+| `.github/ISSUE_TEMPLATE/evaluator-feedback.yml` | Evaluators, pilot users, maintainers | Public issue form for sanitized evaluator and pilot feedback. | Public intake template. It must reject secrets, raw payloads, and customer data. |
 | `docs/roadmap-intake-policy.md` | Maintainers | Policy for classifying pilot feedback into docs, bugs, paid work, roadmap, future, or out-of-scope. | Roadmap discipline. Does not override product invariants. |
 | `docs/pilot-review-checklist.md` | Maintainers | Checklist for reviewing pilot findings and choosing the next engineering slice. | Review checklist. Keep production claims evidence-backed. |
 | `TRADEMARKS.md` | Forks, redistributors, commercial users | Naming and trademark guidance. | Trademark policy only. |

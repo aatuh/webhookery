@@ -1,0 +1,121 @@
+name: Evaluator or pilot feedback
+description: Report sanitized evaluator or pilot feedback without secrets.
+title: "[feedback]: "
+labels:
+  - evaluator-feedback
+body:
+  - type: markdown
+    attributes:
+      value: |
+        No secrets: do not include API keys, webhook secrets, bearer tokens, session cookies, private keys, provider credentials, database URLs with passwords, raw signatures, raw payload bodies, customer data, or exploit payloads. Use placeholders and redacted logs only.
+  - type: input
+    id: version
+    attributes:
+      label: Webhookery version or commit
+      description: Use a tag, commit SHA, or branch name.
+      placeholder: v0.2.0-pilot or abc1234
+    validations:
+      required: true
+  - type: dropdown
+    id: deployment_mode
+    attributes:
+      label: Deployment mode
+      options:
+        - local docker compose
+        - helm
+        - kubernetes manifests
+        - terraform helm profile
+        - other self-hosted
+    validations:
+      required: true
+  - type: dropdown
+    id: provider_tested
+    attributes:
+      label: Provider tested
+      options:
+        - Stripe
+        - GitHub
+        - Shopify
+        - Slack
+        - generic HMAC
+        - generic JWT
+        - CloudEvents
+        - internal producer
+        - not provider-specific
+    validations:
+      required: true
+  - type: input
+    id: quickstart_step
+    attributes:
+      label: Quickstart or guide step reached
+      placeholder: docs/evaluator-quickstart.md step 3
+    validations:
+      required: true
+  - type: textarea
+    id: failure_point
+    attributes:
+      label: Failure point or friction
+      description: Describe what blocked or slowed evaluation. Do not include secrets or raw payloads.
+      placeholder: The event reached DLQ, but I could not find which command generated the incident report.
+    validations:
+      required: true
+  - type: textarea
+    id: expected_behavior
+    attributes:
+      label: Expected behavior
+      description: What did you expect Webhookery or the docs to do?
+    validations:
+      required: true
+  - type: textarea
+    id: actual_behavior
+    attributes:
+      label: Actual behavior
+      description: What happened instead? Use IDs and hashes instead of raw payload bodies.
+    validations:
+      required: true
+  - type: textarea
+    id: sanitized_logs
+    attributes:
+      label: Sanitized logs or evidence references
+      description: Include redacted command output, status codes, hashes, or paths. Omit secrets, signatures, raw bodies, and customer data.
+      placeholder: |
+        make docs-check: passed
+        event_id: evt_redacted
+        raw_payload_sha256: sha256:redacted
+  - type: dropdown
+    id: commercial_relevance
+    attributes:
+      label: Commercial relevance
+      options:
+        - evaluating paid pilot
+        - evaluating commercial license exception
+        - evaluating production-readiness review
+        - open-source evaluation only
+        - unsure
+    validations:
+      required: true
+  - type: dropdown
+    id: roadmap_category
+    attributes:
+      label: Roadmap intake category
+      description: Choose the closest category from docs/roadmap-intake-policy.md.
+      options:
+        - docs gap
+        - bug
+        - evaluator friction
+        - missing provider compatibility
+        - production hardening
+        - paid custom integration
+        - commercial packaging
+        - general roadmap candidate
+        - enterprise/future
+        - out of scope
+    validations:
+      required: true
+  - type: checkboxes
+    id: no_secrets_confirmation
+    attributes:
+      label: No-secrets confirmation
+      options:
+        - label: I confirm this issue contains no secrets, raw payload bodies, raw signatures, private customer data, or production database URLs.
+          required: true
