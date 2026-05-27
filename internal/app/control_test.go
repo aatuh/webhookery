@@ -87,7 +87,7 @@ func TestControlServiceIncidentLifecycleScopesAndRedactsReports(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, forbidden := range []string{"raw-body-secret", "whsec_test", "sk_test_secret"} {
+	for _, forbidden := range []string{"raw-body-secret", "whsec_test", "sk_test_secret", "Stripe-Signature", "v1=secret", "Bearer secret-token", "private-key-secret"} {
 		if strings.Contains(string(raw), forbidden) {
 			t.Fatalf("incident report leaked sensitive value %q in %s", forbidden, raw)
 		}

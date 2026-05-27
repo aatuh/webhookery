@@ -3,6 +3,7 @@ package worker
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 )
 
@@ -192,6 +193,26 @@ func TestRunOnceReportRecordsPhaseResults(t *testing.T) {
 	metricsResult, ok := report.Result(PhaseMetrics)
 	if !ok || metricsResult.Err != nil {
 		t.Fatalf("expected successful metrics phase result, got result=%+v ok=%v", metricsResult, ok)
+	}
+}
+
+func TestRunReportErrorRedactsUnderlyingPhaseDetails(t *testing.T) {
+	secretErr := errors.New("backend failed with whsec_secret and raw-body-secret")
+	var report RunReport
+	report.add(PhaseDelivery, secretErr)
+
+	err := report.Err()
+	if err == nil {
+		t.Fatal("expected phase error")
+	}
+	if !errors.Is(err, secretErr) {
+		t.Fatalf("phase error should preserve unwrap semantics, got %v", err)
+	}
+	if strings.Contains(err.Error(), "whsec_secret") || strings.Contains(err.Error(), "raw-body-secret") {
+		t.Fatalf("worker phase error leaked underlying sensitive detail: %v", err)
+	}
+	if !strings.Contains(err.Error(), "delivery phase failed") {
+		t.Fatalf("worker phase error should identify failed phase without details: %v", err)
 	}
 }
 

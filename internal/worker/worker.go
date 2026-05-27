@@ -162,7 +162,7 @@ type phaseError struct {
 }
 
 func (e phaseError) Error() string {
-	return string(e.phase) + " phase: " + e.err.Error()
+	return string(e.phase) + " phase failed"
 }
 
 func (e phaseError) Unwrap() error {

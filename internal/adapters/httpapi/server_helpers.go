@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"net/netip"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -209,19 +210,37 @@ func formatPrometheus(metrics domain.OpsMetrics) string {
 	fmt.Fprintf(&b, "# HELP webhookery_audit_chain_last_anchor_age_seconds Age of the newest audit chain anchor.\n")
 	fmt.Fprintf(&b, "# TYPE webhookery_audit_chain_last_anchor_age_seconds gauge\n")
 	fmt.Fprintf(&b, "webhookery_audit_chain_last_anchor_age_seconds %d\n", metrics.AuditChainLastAnchorAgeSec)
-	for state, count := range metrics.DeliveriesByState {
-		fmt.Fprintf(&b, "webhookery_deliveries{state=%q} %d\n", state, count)
-	}
-	for state, count := range metrics.ReplayJobsByState {
-		fmt.Fprintf(&b, "webhookery_replay_jobs{state=%q} %d\n", state, count)
-	}
-	for state, count := range metrics.ReconciliationJobsByState {
-		fmt.Fprintf(&b, "webhookery_reconciliation_jobs{state=%q} %d\n", state, count)
-	}
-	for outcome, count := range metrics.ReconciliationItemsByOutcome {
-		fmt.Fprintf(&b, "webhookery_reconciliation_items{outcome=%q} %d\n", outcome, count)
-	}
+	writeMetricCounts(&b, "webhookery_deliveries", "state", metrics.DeliveriesByState)
+	writeMetricCounts(&b, "webhookery_replay_jobs", "state", metrics.ReplayJobsByState)
+	writeMetricCounts(&b, "webhookery_reconciliation_jobs", "state", metrics.ReconciliationJobsByState)
+	writeMetricCounts(&b, "webhookery_reconciliation_items", "outcome", metrics.ReconciliationItemsByOutcome)
 	return b.String()
+}
+
+func writeMetricCounts(b *strings.Builder, metricName, labelName string, values map[string]int64) {
+	counts := map[string]int64{}
+	for value, count := range values {
+		counts[safePublicMetricLabel(value)] += count
+	}
+	labels := make([]string, 0, len(counts))
+	for label := range counts {
+		labels = append(labels, label)
+	}
+	sort.Strings(labels)
+	for _, label := range labels {
+		fmt.Fprintf(b, "%s{%s=%q} %d\n", metricName, labelName, label, counts[label])
+	}
+}
+
+func safePublicMetricLabel(value string) string {
+	switch value {
+	case "active", "canceled", "captured", "completed", "dead_lettered", "failed", "in_progress",
+		"matched", "missing", "open", "paused", "pending", "pending_approval", "redelivery_requested", "released",
+		"running", "scheduled", "succeeded", "unknown", "unrecoverable":
+		return value
+	default:
+		return "unknown"
+	}
 }
 
 func publicSource(source domain.Source) map[string]any {

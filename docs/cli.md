@@ -134,6 +134,9 @@ contracts. Keep them out of commits unless deliberately sanitized.
 
 Evidence exports with payloads are sensitive. Use scoped authorization, private
 file permissions, and a recorded reason.
+Support artifacts should omit raw payload bodies, webhook signatures, bearer
+tokens, private keys, and customer data unless elevated raw-payload access and
+a private handling path are explicitly approved.
 
 ## Operations, Alerts, And Signal Egress
 
