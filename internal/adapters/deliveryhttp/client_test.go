@@ -77,6 +77,23 @@ func TestSafeDoErrorDoesNotLeakCustomerURLTokens(t *testing.T) {
 	}
 }
 
+func TestSafeDoErrorHandlesTimeoutStormWithoutLeakingReceiver(t *testing.T) {
+	timeoutErrors := []error{
+		context.DeadlineExceeded,
+		errors.New(`Post "https://receiver.example/hook?token=secret-token": context deadline exceeded`),
+		errors.New(`Post "https://receiver.example/hook": net/http: request canceled while waiting for connection`),
+	}
+	for _, timeoutErr := range timeoutErrors {
+		failureClass, err := safeDoError(timeoutErr)
+		if failureClass != "network_error" {
+			t.Fatalf("expected network_error, got %q", failureClass)
+		}
+		if err == nil || strings.Contains(err.Error(), "secret-token") || strings.Contains(err.Error(), "receiver.example") {
+			t.Fatalf("timeout storm error leaked receiver detail: %v", err)
+		}
+	}
+}
+
 func TestClientRejectsInvalidMTLSCertificatePair(t *testing.T) {
 	client := Client{
 		Secret:            []byte("secret"),

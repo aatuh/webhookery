@@ -4,12 +4,15 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -33,13 +36,17 @@ func MigrateUp(ctx context.Context, databaseURL, dir string) error {
 		}
 		version := strings.TrimSuffix(filepath.Base(file), ".up.sql")
 		sum := checksum(body)
-		var exists bool
-		err = pool.QueryRow(ctx, "SELECT EXISTS (SELECT 1 FROM schema_migrations WHERE version=$1 AND checksum=$2)", version, sum).Scan(&exists)
-		if err != nil && version != "001_init" {
-			return fmt.Errorf("check migration %s: %w", version, err)
+		appliedChecksum, err := appliedMigrationChecksum(ctx, pool, version)
+		if err != nil {
+			if version != "001_init" || !isUndefinedTable(err) {
+				return fmt.Errorf("check migration %s: %w", version, err)
+			}
 		}
-		if exists {
-			continue
+		if appliedChecksum != "" {
+			if appliedChecksum == sum {
+				continue
+			}
+			return fmt.Errorf("check migration %s: checksum mismatch", version)
 		}
 		tx, err := pool.Begin(ctx)
 		if err != nil {
@@ -49,7 +56,7 @@ func MigrateUp(ctx context.Context, databaseURL, dir string) error {
 			_ = tx.Rollback(ctx)
 			return fmt.Errorf("apply migration %s: %w", version, err)
 		}
-		if _, err := tx.Exec(ctx, "INSERT INTO schema_migrations(version, checksum) VALUES($1, $2) ON CONFLICT (version) DO UPDATE SET checksum = EXCLUDED.checksum, applied_at = now()", version, sum); err != nil {
+		if _, err := tx.Exec(ctx, "INSERT INTO schema_migrations(version, checksum) VALUES($1, $2)", version, sum); err != nil {
 			_ = tx.Rollback(ctx)
 			return fmt.Errorf("record migration %s: %w", version, err)
 		}
@@ -58,6 +65,20 @@ func MigrateUp(ctx context.Context, databaseURL, dir string) error {
 		}
 	}
 	return nil
+}
+
+func appliedMigrationChecksum(ctx context.Context, pool *pgxpool.Pool, version string) (string, error) {
+	var appliedChecksum string
+	err := pool.QueryRow(ctx, "SELECT checksum FROM schema_migrations WHERE version=$1", version).Scan(&appliedChecksum)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", nil
+	}
+	return appliedChecksum, err
+}
+
+func isUndefinedTable(err error) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == "42P01"
 }
 
 func checksum(body []byte) string {

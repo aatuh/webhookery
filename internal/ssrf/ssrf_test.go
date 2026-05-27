@@ -2,7 +2,9 @@ package ssrf
 
 import (
 	"context"
+	"errors"
 	"net/netip"
+	"strings"
 	"testing"
 )
 
@@ -43,5 +45,26 @@ func TestValidateURLAllowsPublicHTTPS(t *testing.T) {
 	result := validator.Validate(context.Background(), "https://customer.example.com/webhooks", DefaultPolicy())
 	if !result.Allowed {
 		t.Fatalf("expected public https URL to be allowed: %v", result.BlockedReasons)
+	}
+}
+
+func TestPinnedDialerBlocksDNSRebindingAfterInitialValidation(t *testing.T) {
+	initial := Validator{Resolver: StaticResolver{
+		"customer.example.com": {netip.MustParseAddr("93.184.216.34")},
+	}}
+	if result := initial.Validate(context.Background(), "https://customer.example.com/webhooks", DefaultPolicy()); !result.Allowed {
+		t.Fatalf("expected initial endpoint validation to allow public address: %+v", result)
+	}
+
+	dialer := PinnedDialer{Resolver: StaticResolver{
+		"customer.example.com": {netip.MustParseAddr("10.0.0.10")},
+	}, Policy: DefaultPolicy()}
+	_, err := dialer.DialContext(context.Background(), "tcp", "customer.example.com:443")
+	var policyErr PolicyError
+	if err == nil || !strings.Contains(err.Error(), "blocked_ip_range") {
+		t.Fatalf("expected delivery-time rebinding block, got %v", err)
+	}
+	if !errors.As(err, &policyErr) {
+		t.Fatalf("expected typed policy error, got %T", err)
 	}
 }

@@ -86,10 +86,10 @@ func TestPostgresWorkerLeaseRecoveryAndLivePriority(t *testing.T) {
 	defer store.Close()
 
 	now := time.Date(2026, 5, 26, 16, 0, 0, 0, time.UTC)
-	if _, err := store.pool.Exec(ctx, `UPDATE outbox SET state='completed', locked_by=NULL, lock_expires_at=NULL WHERE tenant_id LIKE 'ten_it_%' AND state <> 'completed'`); err != nil {
+	if _, err := store.pool.Exec(ctx, `UPDATE outbox SET state='completed', locked_by=NULL, lock_expires_at=NULL WHERE (tenant_id LIKE 'ten_it_%' OR tenant_id LIKE 'ten_rc_%') AND state <> 'completed'`); err != nil {
 		t.Fatalf("clear prior integration outbox work: %v", err)
 	}
-	if _, err := store.pool.Exec(ctx, `UPDATE deliveries SET state='succeeded', locked_by=NULL, lock_expires_at=NULL WHERE tenant_id LIKE 'ten_it_%' AND state IN ('scheduled','in_progress')`); err != nil {
+	if _, err := store.pool.Exec(ctx, `UPDATE deliveries SET state='succeeded', locked_by=NULL, lock_expires_at=NULL WHERE (tenant_id LIKE 'ten_it_%' OR tenant_id LIKE 'ten_rc_%') AND state IN ('scheduled','in_progress')`); err != nil {
 		t.Fatalf("clear prior integration delivery work: %v", err)
 	}
 	control := app.NewControlService(store, ssrf.Validator{Resolver: ssrf.StaticResolver{"receiver.example.com": {netip.MustParseAddr("93.184.216.34")}}})
@@ -556,6 +556,17 @@ func TestPostgresEvidenceExportIncludesBodyArtifactsAndProofs(t *testing.T) {
 func TestPostgresAuditChainBackfillIsBoundedAndIdempotent(t *testing.T) {
 	ctx, store, _ := openPostgresIntegrationStore(t)
 	defer store.Close()
+	for _, prefix := range []string{"ten_it_backfill_%", "ten_it_migration_%"} {
+		if _, err := store.pool.Exec(ctx, `DELETE FROM audit_chain_entries WHERE tenant_id LIKE $1`, prefix); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := store.pool.Exec(ctx, `DELETE FROM audit_chain_heads WHERE tenant_id LIKE $1`, prefix); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := store.pool.Exec(ctx, `DELETE FROM audit_events WHERE tenant_id LIKE $1`, prefix); err != nil {
+			t.Fatal(err)
+		}
+	}
 
 	suffix := time.Now().UTC().Format("150405.000000000")
 	tenantID := "ten_it_backfill_" + suffix
@@ -645,6 +656,22 @@ func TestPostgresControlResourcesTenantIsolationAndEvidence(t *testing.T) {
 
 	suffix := time.Now().UTC().Format("150405.000000000")
 	other := authz.Actor{ID: "usr_it_other_" + suffix, TenantID: "ten_it_other_" + suffix, Role: authz.RoleOwner, Scopes: []string{"*"}}
+	if _, err := store.CreateAPIKey(ctx, app.APIKeyCreateInput{
+		Key: domain.APIKey{
+			TenantID: other.TenantID,
+			UserID:   other.ID,
+			Name:     "integration other owner",
+			Prefix:   "it-other",
+			Last4:    "test",
+			Hash:     app.HashToken("integration-other-" + suffix),
+			Scopes:   []string{"*"},
+			State:    domain.StateActive,
+		},
+		Role:    authz.RoleOwner,
+		ActorID: other.ID,
+	}); err != nil {
+		t.Fatal(err)
+	}
 	control := app.NewControlService(store, ssrf.Validator{Resolver: ssrf.StaticResolver{
 		"receiver.example.com": {netip.MustParseAddr("93.184.216.34")},
 		"signals.example.com":  {netip.MustParseAddr("93.184.216.34")},
@@ -670,7 +697,7 @@ func TestPostgresControlResourcesTenantIsolationAndEvidence(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	channel, _, err := control.CreateNotificationChannel(ctx, actor, app.CreateNotificationChannelRequest{Name: "tenant notification", URL: "https://signals.example.com/notify", SigningSecret: "notify-secret"})
+	channel, _, err := control.CreateNotificationChannel(ctx, actor, app.CreateNotificationChannelRequest{Name: "tenant notification", URL: "https://signals.example.com/notify", SigningSecret: "notify-secret-value"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -678,7 +705,7 @@ func TestPostgresControlResourcesTenantIsolationAndEvidence(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	sink, _, err := control.CreateSIEMSink(ctx, actor, app.CreateSIEMSinkRequest{Name: "tenant siem", URL: "https://signals.example.com/siem", SigningSecret: "siem-secret"})
+	sink, _, err := control.CreateSIEMSink(ctx, actor, app.CreateSIEMSinkRequest{Name: "tenant siem", URL: "https://signals.example.com/siem", SigningSecret: "siem-secret-value"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -700,9 +727,11 @@ func TestPostgresControlResourcesTenantIsolationAndEvidence(t *testing.T) {
 		t.Fatal(err)
 	}
 	retryName := "tenant retry updated"
-	if _, err := control.UpdateRetryPolicy(ctx, actor, retryPolicy.ID, app.UpdateRetryPolicyRequest{Name: &retryName, Reason: "integration update"}); err != nil {
+	updatedRetryPolicy, err := control.UpdateRetryPolicy(ctx, actor, retryPolicy.ID, app.UpdateRetryPolicyRequest{Name: &retryName, Reason: "integration update"})
+	if err != nil {
 		t.Fatal(err)
 	}
+	retryPolicy = updatedRetryPolicy
 	alertName := "tenant alert updated"
 	if _, err := control.UpdateAlertRule(ctx, actor, alert.ID, app.UpdateAlertRuleRequest{Name: &alertName, Reason: "integration update"}); err != nil {
 		t.Fatal(err)
@@ -789,6 +818,25 @@ func TestPostgresMigrationsAreIdempotentAndEnforceKeyConstraints(t *testing.T) {
 		}
 	}
 
+	checksumDrillSuffix := strings.ReplaceAll(time.Now().UTC().Format("150405.000000000"), ".", "_")
+	checksumDrillDir := t.TempDir()
+	checksumDrillVersion := "999_checksum_drill_" + checksumDrillSuffix
+	checksumDrillFile := filepath.Join(checksumDrillDir, checksumDrillVersion+".up.sql")
+	checksumDrillBody := "CREATE TABLE IF NOT EXISTS checksum_drill_" + checksumDrillSuffix + "(id integer);\n"
+	if err := os.WriteFile(checksumDrillFile, []byte(checksumDrillBody), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := MigrateUp(ctx, os.Getenv("WEBHOOKERY_TEST_DATABASE_URL"), checksumDrillDir); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(checksumDrillFile, []byte(checksumDrillBody+"-- altered after apply\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	err = MigrateUp(ctx, os.Getenv("WEBHOOKERY_TEST_DATABASE_URL"), checksumDrillDir)
+	if err == nil || !strings.Contains(err.Error(), "checksum mismatch") {
+		t.Fatalf("expected migration checksum mismatch, got %v", err)
+	}
+
 	suffix := time.Now().UTC().Format("150405.000000000")
 	tenantID := "ten_it_migration_" + suffix
 	if _, err := store.pool.Exec(ctx, `INSERT INTO tenants(id, name) VALUES($1, 'migration constraints') ON CONFLICT (id) DO NOTHING`, tenantID); err != nil {
@@ -844,13 +892,13 @@ func TestPostgresMigrationsAreIdempotentAndEnforceKeyConstraints(t *testing.T) {
 
 	fingerprint := "sha256:migration-fingerprint-" + suffix
 	if _, err := store.pool.Exec(ctx, `
-		INSERT INTO producer_mtls_identities(id, tenant_id, name, certificate_fingerprint_sha256, subject, not_before, not_after, state)
+		INSERT INTO producer_mtls_identities(id, tenant_id, name, certificate_fingerprint_sha256, cert_subject, not_before, not_after, state)
 		VALUES($1,$2,'migration mTLS',$3,'CN=migration',now(),now() + interval '1 hour','active')`,
 		"mtls_it_migration_a_"+suffix, tenantID, fingerprint); err != nil {
 		t.Fatal(err)
 	}
 	_, err = store.pool.Exec(ctx, `
-		INSERT INTO producer_mtls_identities(id, tenant_id, name, certificate_fingerprint_sha256, subject, not_before, not_after, state)
+		INSERT INTO producer_mtls_identities(id, tenant_id, name, certificate_fingerprint_sha256, cert_subject, not_before, not_after, state)
 		VALUES($1,$2,'migration mTLS duplicate',$3,'CN=migration',now(),now() + interval '1 hour','active')`,
 		"mtls_it_migration_b_"+suffix, tenantID, fingerprint)
 	expectPostgresSQLFailure(t, err, "duplicate producer mTLS fingerprint")
@@ -1027,6 +1075,22 @@ func openPostgresIntegrationStore(t *testing.T) (context.Context, *Store, authz.
 	}
 	suffix := time.Now().UTC().Format("150405.000000000")
 	actor := authz.Actor{ID: "usr_it_" + suffix, TenantID: "ten_it_" + suffix, Role: authz.RoleOwner, Scopes: []string{"*"}}
+	if _, err := store.CreateAPIKey(ctx, app.APIKeyCreateInput{
+		Key: domain.APIKey{
+			TenantID: actor.TenantID,
+			UserID:   actor.ID,
+			Name:     "integration owner",
+			Prefix:   "it-owner",
+			Last4:    "test",
+			Hash:     app.HashToken("integration-owner-" + suffix),
+			Scopes:   []string{"*"},
+			State:    domain.StateActive,
+		},
+		Role:    authz.RoleOwner,
+		ActorID: actor.ID,
+	}); err != nil {
+		t.Fatal(err)
+	}
 	return ctx, store, actor
 }
 

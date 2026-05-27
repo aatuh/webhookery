@@ -67,6 +67,8 @@ type StoreOptions struct {
 	ObjectBucket   string
 }
 
+var errObjectStoreReadFailed = errors.New("object store read failed")
+
 func New(ctx context.Context, databaseURL string, box SecretBox) (*Store, error) {
 	return NewWithOptions(ctx, databaseURL, box, StoreOptions{RawStorageMode: domain.RawStoragePostgres})
 }
@@ -159,17 +161,19 @@ func (s *Store) BackfillAuditChain(ctx context.Context, workerID string, limit i
 		return result, err
 	}
 	var tenantIDs []string
-	defer rows.Close()
 	for rows.Next() {
 		var tenantID string
 		if err := rows.Scan(&tenantID); err != nil {
+			rows.Close()
 			return result, err
 		}
 		tenantIDs = append(tenantIDs, tenantID)
 	}
 	if err := rows.Err(); err != nil {
+		rows.Close()
 		return result, err
 	}
+	rows.Close()
 	remaining := limit
 	now := time.Now().UTC()
 	for _, tenantID := range tenantIDs {
@@ -216,14 +220,23 @@ func (s *Store) backfillTenantAuditChain(ctx context.Context, tx pgx.Tx, tenantI
 	if err != nil {
 		return 0, err
 	}
-	defer rows.Close()
-	lastAuditEventID := ""
-	backfilled := 0
+	var events []domain.AuditEvent
 	for rows.Next() {
 		var event domain.AuditEvent
 		if err := rows.Scan(&event.ID, &event.TenantID, &event.ActorID, &event.Action, &event.Resource, &event.ResourceID, &event.Reason, &event.OccurredAt); err != nil {
+			rows.Close()
 			return 0, err
 		}
+		events = append(events, event)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return 0, err
+	}
+	rows.Close()
+	lastAuditEventID := ""
+	backfilled := 0
+	for _, event := range events {
 		sequence++
 		entry, err := auditchain.ComputeEntry(mustID("ace"), event, sequence, previousHash, domain.AuditChainEntrySourceBackfill, now)
 		if err != nil {
@@ -235,9 +248,6 @@ func (s *Store) backfillTenantAuditChain(ctx context.Context, tx pgx.Tx, tenantI
 		previousHash = entry.ChainHash
 		lastAuditEventID = event.ID
 		backfilled++
-	}
-	if err := rows.Err(); err != nil {
-		return 0, err
 	}
 	if lastAuditEventID != "" {
 		if _, err := tx.Exec(ctx, `UPDATE audit_chain_heads SET sequence=$2, chain_hash=$3, last_audit_event_id=$4, updated_at=now() WHERE tenant_id=$1`, tenantID, sequence, previousHash, lastAuditEventID); err != nil {
@@ -2583,7 +2593,7 @@ func (s *Store) GetRawPayload(ctx context.Context, tenantID, eventID, actorID st
 			if errors.Is(err, blobstore.ErrNotFound) {
 				return domain.RawPayload{}, app.ErrGone
 			}
-			return domain.RawPayload{}, err
+			return domain.RawPayload{}, errObjectStoreReadFailed
 		}
 		if domain.HashSHA256(body) != raw.SHA256 {
 			return domain.RawPayload{}, errors.New("raw payload object hash mismatch")
@@ -5182,7 +5192,7 @@ func (s *Store) DownloadAuditExport(ctx context.Context, tenantID, exportID, act
 			if errors.Is(err, blobstore.ErrNotFound) {
 				return app.EvidenceExportDownload{}, app.ErrGone
 			}
-			return app.EvidenceExportDownload{}, err
+			return app.EvidenceExportDownload{}, errObjectStoreReadFailed
 		}
 	}
 	if len(body) == 0 {
@@ -7081,7 +7091,7 @@ func (s *Store) rawPayloadsJSONLForExport(ctx context.Context, tenantID string, 
 				if errors.Is(err, blobstore.ErrNotFound) {
 					bodyAvailable = false
 				} else {
-					return nil, err
+					return nil, errObjectStoreReadFailed
 				}
 			} else {
 				raw.Body = body
