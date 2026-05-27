@@ -7,6 +7,7 @@ cd "$repo_root"
 make fast-check
 
 test -f LICENSE
+test -f CHANGELOG.md
 grep -q "GNU AFFERO GENERAL PUBLIC LICENSE" LICENSE
 test -f COMMERCIAL.md
 test -f SECURITY.md
@@ -16,6 +17,7 @@ test -f GOVERNANCE.md
 test -f TRADEMARKS.md
 test -f RELEASE_EVIDENCE.md
 test -f docs/release-evidence-template.md
+test -f docs/releases/v0.1.0-rc1.md
 test -f docs/security-review-package.md
 test -f docs/external-review-scope.md
 test -f docs/external-review-findings-template.md
@@ -25,6 +27,12 @@ test -f docs/provider-conformance.manifest.json
 test -f .dockerignore
 test -f .golangci.yml
 grep -q "AGPL-3.0-only" COMMERCIAL.md
+grep -q "v0.1.0-rc1" CHANGELOG.md
+grep -q "release candidate" docs/releases/v0.1.0-rc1.md
+grep -q "make rc-check" docs/releases/v0.1.0-rc1.md
+grep -q "fake/local providers" docs/releases/v0.1.0-rc1.md
+grep -q "exactly-once delivery" docs/releases/v0.1.0-rc1.md
+grep -q "provider-side event completeness" docs/releases/v0.1.0-rc1.md
 grep -q "AGPL-3.0-only" CONTRIBUTING.md
 grep -q "https://www.linkedin.com/in/aatu-harju" SECURITY.md
 grep -q "webhook secrets" SECURITY.md

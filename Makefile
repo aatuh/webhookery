@@ -98,7 +98,9 @@ collections-check: ## Check committed API client collections
 	@grep -q "/v1/audit-chain:verify" collections/bruno/Webhookery/audit-chain-verify.bru
 
 documentation-structure-check: ## Check canonical documentation structure
+	@test -f CHANGELOG.md
 	@test -f docs/index.md
+	@test -f docs/releases/v0.1.0-rc1.md
 	@test -f docs/configuration.md
 	@test -f docs/feature-behavior.md
 	@test -f docs/security-promise.md
@@ -118,6 +120,10 @@ documentation-structure-check: ## Check canonical documentation structure
 	@test -f docs/external-review-accepted-risks.md
 	@test -f docs/release-evidence-template.md
 	@grep -q "Documentation Map" docs/index.md
+	@grep -q "v0.1.0-rc1" CHANGELOG.md
+	@grep -q "release candidate" docs/releases/v0.1.0-rc1.md
+	@grep -q "exactly-once delivery" docs/releases/v0.1.0-rc1.md
+	@grep -q "provider-side event completeness" docs/releases/v0.1.0-rc1.md
 	@grep -q "Configuration Reference" docs/configuration.md
 	@grep -q "Feature Behavior Reference" docs/feature-behavior.md
 	@grep -q "Security Promise" docs/security-promise.md
