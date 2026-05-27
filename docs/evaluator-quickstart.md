@@ -189,8 +189,10 @@ or production-like evaluation.
 ## 9. Review Before Production Decisions
 
 - `docs/security-promise.md`
+- `docs/why-webhookery.md`
 - `docs/provider-conformance.md`
 - `docs/provider-proof-manifest.json`
+- `docs/evidence-bundle-profiles.md`
 - `docs/release-evidence-template.md`
 - `docs/stability.md`
 - `docs/operations.md`

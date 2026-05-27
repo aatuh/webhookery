@@ -291,6 +291,11 @@ incident IDs when applicable, file hashes, audit-chain references where
 available, redaction policy, and explicit non-claims. It does not serialize the
 raw tenant ID.
 
+`docs/evidence-bundle-profiles.md` defines approved sharing profiles for common
+audiences. The implemented export API uses inclusion flags; profile names are
+operator policy labels unless a future contract adds a first-class profile
+field.
+
 Raw payload bodies and payload-body exports require both audit read permission
 and raw payload permission. Export creation verifies chain proof before marking
 the export ready. `whcp audit verify-bundle --file evidence.tar.gz` checks tar
