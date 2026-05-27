@@ -28,6 +28,7 @@ non-zero because a command is required. The groups are:
 | `doctor`, `ops` | Production preflight and operational visibility. | Local config or `ops:read`. | May expose operational posture; output must be redacted. |
 | `identity-providers`, `scim-tokens`, `role-bindings`, `access-policies`, `authz` | Enterprise identity and authorization controls. | `security:write` for mutations. | High authorization impact. |
 | `events`, `sources`, `provider-connections`, `adapters` | Event evidence, source config, provider credentials, and adapter governance. | `events:read`, `events:raw`, `sources:write`, or `security:write`. | Raw payloads, secrets, provider recovery. |
+| `incidents` | Incident packets, attached event evidence, report snapshots, and incident evidence exports. | `incidents:read`, `incidents:write`, and `audit:read` for exports. | Evidence disclosure and support artifacts. |
 | `endpoints`, `subscriptions`, `retry-policies`, `routes`, `transformations` | Outbound delivery configuration and reproducible payload shaping. | `routes:write` or related read scopes. | Delivery fanout and receiver impact. |
 | `deliveries`, `replay-jobs`, `reconciliation-jobs`, `dead-letter`, `quarantine` | Delivery recovery, replay, provider reconciliation, DLQ, and quarantine decisions. | `deliveries:retry`, `replay:write`, or `security:write`. | Duplicate side effects and recovery claims. |
 | `alerts`, `notification-channels`, `notification-deliveries` | Alert rules and signed notification egress. | `ops:read` or `ops:write`. | External egress and signing secrets. |
@@ -73,6 +74,21 @@ non-zero because a command is required. The groups are:
 
 Raw payloads and provider API responses may contain PII or customer data. Keep
 exports out of commits and public support artifacts.
+
+## Incidents And Reports
+
+| Task | Required scope | Example | Expected outcome | Elevated risk |
+|------|----------------|---------|------------------|---------------|
+| Create incident | `incidents:write` | `go run ./cmd/whcp incidents create --title "Stripe payment webhook failed" --reason "support investigation" --api-key "$WEBHOOKERY_API_KEY"` | Incident metadata is created and audited. | Support artifact |
+| Attach event | `incidents:write`, `events:read` | `go run ./cmd/whcp incidents add-event --incident-id inc_... --event-id evt_... --reason "failed downstream delivery" --api-key "$WEBHOOKERY_API_KEY"` | Event is linked to the incident in the same tenant. | Evidence grouping |
+| Generate report | `incidents:write`, `events:read` | `go run ./cmd/whcp incidents generate-report --incident-id inc_... --reason "support handoff" --api-key "$WEBHOOKERY_API_KEY"` | JSON and Markdown report snapshot is generated and audited. | Evidence disclosure |
+| Save report | `incidents:read` | `go run ./cmd/whcp incidents report --incident-id inc_... --format markdown --output incident-report.md --api-key "$WEBHOOKERY_API_KEY"` | Markdown report is written with private file permissions. | Support artifact |
+| Export incident evidence | `incidents:write`, `events:read`, `audit:read` | `go run ./cmd/whcp incidents export --incident-id inc_... --reason "customer evidence package" --output incident-evidence.tar.gz --api-key "$WEBHOOKERY_API_KEY"` | Bundle includes `incident_report.json`, `incident_report.md`, timeline evidence, manifest, and hashes. | Evidence disclosure |
+
+Incident reports use event timelines and hashes. They do not include raw
+payload bodies, webhook secrets, signatures, bearer tokens, or private keys by
+default. Exported incident bundles should be handled like other evidence
+bundles and kept out of commits and public support channels.
 
 ## Routing, Delivery, And Replay
 

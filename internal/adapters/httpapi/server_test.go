@@ -6,6 +6,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -155,6 +156,9 @@ func TestAuthenticatedReadRoutesReturnJSON(t *testing.T) {
 		"/v1/events",
 		"/v1/events/evt_1",
 		"/v1/events/evt_1/timeline",
+		"/v1/incidents",
+		"/v1/incidents/inc_1",
+		"/v1/incidents/inc_1/report",
 		"/v1/transformations",
 		"/v1/transformations/trn_1",
 		"/v1/transformations/trn_1/versions",
@@ -316,6 +320,11 @@ func TestAuthenticatedMutationRoutesPreserveContracts(t *testing.T) {
 		{name: "verify audit chain", method: http.MethodPost, path: "/v1/audit-chain:verify", body: `{"from_sequence":1,"to_sequence":2}`, wantStatus: http.StatusOK},
 		{name: "anchor audit chain", method: http.MethodPost, path: "/v1/audit-chain:anchor", body: `{"from_sequence":1,"to_sequence":2,"reason":"daily"}`, wantStatus: http.StatusCreated},
 		{name: "create audit export", method: http.MethodPost, path: "/v1/audit-events:export", body: `{"include_raw_payloads":false,"include_timelines":true,"reason":"support"}`, wantStatus: http.StatusAccepted},
+		{name: "create incident", method: http.MethodPost, path: "/v1/incidents", body: `{"title":"Stripe payment webhook failed","reason":"support investigation"}`, wantStatus: http.StatusCreated},
+		{name: "add incident event", method: http.MethodPost, path: "/v1/incidents/inc_1/events", body: `{"event_id":"evt_1","reason":"attach failed payment"}`, wantStatus: http.StatusCreated},
+		{name: "remove incident event", method: http.MethodDelete, path: "/v1/incidents/inc_1/events/evt_1", body: `{"reason":"not related"}`, wantStatus: http.StatusOK},
+		{name: "generate incident report", method: http.MethodPost, path: "/v1/incidents/inc_1/generate-report", body: `{"reason":"support handoff"}`, wantStatus: http.StatusCreated},
+		{name: "create incident evidence export", method: http.MethodPost, path: "/v1/incidents/inc_1/evidence-export", body: `{"reason":"customer evidence"}`, wantStatus: http.StatusAccepted},
 		{name: "create retention", method: http.MethodPost, path: "/v1/admin/retention-policies", body: `{"resource_type":"raw_payload","retention_days":30}`, wantStatus: http.StatusCreated},
 		{name: "update retention", method: http.MethodPatch, path: "/v1/admin/retention-policies/ret_1", body: `{"retention_days":30}`, wantStatus: http.StatusOK},
 		{name: "create alert", method: http.MethodPost, path: "/v1/alerts", body: `{"name":"dlq-open","rule_type":"dead_letter_open","threshold":1,"comparator":">=","window_seconds":60,"state":"active","channel_ids":["nch_1"]}`, wantStatus: http.StatusCreated},
@@ -1336,6 +1345,35 @@ func (noopControlStore) GetNormalizedEvent(_ context.Context, tenantID, eventID,
 }
 func (noopControlStore) ListEventTimeline(context.Context, string, string, int) ([]map[string]any, error) {
 	return nil, nil
+}
+func (noopControlStore) CreateIncident(_ context.Context, incident domain.Incident) (domain.Incident, error) {
+	incident.ID = "inc_1"
+	return incident, nil
+}
+func (noopControlStore) ListIncidents(context.Context, string, int) ([]domain.Incident, error) {
+	return nil, nil
+}
+func (noopControlStore) GetIncident(_ context.Context, tenantID, incidentID string) (domain.Incident, error) {
+	return domain.Incident{ID: incidentID, TenantID: tenantID, Title: "Stripe payment failed", Reason: "support case", State: domain.StateActive}, nil
+}
+func (noopControlStore) AddIncidentEvent(_ context.Context, tenantID, incidentID, eventID, actorID, reason string) (domain.IncidentEvent, error) {
+	return domain.IncidentEvent{ID: "ine_1", TenantID: tenantID, IncidentID: incidentID, EventID: eventID, AddedBy: actorID, Reason: reason}, nil
+}
+func (noopControlStore) RemoveIncidentEvent(_ context.Context, tenantID, incidentID, eventID, actorID, reason string) (domain.IncidentEvent, error) {
+	return domain.IncidentEvent{ID: "ine_1", TenantID: tenantID, IncidentID: incidentID, EventID: eventID, AddedBy: actorID, Reason: reason}, nil
+}
+func (noopControlStore) ListIncidentEvents(_ context.Context, tenantID, incidentID string) ([]domain.IncidentEvent, error) {
+	return []domain.IncidentEvent{{ID: "ine_1", TenantID: tenantID, IncidentID: incidentID, EventID: "evt_1", AddedBy: "usr_1", Reason: "investigate"}}, nil
+}
+func (noopControlStore) CreateIncidentReportSnapshot(_ context.Context, tenantID, incidentID, actorID, reason string, report app.IncidentReport, markdown string) (domain.IncidentReportSnapshot, error) {
+	raw, _ := json.Marshal(report)
+	return domain.IncidentReportSnapshot{ID: "irs_1", TenantID: tenantID, IncidentID: incidentID, SchemaVersion: report.SchemaVersion, Report: raw, Markdown: markdown, GeneratedBy: actorID}, nil
+}
+func (noopControlStore) GetIncidentReportSnapshot(_ context.Context, tenantID, incidentID string) (domain.IncidentReportSnapshot, error) {
+	return domain.IncidentReportSnapshot{ID: "irs_1", TenantID: tenantID, IncidentID: incidentID, SchemaVersion: "webhookery.incident_report.v1", Markdown: "incident report"}, nil
+}
+func (noopControlStore) CreateIncidentEvidenceExport(_ context.Context, tenantID, incidentID, actorID string, req app.CreateIncidentEvidenceExportRequest, report app.IncidentReport, markdown string) (domain.IncidentEvidenceExport, domain.EvidenceExport, error) {
+	return domain.IncidentEvidenceExport{ID: "iex_1", TenantID: tenantID, IncidentID: incidentID, ExportID: "exp_1", CreatedBy: actorID}, domain.EvidenceExport{ID: "exp_1", TenantID: tenantID, State: domain.EvidenceExportStateReady, IncludeTimelines: true, CreatedBy: actorID}, nil
 }
 func (noopControlStore) ListDeliveries(context.Context, string, int) ([]domain.Delivery, error) {
 	return nil, nil

@@ -32,6 +32,7 @@ type ControlStore interface {
 	RouteStore
 	SchemaStore
 	EventStore
+	IncidentStore
 	DeliveryStore
 	OpsStore
 	SignalStore
