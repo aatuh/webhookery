@@ -66,6 +66,7 @@ non-zero because a command is required. The groups are:
 | Task | Required scope | Example | Expected outcome | Elevated risk |
 |------|----------------|---------|------------------|---------------|
 | List events | `events:read` | `go run ./cmd/whcp events list --api-key "$WEBHOOKERY_API_KEY"` | Paginated event metadata. | No raw body |
+| Search events | `events:read` | `go run ./cmd/whcp events search --provider stripe --external-id evt_... --verification invalid --status dlq --received-after 2026-06-04T10:00:00Z --api-key "$WEBHOOKERY_API_KEY"` | Tenant-scoped event metadata matching forensic filters. | No raw body |
 | View timeline | `events:read` | `go run ./cmd/whcp events timeline --event-id evt_... --format table --api-key "$WEBHOOKERY_API_KEY"` | Versioned event timeline in `json`, `table`, or `markdown` format. | No raw body |
 | Export raw payload | `events:raw` | `go run ./cmd/whcp events raw-export --event-id evt_... --reason "support case review" --output payload.bin --api-key "$WEBHOOKERY_API_KEY"` | Writes raw bytes to a private local file and records the reason on the raw-payload audit event. | Raw payload |
 | Rotate source secret | `security:write` | `go run ./cmd/whcp sources rotate-secret --source-id src_... --secret "$NEXT_WEBHOOK_SECRET" --reason "scheduled rotation" --api-key "$WEBHOOKERY_API_KEY"` | New active secret version and bounded grace for prior version. | Secret rotation |

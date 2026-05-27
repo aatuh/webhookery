@@ -2667,9 +2667,60 @@ paths:
       summary: Search events
       security:
         - bearerAuth: []
+      parameters:
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+        - name: provider
+          in: query
+          schema:
+            type: string
+          description: Provider name, such as `stripe`, `github`, or `shopify`.
+        - name: external_id
+          in: query
+          schema:
+            type: string
+          description: Provider event ID, such as a Stripe event ID.
+        - name: delivery_id
+          in: query
+          schema:
+            type: string
+          description: Webhookery delivery ID linked to the event.
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [dlq, dead_lettered]
+          description: Forensic status preset. `dlq` and `dead_lettered` return events with open DLQ evidence.
+        - name: verification
+          in: query
+          schema:
+            type: string
+            enum: [valid, invalid]
+          description: Provider signature verification result.
+        - name: received_after
+          in: query
+          schema:
+            type: string
+            format: date-time
+          description: Lower bound for event receipt time.
+        - name: route_id
+          in: query
+          schema:
+            type: string
+          description: Route ID with delivery evidence linked to the event.
       responses:
         "200":
           description: Paginated event list.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EventPage"
+        "400":
+          $ref: "#/components/responses/ValidationProblem"
     post:
       tags:
         - Events And Ingestion
@@ -6375,6 +6426,52 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/EventTimelineEntry"
+        next_cursor:
+          type: string
+          nullable: true
+        has_more:
+          type: boolean
+    Event:
+      type: object
+      required: [id, tenant_id, source_id, provider, type, raw_payload_id, raw_payload_hash, signature_verified, verification_reason, deduplication_key, dedupe_status, received_at, trace_id]
+      properties:
+        id:
+          type: string
+        tenant_id:
+          type: string
+        source_id:
+          type: string
+        provider:
+          type: string
+        type:
+          type: string
+        provider_event_id:
+          type: string
+        raw_payload_id:
+          type: string
+        raw_payload_hash:
+          type: string
+        signature_verified:
+          type: boolean
+        verification_reason:
+          type: string
+        deduplication_key:
+          type: string
+        dedupe_status:
+          type: string
+        received_at:
+          type: string
+          format: date-time
+        trace_id:
+          type: string
+    EventPage:
+      type: object
+      required: [data, next_cursor, has_more]
+      properties:
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/Event"
         next_cursor:
           type: string
           nullable: true

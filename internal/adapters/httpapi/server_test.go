@@ -119,6 +119,42 @@ func TestControlRoutesRequireBearer(t *testing.T) {
 	}
 }
 
+func TestEventsSearchParsesFiltersAndRejectsDuplicateSingletons(t *testing.T) {
+	store := &eventSearchControlStore{}
+	control := app.NewControlService(store, ssrf.Validator{Resolver: ssrf.StaticResolver{}})
+	server := NewServer(ServerConfig{
+		Control: control,
+		Ingest:  app.NewIngestService(&fakeIngestStore{}, app.SystemClock{}),
+		Auth:    app.NewStaticAuthenticator("token", authz.Actor{ID: "usr_1", TenantID: "ten_events", Role: authz.RoleDeveloper, Scopes: []string{"events:read"}}),
+		OpenAPI: []byte("openapi: 3.1.0\n"),
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/events?provider=stripe&external_id=evt_external&verification=invalid&status=dlq&received_after=2026-06-04T10:00:00Z&route_id=rte_1&delivery_id=del_1&limit=25", nil)
+	req.Header.Set("Authorization", "Bearer token")
+	rec := httptest.NewRecorder()
+	server.Routes().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected search to succeed, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if store.tenantID != "ten_events" {
+		t.Fatalf("expected tenant-scoped search, got %q", store.tenantID)
+	}
+	if store.req.Provider != "stripe" || store.req.ExternalID != "evt_external" || store.req.Verification != "invalid" || store.req.Status != "dlq" || store.req.RouteID != "rte_1" || store.req.DeliveryID != "del_1" || store.req.Limit != 25 {
+		t.Fatalf("unexpected search request: %+v", store.req)
+	}
+	if store.req.ReceivedAfter.IsZero() || store.req.ReceivedAfter.Location() != time.UTC {
+		t.Fatalf("received_after was not parsed as UTC: %s", store.req.ReceivedAfter)
+	}
+
+	dup := httptest.NewRequest(http.MethodGet, "/v1/events?verification=valid&verification=invalid", nil)
+	dup.Header.Set("Authorization", "Bearer token")
+	rec = httptest.NewRecorder()
+	server.Routes().ServeHTTP(rec, dup)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected duplicate singleton query to fail, got %d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
 func TestAuthenticatedReadRoutesReturnJSON(t *testing.T) {
 	server := testServerWithActor(authz.Actor{ID: "usr_1", TenantID: "ten_1", Role: authz.RoleOwner, Scopes: []string{"*"}})
 	routes := []string{
@@ -1266,6 +1302,18 @@ func (f *producerTokenControlStore) CreateProducerAccessToken(_ context.Context,
 	return input.Token, nil
 }
 
+type eventSearchControlStore struct {
+	noopControlStore
+	tenantID string
+	req      app.EventSearchRequest
+}
+
+func (f *eventSearchControlStore) ListEvents(_ context.Context, tenantID string, req app.EventSearchRequest) ([]domain.Event, error) {
+	f.tenantID = tenantID
+	f.req = req
+	return []domain.Event{{ID: "evt_1", TenantID: tenantID, Provider: req.Provider, ProviderID: req.ExternalID, RawPayloadHash: "sha256:raw"}}, nil
+}
+
 func NewNoopControl() *app.ControlService {
 	return app.NewControlService(noopControlStore{}, ssrf.Validator{Resolver: ssrf.StaticResolver{
 		"receiver.example": {netip.MustParseAddr("93.184.216.34")},
@@ -1417,7 +1465,7 @@ func (noopControlStore) UpdateEventSchema(context.Context, string, string, strin
 func (noopControlStore) DeleteEventSchema(context.Context, string, string, string, string, string) (domain.EventSchema, error) {
 	return domain.EventSchema{}, nil
 }
-func (noopControlStore) ListEvents(context.Context, string, int) ([]domain.Event, error) {
+func (noopControlStore) ListEvents(context.Context, string, app.EventSearchRequest) ([]domain.Event, error) {
 	return nil, nil
 }
 func (noopControlStore) GetEvent(context.Context, string, string) (domain.Event, error) {

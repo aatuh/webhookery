@@ -2537,8 +2537,9 @@ func (s *Store) requireActiveSource(ctx context.Context, tx pgx.Tx, tenantID, so
 	return nil
 }
 
-func (s *Store) ListEvents(ctx context.Context, tenantID string, limit int) ([]domain.Event, error) {
-	rows, err := s.pool.Query(ctx, `SELECT id, tenant_id, source_id, provider, type, provider_event_id, raw_payload_id, raw_payload_hash, signature_verified, verification_reason, dedupe_key, dedupe_status, received_at, trace_id FROM events WHERE tenant_id=$1 ORDER BY received_at DESC LIMIT $2`, tenantID, limit)
+func (s *Store) ListEvents(ctx context.Context, tenantID string, req app.EventSearchRequest) ([]domain.Event, error) {
+	query, args := eventSearchQuery(tenantID, req)
+	rows, err := s.pool.Query(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -2552,6 +2553,46 @@ func (s *Store) ListEvents(ctx context.Context, tenantID string, limit int) ([]d
 		out = append(out, item)
 	}
 	return out, rows.Err()
+}
+
+func eventSearchQuery(tenantID string, req app.EventSearchRequest) (string, []any) {
+	args := []any{tenantID}
+	where := []string{"e.tenant_id=$1"}
+	add := func(clause string, value any) {
+		args = append(args, value)
+		where = append(where, fmt.Sprintf(clause, len(args)))
+	}
+	if req.Provider != "" {
+		add("e.provider=$%d", req.Provider)
+	}
+	if req.ExternalID != "" {
+		add("e.provider_event_id=$%d", req.ExternalID)
+	}
+	if req.DeliveryID != "" {
+		add("EXISTS (SELECT 1 FROM deliveries d WHERE d.tenant_id=e.tenant_id AND d.event_id=e.id AND d.id=$%d)", req.DeliveryID)
+	}
+	switch req.Status {
+	case "dlq", "dead_lettered":
+		where = append(where, "EXISTS (SELECT 1 FROM dead_letter_entries dlq WHERE dlq.tenant_id=e.tenant_id AND dlq.event_id=e.id AND dlq.state='open')")
+	}
+	switch req.Verification {
+	case "valid":
+		where = append(where, "e.signature_verified=true")
+	case "invalid":
+		where = append(where, "e.signature_verified=false")
+	}
+	if !req.ReceivedAfter.IsZero() {
+		add("e.received_at >= $%d", req.ReceivedAfter)
+	}
+	if req.RouteID != "" {
+		add("EXISTS (SELECT 1 FROM deliveries d WHERE d.tenant_id=e.tenant_id AND d.event_id=e.id AND d.route_id=$%d)", req.RouteID)
+	}
+	limit := req.Limit
+	if limit <= 0 {
+		limit = 50
+	}
+	args = append(args, limit)
+	return `SELECT e.id, e.tenant_id, e.source_id, e.provider, e.type, e.provider_event_id, e.raw_payload_id, e.raw_payload_hash, e.signature_verified, e.verification_reason, e.dedupe_key, e.dedupe_status, e.received_at, e.trace_id FROM events e WHERE ` + strings.Join(where, " AND ") + fmt.Sprintf(" ORDER BY e.received_at DESC LIMIT $%d", len(args)), args
 }
 
 func (s *Store) GetEvent(ctx context.Context, tenantID, eventID string) (domain.Event, error) {

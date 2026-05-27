@@ -34,6 +34,39 @@ func TestControlServiceScopesEventReadsToActorTenant(t *testing.T) {
 	}
 }
 
+func TestControlServiceSearchEventsNormalizesFiltersAndScopesTenant(t *testing.T) {
+	store := &fakeControlStore{}
+	svc := NewControlService(store, ssrf.Validator{Resolver: ssrf.StaticResolver{}})
+	actor := authz.Actor{ID: "usr_1", TenantID: "ten_a", Role: authz.RoleDeveloper, Scopes: []string{"events:read"}}
+
+	receivedAfter := time.Date(2026, 6, 4, 12, 0, 0, 0, time.FixedZone("UTC+2", 2*60*60))
+	if _, err := svc.SearchEvents(context.Background(), actor, EventSearchRequest{
+		Provider:      " stripe ",
+		ExternalID:    " evt_external ",
+		Status:        "DLQ",
+		Verification:  "INVALID",
+		ReceivedAfter: receivedAfter,
+		Limit:         250,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if store.eventSearchTenantID != "ten_a" {
+		t.Fatalf("expected tenant-scoped event search, got %q", store.eventSearchTenantID)
+	}
+	if store.eventSearchReq.Provider != "stripe" || store.eventSearchReq.ExternalID != "evt_external" || store.eventSearchReq.Status != "dlq" || store.eventSearchReq.Verification != "invalid" {
+		t.Fatalf("filters were not normalized: %+v", store.eventSearchReq)
+	}
+	if store.eventSearchReq.Limit != 50 {
+		t.Fatalf("limit should be bounded to default, got %d", store.eventSearchReq.Limit)
+	}
+	if store.eventSearchReq.ReceivedAfter.Location() != time.UTC {
+		t.Fatalf("received_after should be UTC-normalized: %s", store.eventSearchReq.ReceivedAfter)
+	}
+	if _, err := svc.SearchEvents(context.Background(), actor, EventSearchRequest{Verification: "maybe"}); !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("expected invalid verification to be rejected, got %v", err)
+	}
+}
+
 func TestControlServiceListEventTimelineReturnsVersionedEntries(t *testing.T) {
 	store := &fakeControlStore{}
 	svc := NewControlService(store, ssrf.Validator{Resolver: ssrf.StaticResolver{}})
@@ -1801,6 +1834,8 @@ func testClientCertificatePEM(t *testing.T, commonName string) (string, string) 
 
 type fakeControlStore struct {
 	eventTenantID              string
+	eventSearchTenantID        string
+	eventSearchReq             EventSearchRequest
 	incidentTenantID           string
 	incidentActorID            string
 	incidentID                 string
@@ -2252,7 +2287,9 @@ func (f *fakeControlStore) RotateSourceSecret(context.Context, string, string, s
 func (f *fakeControlStore) RotateEndpointSecret(context.Context, string, string, string, RotateEndpointSecretRequest) (domain.EndpointSecretVersion, error) {
 	return domain.EndpointSecretVersion{}, nil
 }
-func (f *fakeControlStore) ListEvents(context.Context, string, int) ([]domain.Event, error) {
+func (f *fakeControlStore) ListEvents(_ context.Context, tenantID string, req EventSearchRequest) ([]domain.Event, error) {
+	f.eventSearchTenantID = tenantID
+	f.eventSearchReq = req
 	return nil, nil
 }
 func (f *fakeControlStore) GetEvent(_ context.Context, tenantID, eventID string) (domain.Event, error) {

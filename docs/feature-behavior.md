@@ -205,6 +205,26 @@ Compatibility checks reject newly required fields, removed existing properties,
 and changed property types. Unsupported advanced JSON Schema features are not
 treated as compatibility proof.
 
+## Event Search
+
+Event search is tenant-scoped and returns event metadata only. It does not
+return raw payload bodies by default.
+
+Forensic filters include:
+
+- provider name;
+- provider event ID as `external_id`;
+- Webhookery delivery ID;
+- DLQ status preset;
+- provider signature verification result;
+- received-after timestamp; and
+- route ID linked through delivery evidence.
+
+Results include event IDs, source/provider metadata, raw payload IDs, raw
+payload hashes, verification metadata, dedupe status, receipt time, and trace
+ID. Raw payload body export remains a separate elevated `events:raw` operation
+with an operator reason.
+
 ## Incident Packets And Reports
 
 Incidents are tenant-scoped investigation records. Operators can create an

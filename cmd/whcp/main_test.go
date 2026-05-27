@@ -331,6 +331,12 @@ func TestCLIResourceCommandsSendExpectedRequests(t *testing.T) {
 			bodyContains: []string{`"name":"Stripe"`, `"provider":"stripe"`, `"verification_secret":"whsec_test"`},
 		},
 		{
+			name:       "events search",
+			args:       append([]string{"events", "search", "--provider", "stripe", "--external-id", "evt_external", "--verification", "invalid", "--status", "dlq", "--received-after", "2026-06-04T10:00:00Z", "--route-id", "rte_1", "--delivery-id", "del_1", "--limit", "25"}, common...),
+			wantMethod: http.MethodGet,
+			wantPath:   "/v1/events?delivery_id=del_1&external_id=evt_external&limit=25&provider=stripe&received_after=2026-06-04T10%3A00%3A00Z&route_id=rte_1&status=dlq&verification=invalid",
+		},
+		{
 			name:         "endpoints validate url",
 			args:         append([]string{"endpoints", "validate-url", "--url", "https://receiver.example.com/hook"}, common...),
 			wantMethod:   http.MethodPost,
