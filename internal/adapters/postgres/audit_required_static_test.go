@@ -14,6 +14,7 @@ func TestSensitiveActionsDoNotIgnoreAuditWriteFailures(t *testing.T) {
 	source := string(body)
 	actions := []string{
 		"api_key.revoked",
+		"raw_payload.read",
 		"delivery.retry_requested",
 		"delivery.canceled",
 		"audit_export.downloaded",

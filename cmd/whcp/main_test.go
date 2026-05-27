@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -568,12 +569,15 @@ func TestExportRawPayloadDecodesBase64ToPrivateFile(t *testing.T) {
 		if r.URL.Path != "/v1/events/evt_1/raw" {
 			t.Fatalf("unexpected path %s", r.URL.Path)
 		}
+		if got := r.URL.Query().Get("reason"); got != "support case" {
+			t.Fatalf("unexpected raw export reason %q", got)
+		}
 		_ = json.NewEncoder(w).Encode(map[string]string{"body_base64": base64.StdEncoding.EncodeToString(rawBody)})
 	}))
 	defer server.Close()
 
 	output := filepath.Join(t.TempDir(), "raw.bin")
-	if err := exportRawPayload(server.URL, "whkey_test", "evt_1", output); err != nil {
+	if err := exportRawPayload(server.URL, "whkey_test", "evt_1", "support case", output); err != nil {
 		t.Fatal(err)
 	}
 	body, err := os.ReadFile(output)
@@ -582,6 +586,27 @@ func TestExportRawPayloadDecodesBase64ToPrivateFile(t *testing.T) {
 	}
 	if !bytes.Equal(body, rawBody) {
 		t.Fatalf("unexpected raw body %q", string(body))
+	}
+}
+
+func TestExportRawPayloadRequiresReasonBeforeRequest(t *testing.T) {
+	called := false
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		called = true
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	output := filepath.Join(t.TempDir(), "raw.bin")
+	err := exportRawPayload(server.URL, "whkey_test", "evt_1", " ", output)
+	if err == nil || !strings.Contains(err.Error(), "reason is required") {
+		t.Fatalf("expected missing reason error, got %v", err)
+	}
+	if called {
+		t.Fatal("raw payload export request was sent without a reason")
+	}
+	if _, statErr := os.Stat(output); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("raw output should not be created without a reason, stat err=%v", statErr)
 	}
 }
 

@@ -548,7 +548,7 @@ func TestPostgresEvidenceExportIncludesBodyArtifactsAndProofs(t *testing.T) {
 	if _, err := store.pool.Exec(ctx, `UPDATE raw_payloads SET body='', storage_status='deleted', storage_deleted_at=now() WHERE tenant_id=$1 AND event_id=$2`, actor.TenantID, first.EventID); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := control.GetRawPayload(ctx, actor, first.EventID); !errors.Is(err, app.ErrGone) {
+	if _, err := control.GetRawPayload(ctx, actor, first.EventID, "verify retention tombstone"); !errors.Is(err, app.ErrGone) {
 		t.Fatalf("expected retained raw body read to return gone after deletion, got %v", err)
 	}
 }

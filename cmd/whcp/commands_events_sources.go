@@ -22,6 +22,7 @@ func runEvents(args []string) error {
 	eventID := fs.String("event-id", "", "event id")
 	output := fs.String("output", "-", "raw output path, or '-' for stdout")
 	format := fs.String("format", "json", "timeline output format: json, table, or markdown")
+	reason := fs.String("reason", "", "operator reason for elevated raw payload access")
 	if err := fs.Parse(args[1:]); err != nil {
 		return err
 	}
@@ -35,7 +36,7 @@ func runEvents(args []string) error {
 	case "normalized":
 		return getJSON(*baseURL, *apiKey, "/v1/events/"+url.PathEscape(*eventID)+"/normalized")
 	case "raw-export":
-		return exportRawPayload(*baseURL, *apiKey, *eventID, *output)
+		return exportRawPayload(*baseURL, *apiKey, *eventID, *reason, *output)
 	default:
 		return fmt.Errorf("usage: whcp events <list|get|timeline|raw-export|normalized>")
 	}

@@ -2752,6 +2752,14 @@ paths:
           required: true
           schema:
             type: string
+        - name: reason
+          in: query
+          required: true
+          description: Operator reason for elevated raw payload access. The reason is recorded on the raw_payload.read audit event.
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 500
       responses:
         "200":
           description: Raw body as base64 plus hash and storage metadata.
@@ -2765,6 +2773,8 @@ paths:
                 storage_backend: postgres
                 storage_status: stored
                 body_base64: eyJpZCI6ImV2dF9leGFtcGxlIn0=
+        "400":
+          $ref: "#/components/responses/ValidationProblem"
         "403":
           $ref: "#/components/responses/ForbiddenProblem"
         "410":
