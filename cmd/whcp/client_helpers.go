@@ -33,8 +33,7 @@ func getJSON(baseURL, apiKey, path string) error {
 		return err
 	}
 	defer func() { _ = resp.Body.Close() }()
-	_, err = io.Copy(os.Stdout, resp.Body)
-	return err
+	return writeHTTPResponse(resp)
 }
 
 func getJSONDecode(baseURL, apiKey, path string, dst any) error {
@@ -54,10 +53,14 @@ func getJSONDecode(baseURL, apiKey, path string, dst any) error {
 		return err
 	}
 	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		return fmt.Errorf("request failed with status %d", resp.StatusCode)
+	responseBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return err
 	}
-	return json.NewDecoder(resp.Body).Decode(dst)
+	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+		return problemResponseError("request failed", resp.StatusCode, responseBody)
+	}
+	return json.Unmarshal(responseBody, dst)
 }
 
 func postJSON(baseURL, apiKey, path string, body any) error {
@@ -82,8 +85,7 @@ func postJSON(baseURL, apiKey, path string, body any) error {
 		return err
 	}
 	defer func() { _ = resp.Body.Close() }()
-	_, err = io.Copy(os.Stdout, resp.Body)
-	return err
+	return writeHTTPResponse(resp)
 }
 
 func postJSONDecode(baseURL, apiKey, path string, body, dst any) error {
@@ -108,10 +110,14 @@ func postJSONDecode(baseURL, apiKey, path string, body, dst any) error {
 		return err
 	}
 	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		return fmt.Errorf("request failed with status %d", resp.StatusCode)
+	responseBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return err
 	}
-	return json.NewDecoder(resp.Body).Decode(dst)
+	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+		return problemResponseError("request failed", resp.StatusCode, responseBody)
+	}
+	return json.Unmarshal(responseBody, dst)
 }
 
 func patchJSON(baseURL, apiKey, path string, body any) error {
@@ -136,8 +142,7 @@ func patchJSON(baseURL, apiKey, path string, body any) error {
 		return err
 	}
 	defer func() { _ = resp.Body.Close() }()
-	_, err = io.Copy(os.Stdout, resp.Body)
-	return err
+	return writeHTTPResponse(resp)
 }
 
 func deleteJSON(baseURL, apiKey, path string, body any) error {
@@ -162,8 +167,7 @@ func deleteJSON(baseURL, apiKey, path string, body any) error {
 		return err
 	}
 	defer func() { _ = resp.Body.Close() }()
-	_, err = io.Copy(os.Stdout, resp.Body)
-	return err
+	return writeHTTPResponse(resp)
 }
 
 func downloadAuditExport(baseURL, apiKey, exportID, outputPath string) error {
@@ -183,15 +187,15 @@ func downloadAuditExport(baseURL, apiKey, exportID, outputPath string) error {
 		return err
 	}
 	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		return fmt.Errorf("audit export download failed with status %d", resp.StatusCode)
-	}
 	if outputPath == "" {
 		outputPath = exportID + ".tar.gz"
 	}
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return err
+	}
+	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+		return problemResponseError("audit export download failed", resp.StatusCode, body)
 	}
 	return writePrivateFile(outputPath, body)
 }
@@ -223,18 +227,54 @@ func downloadIncidentReport(baseURL, apiKey, incidentID, format, outputPath stri
 		return err
 	}
 	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		return fmt.Errorf("incident report download failed with status %d", resp.StatusCode)
-	}
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return err
+	}
+	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+		return problemResponseError("incident report download failed", resp.StatusCode, body)
 	}
 	if outputPath == "" || outputPath == "-" {
 		_, err = os.Stdout.Write(body)
 		return err
 	}
 	return writePrivateFile(outputPath, body)
+}
+
+func writeHTTPResponse(resp *http.Response) error {
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return err
+	}
+	if len(body) > 0 {
+		if _, err := os.Stdout.Write(body); err != nil {
+			return err
+		}
+	}
+	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+		return problemResponseError("request failed", resp.StatusCode, body)
+	}
+	return nil
+}
+
+func problemResponseError(prefix string, status int, body []byte) error {
+	var p struct {
+		Code       string `json:"code"`
+		StableCode string `json:"stable_code"`
+		RequestID  string `json:"request_id"`
+	}
+	_ = json.Unmarshal(body, &p)
+	code := strings.TrimSpace(p.StableCode)
+	if code == "" {
+		code = strings.TrimSpace(p.Code)
+	}
+	if code == "" {
+		code = "unknown_error"
+	}
+	if requestID := strings.TrimSpace(p.RequestID); requestID != "" {
+		return fmt.Errorf("%s with status %d (%s, request_id=%s)", prefix, status, code, requestID)
+	}
+	return fmt.Errorf("%s with status %d (%s)", prefix, status, code)
 }
 
 func createAndDownloadIncidentExport(baseURL, apiKey, incidentID, reason, outputPath string) error {

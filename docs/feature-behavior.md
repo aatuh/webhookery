@@ -62,6 +62,9 @@ rotate, or restrict it after creating database-backed owner or security keys.
 Every primary resource is tenant-scoped. List, read, update, delete, replay,
 export, and admin-scope paths must include tenant-aware authorization checks.
 
+API problem responses include a legacy `code` and a namespaced `stable_code`
+for client handling. `docs/error-codes.md` lists the major stable codes.
+
 ## Sources, Endpoints, Routes, And Subscriptions
 
 Sources, endpoints, subscriptions, routes, retry policies, event types, schemas,

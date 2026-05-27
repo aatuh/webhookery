@@ -153,6 +153,7 @@ reviews, and support package boundaries are described in `COMMERCIAL.md`,
   SSRF.
 - `docs/security-promise.md`: canonical durable-capture promise and
   non-claims.
+- `docs/error-codes.md`: stable API/CLI error-code reference.
 - `docs/stability.md`: compatibility, support-window, migration, and
   deprecation policy.
 - `docs/performance-envelope.md`: performance smoke usage, capacity inputs,

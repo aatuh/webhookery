@@ -4836,7 +4836,8 @@ components:
             type: about:blank
             title: Forbidden
             status: 403
-            code: forbidden
+            code: authorization_error
+            stable_code: WEBHOOKERY_TENANT_ACCESS_DENIED
             request_id: req_example
             retryable: false
     ValidationProblem:
@@ -4850,6 +4851,7 @@ components:
             title: Bad request
             status: 400
             code: validation_error
+            stable_code: WEBHOOKERY_VALIDATION_FAILED
             detail: Invalid JSON body.
             request_id: req_example
             retryable: false
@@ -4863,7 +4865,8 @@ components:
             type: about:blank
             title: Unauthorized
             status: 401
-            code: unauthorized
+            code: authentication_error
+            stable_code: WEBHOOKERY_AUTHENTICATION_REQUIRED
             request_id: req_example
             retryable: false
     ForbiddenProblem:
@@ -4876,7 +4879,8 @@ components:
             type: about:blank
             title: Forbidden
             status: 403
-            code: forbidden
+            code: authorization_error
+            stable_code: WEBHOOKERY_TENANT_ACCESS_DENIED
             request_id: req_example
             retryable: false
     NotFoundProblem:
@@ -4890,6 +4894,7 @@ components:
             title: Not found
             status: 404
             code: not_found
+            stable_code: WEBHOOKERY_RESOURCE_NOT_FOUND
             request_id: req_example
             retryable: false
     PayloadTooLargeProblem:
@@ -4903,6 +4908,7 @@ components:
             title: Payload too large
             status: 413
             code: payload_too_large
+            stable_code: WEBHOOKERY_PAYLOAD_TOO_LARGE
             request_id: req_example
             retryable: false
     HeadersTooLargeProblem:
@@ -4916,6 +4922,7 @@ components:
             title: Headers too large
             status: 431
             code: headers_too_large
+            stable_code: WEBHOOKERY_HEADERS_TOO_LARGE
             request_id: req_example
             retryable: false
     StorageUnavailableProblem:
@@ -4929,12 +4936,13 @@ components:
             title: Internal server error
             status: 503
             code: storage_unavailable
+            stable_code: WEBHOOKERY_DURABLE_CAPTURE_UNAVAILABLE
             request_id: req_example
             retryable: true
   schemas:
     Problem:
       type: object
-      required: [type, title, status, code, request_id]
+      required: [type, title, status, code, stable_code, request_id]
       properties:
         type:
           type: string
@@ -4946,6 +4954,12 @@ components:
           type: string
         code:
           type: string
+          description: Legacy short problem code retained for compatibility.
+        stable_code:
+          type: string
+          description: Namespaced stable code for SDK, CLI, support, and incident handling.
+          examples:
+            - WEBHOOKERY_PROVIDER_SIGNATURE_INVALID
         request_id:
           type: string
         retryable:
