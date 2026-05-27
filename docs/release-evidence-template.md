@@ -38,6 +38,7 @@ the live third-party provider scope and risk.
 - SDK OpenAPI checksum:
 - Migration checksum summary:
 - Stability policy reviewed:
+- Performance smoke output:
 - Release workflow URL:
 - CI workflow URL:
 - Integration workflow URL:
@@ -53,6 +54,7 @@ the live third-party provider scope and risk.
 | `make release-acceptance` |  |  |
 | `make rc-check` |  |  |
 | stability policy compatibility review |  |  |
+| `make perf-smoke` with `WEBHOOKERY_TEST_DATABASE_URL` |  |  |
 | `make live-postgres-check` with `WEBHOOKERY_TEST_DATABASE_URL` |  |  |
 | DB-backed `make rc-check` with `WEBHOOKERY_TEST_DATABASE_URL` |  |  |
 | backup/restore drill with explicit restore database |  |  |
