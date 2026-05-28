@@ -244,6 +244,215 @@ func TestJSONRequestHelpersUseExpectedMethodsAndPaths(t *testing.T) {
 	}
 }
 
+func TestCLIResourceCommandsSendExpectedRequests(t *testing.T) {
+	type request struct {
+		method string
+		path   string
+		body   string
+	}
+	var seen []request
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		path := r.URL.Path
+		if r.URL.RawQuery != "" {
+			path += "?" + r.URL.RawQuery
+		}
+		seen = append(seen, request{method: r.Method, path: path, body: string(body)})
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+	defer server.Close()
+
+	common := []string{"--base-url", server.URL, "--api-key", "whkey_cli"}
+	cases := []struct {
+		name         string
+		args         []string
+		wantMethod   string
+		wantPath     string
+		bodyContains []string
+	}{
+		{
+			name:         "sources create",
+			args:         append([]string{"sources", "create", "--name", "Stripe", "--provider", "stripe", "--secret", "whsec_test"}, common...),
+			wantMethod:   http.MethodPost,
+			wantPath:     "/v1/sources",
+			bodyContains: []string{`"name":"Stripe"`, `"provider":"stripe"`, `"verification_secret":"whsec_test"`},
+		},
+		{
+			name:         "endpoints validate url",
+			args:         append([]string{"endpoints", "validate-url", "--url", "https://receiver.example.com/hook"}, common...),
+			wantMethod:   http.MethodPost,
+			wantPath:     "/v1/endpoints:validate-url",
+			bodyContains: []string{`"url":"https://receiver.example.com/hook"`},
+		},
+		{
+			name:         "subscriptions create",
+			args:         append([]string{"subscriptions", "create", "--endpoint-id", "end_1", "--event-types", "invoice.created,customer.created", "--payload-format", "canonical_json"}, common...),
+			wantMethod:   http.MethodPost,
+			wantPath:     "/v1/subscriptions",
+			bodyContains: []string{`"endpoint_id":"end_1"`, `"event_types":["invoice.created","customer.created"]`, `"payload_format":"canonical_json"`},
+		},
+		{
+			name:         "retry policy create",
+			args:         append([]string{"retry-policies", "create", "--name", "standard", "--max-attempts", "4", "--initial-delay-seconds", "2", "--max-delay-seconds", "30"}, common...),
+			wantMethod:   http.MethodPost,
+			wantPath:     "/v1/retry-policies",
+			bodyContains: []string{`"name":"standard"`, `"max_attempts":4`, `"initial_delay_seconds":2`, `"max_delay_seconds":30`},
+		},
+		{
+			name:         "routes activate",
+			args:         append([]string{"routes", "activate", "--route-id", "rte_1", "--reason", "ship"}, common...),
+			wantMethod:   http.MethodPost,
+			wantPath:     "/v1/routes/rte_1:activate",
+			bodyContains: []string{`"reason":"ship"`},
+		},
+		{
+			name:         "replay create",
+			args:         append([]string{"replay-jobs", "create", "--event-id", "evt_1", "--endpoint-id", "end_1", "--reason", "debug", "--require-approval"}, common...),
+			wantMethod:   http.MethodPost,
+			wantPath:     "/v1/replay-jobs",
+			bodyContains: []string{`"event_id":"evt_1"`, `"endpoint_id":"end_1"`, `"reason":"debug"`, `"require_approval":true`},
+		},
+		{
+			name:       "alert firings filter",
+			args:       append([]string{"alerts", "firings", "--state", "open"}, common...),
+			wantMethod: http.MethodGet,
+			wantPath:   "/v1/alert-firings?state=open",
+		},
+		{
+			name:         "notification channel test",
+			args:         append([]string{"notification-channels", "test", "--channel-id", "nch_1", "--reason", "probe"}, common...),
+			wantMethod:   http.MethodPost,
+			wantPath:     "/v1/notification-channels/nch_1:test",
+			bodyContains: []string{`"reason":"probe"`},
+		},
+		{
+			name:         "schema event type update",
+			args:         append([]string{"schemas", "event-type-update", "--name", "invoice.created", "--description", "updated", "--state", "active", "--reason", "docs"}, common...),
+			wantMethod:   http.MethodPatch,
+			wantPath:     "/v1/event-types/invoice.created",
+			bodyContains: []string{`"description":"updated"`, `"state":"active"`, `"reason":"docs"`},
+		},
+		{
+			name:         "adapter transition",
+			args:         append([]string{"adapters", "transition", "--adapter-id", "adp_1", "--version-id", "adv_1", "--action", "approve", "--reason", "reviewed"}, common...),
+			wantMethod:   http.MethodPost,
+			wantPath:     "/v1/adapters/adp_1/versions/adv_1:transition",
+			bodyContains: []string{`"action":"approve"`, `"reason":"reviewed"`},
+		},
+		{
+			name:         "api key create",
+			args:         append([]string{"api-keys", "create", "--name", "operator", "--user-id", "usr_1", "--email", "ops@example.com", "--role", "operator", "--scopes", "events:read,deliveries:read"}, common...),
+			wantMethod:   http.MethodPost,
+			wantPath:     "/v1/api-keys",
+			bodyContains: []string{`"email":"ops@example.com"`, `"role":"operator"`, `"scopes":["events:read","deliveries:read"]`},
+		},
+		{
+			name:         "producer client update",
+			args:         append([]string{"producer-clients", "update", "--client-id", "pcl_1", "--name", "producer", "--source-id", "src_1", "--scopes", "events:write", "--token-ttl-seconds", "120", "--state", "active", "--reason", "rotate"}, common...),
+			wantMethod:   http.MethodPatch,
+			wantPath:     "/v1/producer-clients/pcl_1",
+			bodyContains: []string{`"name":"producer"`, `"source_id":"src_1"`, `"token_ttl_seconds":120`, `"reason":"rotate"`},
+		},
+		{
+			name:         "identity provider create",
+			args:         append([]string{"identity-providers", "create", "--name", "OIDC", "--issuer-url", "https://issuer.example.com", "--client-id", "client", "--client-secret", "secret", "--allowed-email-domains", "example.com,ops.example.com"}, common...),
+			wantMethod:   http.MethodPost,
+			wantPath:     "/v1/identity-providers",
+			bodyContains: []string{`"name":"OIDC"`, `"issuer_url":"https://issuer.example.com"`, `"client_secret":"secret"`, `"allowed_email_domains":["example.com","ops.example.com"]`},
+		},
+		{
+			name:         "scim token revoke",
+			args:         append([]string{"scim-tokens", "revoke", "--token-id", "sct_1", "--reason", "compromised"}, common...),
+			wantMethod:   http.MethodDelete,
+			wantPath:     "/v1/scim-tokens/sct_1",
+			bodyContains: []string{`"reason":"compromised"`},
+		},
+		{
+			name:         "role binding create",
+			args:         append([]string{"role-bindings", "create", "--principal-type", "group", "--principal-id", "scg_1", "--role", "security", "--resource-family", "events", "--resource-id", "*", "--environment", "prod", "--reason", "least privilege"}, common...),
+			wantMethod:   http.MethodPost,
+			wantPath:     "/v1/role-bindings",
+			bodyContains: []string{`"principal_type":"group"`, `"principal_id":"scg_1"`, `"role":"security"`, `"resource_family":"events"`, `"environment":"prod"`},
+		},
+		{
+			name:         "access policy create",
+			args:         append([]string{"access-policies", "create", "--name", "deny raw", "--action", "events:raw", "--effect", "deny", "--resource-family", "events", "--environment", "prod", "--conditions", `{"ip":"outside"}`, "--reason", "policy"}, common...),
+			wantMethod:   http.MethodPost,
+			wantPath:     "/v1/access-policies",
+			bodyContains: []string{`"name":"deny raw"`, `"action":"events:raw"`, `"effect":"deny"`, `"conditions":{"ip":"outside"}`},
+		},
+		{
+			name:         "authz explain",
+			args:         append([]string{"authz", "explain", "--actor-id", "usr_1", "--action", "events:raw", "--resource-family", "events", "--resource-id", "evt_1", "--environment", "prod"}, common...),
+			wantMethod:   http.MethodPost,
+			wantPath:     "/v1/authz:explain",
+			bodyContains: []string{`"actor_id":"usr_1"`, `"action":"events:raw"`, `"resource_id":"evt_1"`, `"environment":"prod"`},
+		},
+		{
+			name:         "siem sink test",
+			args:         append([]string{"siem-sinks", "test", "--sink-id", "snk_1", "--reason", "probe"}, common...),
+			wantMethod:   http.MethodPost,
+			wantPath:     "/v1/siem-sinks/snk_1:test",
+			bodyContains: []string{`"reason":"probe"`},
+		},
+		{
+			name:         "audit export",
+			args:         append([]string{"audit", "export", "--from", "2026-05-28T09:00:00Z", "--to", "2026-05-28T10:00:00Z", "--include-raw", "--include-payloads", "--include-timelines", "--reason", "evidence"}, common...),
+			wantMethod:   http.MethodPost,
+			wantPath:     "/v1/audit-events:export",
+			bodyContains: []string{`"from":"2026-05-28T09:00:00Z"`, `"to":"2026-05-28T10:00:00Z"`, `"include_raw_payloads":true`, `"include_payload_bodies":true`, `"include_timelines":true`},
+		},
+		{
+			name:         "retention update clears legal hold",
+			args:         append([]string{"retention", "update", "--policy-id", "ret_1", "--retention-days", "30", "--clear-legal-hold"}, common...),
+			wantMethod:   http.MethodPatch,
+			wantPath:     "/v1/admin/retention-policies/ret_1",
+			bodyContains: []string{`"retention_days":30`, `"legal_hold":false`, `"hold_reason":""`},
+		},
+		{
+			name:         "dead letter bulk release",
+			args:         append([]string{"dead-letter", "bulk-release", "--entry-ids", "dlq_1,dlq_2", "--reason", "recovered"}, common...),
+			wantMethod:   http.MethodPost,
+			wantPath:     "/v1/dead-letter:bulk-release",
+			bodyContains: []string{`"entry_ids":["dlq_1","dlq_2"]`, `"reason":"recovered"`},
+		},
+		{
+			name:         "quarantine approve",
+			args:         append([]string{"quarantine", "approve", "--entry-id", "qua_1", "--route-after-release", "--reason", "verified"}, common...),
+			wantMethod:   http.MethodPost,
+			wantPath:     "/v1/quarantine/qua_1:approve",
+			bodyContains: []string{`"reason":"verified"`, `"route_after_release":true`},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			seen = nil
+			if err := run(tc.args); err != nil {
+				t.Fatal(err)
+			}
+			if len(seen) != 1 {
+				t.Fatalf("expected one request, got %+v", seen)
+			}
+			got := seen[0]
+			if got.method != tc.wantMethod || got.path != tc.wantPath {
+				t.Fatalf("unexpected request: %+v", got)
+			}
+			if got.method != http.MethodGet && got.body == "" {
+				t.Fatal("expected JSON body")
+			}
+			for _, needle := range tc.bodyContains {
+				if !strings.Contains(got.body, needle) {
+					t.Fatalf("request body %s did not contain %s", got.body, needle)
+				}
+			}
+		})
+	}
+}
+
 func TestDownloadAuditExportWritesPrivateFile(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/v1/audit-exports/exp_1:download" {
