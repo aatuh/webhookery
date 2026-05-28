@@ -31,7 +31,7 @@ import (
 func TestPostgresMigrationAndAPIKeyAuthentication(t *testing.T) {
 	databaseURL := os.Getenv("WEBHOOKERY_TEST_DATABASE_URL")
 	if databaseURL == "" {
-		t.Skip("WEBHOOKERY_TEST_DATABASE_URL is required")
+		t.Skip("WEBHOOKERY_TEST_DATABASE_URL is required to prove live Postgres migrations and API-key authentication")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -1056,7 +1056,7 @@ func openPostgresIntegrationStore(t *testing.T) (context.Context, *Store, authz.
 	t.Helper()
 	databaseURL := os.Getenv("WEBHOOKERY_TEST_DATABASE_URL")
 	if databaseURL == "" {
-		t.Skip("WEBHOOKERY_TEST_DATABASE_URL is required")
+		t.Skip("WEBHOOKERY_TEST_DATABASE_URL is required to prove live Postgres tenant predicates, transactions, locks, outbox, replay, export, and migration behavior")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	t.Cleanup(cancel)

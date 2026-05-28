@@ -5,8 +5,11 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -71,6 +74,87 @@ func TestVerifyEvidenceBundleFileAcceptsValidBundle(t *testing.T) {
 	}
 	if err := verifyEvidenceBundleFile(path); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestAPIEndpointRejectsUnsafeBaseURLs(t *testing.T) {
+	tests := []string{
+		"ftp://api.example",
+		"https://user:pass@api.example",
+		"https:///missing-host",
+	}
+	for _, baseURL := range tests {
+		t.Run(baseURL, func(t *testing.T) {
+			if _, err := apiEndpoint(baseURL, "/v1/events"); err == nil {
+				t.Fatal("expected unsafe base URL rejection")
+			}
+		})
+	}
+
+	endpoint, err := apiEndpoint("https://api.example/", "/v1/events")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if endpoint != "https://api.example/v1/events" {
+		t.Fatalf("unexpected endpoint %q", endpoint)
+	}
+}
+
+func TestCLIParsersTrimAndIgnoreInvalidEntries(t *testing.T) {
+	if got := splitCSV(" events:read, ,events:write "); strings.Join(got, "|") != "events:read|events:write" {
+		t.Fatalf("unexpected csv split: %#v", got)
+	}
+	values := parseKeyValueCSV("provider=stripe,broken, empty = , =ignored,region=eu")
+	if values["provider"] != "stripe" || values["region"] != "eu" || values["empty"] != "" {
+		t.Fatalf("unexpected key value parse: %#v", values)
+	}
+	if _, ok := values[""]; ok {
+		t.Fatalf("empty key must be ignored: %#v", values)
+	}
+}
+
+func TestParseOptionalTimeRequiresRFC3339AndNormalizesUTC(t *testing.T) {
+	if zero, err := parseOptionalTime(""); err != nil || !zero.IsZero() {
+		t.Fatalf("empty time should be nil value, got %v err=%v", zero, err)
+	}
+	parsed, err := parseOptionalTime("2026-05-28T12:30:00+03:00")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if parsed.Format(time.RFC3339) != "2026-05-28T09:30:00Z" {
+		t.Fatalf("time was not normalized to UTC: %s", parsed.Format(time.RFC3339))
+	}
+	if _, err := parseOptionalTime("2026-05-28"); err == nil {
+		t.Fatal("expected non-RFC3339 time rejection")
+	}
+}
+
+func TestPostJSONSendsBearerAndJSONBody(t *testing.T) {
+	var gotAuth, gotContentType, gotBody string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		gotContentType = r.Header.Get("Content-Type")
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		gotBody = string(body)
+		w.WriteHeader(http.StatusAccepted)
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+	defer server.Close()
+
+	if err := postJSON(server.URL, "whkey_test", "/v1/replay-jobs", map[string]string{"event_id": "evt_1"}); err != nil {
+		t.Fatal(err)
+	}
+	if gotAuth != "Bearer whkey_test" {
+		t.Fatalf("unexpected auth header %q", gotAuth)
+	}
+	if gotContentType != "application/json" {
+		t.Fatalf("unexpected content type %q", gotContentType)
+	}
+	if gotBody != `{"event_id":"evt_1"}` {
+		t.Fatalf("unexpected JSON body %q", gotBody)
 	}
 }
 
