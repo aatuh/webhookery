@@ -33,6 +33,59 @@ func TestWritePrivateFileUsesPrivatePermissions(t *testing.T) {
 	}
 }
 
+func TestRunDispatchesSubcommandUsage(t *testing.T) {
+	if err := run(nil); err == nil || !strings.Contains(err.Error(), "usage: whcp") {
+		t.Fatalf("expected top-level usage, got %v", err)
+	}
+	if err := run([]string{"unknown"}); err == nil || !strings.Contains(err.Error(), "usage: whcp") {
+		t.Fatalf("expected unknown command usage, got %v", err)
+	}
+
+	for _, command := range []string{
+		"admin",
+		"api-keys",
+		"producer-clients",
+		"producer-mtls-identities",
+		"key-custody",
+		"identity-providers",
+		"scim-tokens",
+		"role-bindings",
+		"access-policies",
+		"authz",
+		"events",
+		"sources",
+		"provider-connections",
+		"adapters",
+		"endpoints",
+		"subscriptions",
+		"retry-policies",
+		"routes",
+		"transformations",
+		"deliveries",
+		"replay-jobs",
+		"reconciliation-jobs",
+		"ops",
+		"alerts",
+		"notification-channels",
+		"notification-deliveries",
+		"siem-sinks",
+		"siem-deliveries",
+		"audit",
+		"retention",
+		"schemas",
+		"dead-letter",
+		"quarantine",
+		"signatures",
+	} {
+		t.Run(command, func(t *testing.T) {
+			err := run([]string{command})
+			if err == nil || !strings.Contains(err.Error(), "usage: whcp "+command) {
+				t.Fatalf("expected %s usage, got %v", command, err)
+			}
+		})
+	}
+}
+
 func TestWritePrivateFileRejectsSymlink(t *testing.T) {
 	dir := t.TempDir()
 	target := filepath.Join(dir, "target")
