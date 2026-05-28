@@ -6,6 +6,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -30,6 +31,73 @@ func TestOpenAPIAndRoutes(t *testing.T) {
 	server.Routes().ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("openapi route status=%d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestSystemRoutesExposeHealthReadinessAndMetrics(t *testing.T) {
+	server := NewServer(ServerConfig{
+		Control: NewNoopControl(),
+		Ingest:  app.NewIngestService(&fakeIngestStore{}, app.SystemClock{}),
+		Auth:    app.NewStaticAuthenticator("token", authz.Actor{ID: "usr_1", TenantID: "ten_1", Role: authz.RoleAdmin, Scopes: []string{"*"}}),
+		Health: func(context.Context) error {
+			return nil
+		},
+	})
+
+	for _, path := range []string{"/healthz", "/readyz"} {
+		t.Run(path, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			req := httptest.NewRequest(http.MethodGet, path, nil)
+			server.Routes().ServeHTTP(rec, req)
+
+			if rec.Code != http.StatusOK {
+				t.Fatalf("expected 200, got %d body=%s", rec.Code, rec.Body.String())
+			}
+			if !strings.Contains(rec.Body.String(), `"ok":true`) {
+				t.Fatalf("unexpected health body %s", rec.Body.String())
+			}
+		})
+	}
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/metrics", nil)
+	server.Routes().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected metrics 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if got := rec.Header().Get("Content-Type"); !strings.Contains(got, "text/plain") {
+		t.Fatalf("unexpected metrics content-type %q", got)
+	}
+	if !strings.Contains(rec.Body.String(), "webhookery_events_total") {
+		t.Fatalf("metrics body did not include expected series: %s", rec.Body.String())
+	}
+}
+
+func TestReadyRouteReportsDependencyFailureAsRetryableProblem(t *testing.T) {
+	server := NewServer(ServerConfig{
+		Control: NewNoopControl(),
+		Ingest:  app.NewIngestService(&fakeIngestStore{}, app.SystemClock{}),
+		Auth:    app.NewStaticAuthenticator("token", authz.Actor{ID: "usr_1", TenantID: "ten_1", Role: authz.RoleAdmin, Scopes: []string{"*"}}),
+		Health: func(context.Context) error {
+			return errors.New("database unavailable")
+		},
+	})
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/readyz", nil)
+	req.Header.Set("X-Request-ID", "req_ready")
+	server.Routes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected 503, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	for _, want := range []string{`"code":"not_ready"`, `"request_id":"req_ready"`, `"retryable":true`} {
+		if !strings.Contains(rec.Body.String(), want) {
+			t.Fatalf("readiness problem %s did not contain %s", rec.Body.String(), want)
+		}
+	}
+	if strings.Contains(rec.Body.String(), "database unavailable") {
+		t.Fatalf("readiness response leaked dependency detail: %s", rec.Body.String())
 	}
 }
 
