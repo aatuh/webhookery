@@ -121,3 +121,52 @@ func TestTruncateResponseBody(t *testing.T) {
 		t.Fatalf("unexpected truncated body: %q", body)
 	}
 }
+
+func TestClassifyDeliveryHTTPStatuses(t *testing.T) {
+	tests := []struct {
+		status int
+		want   string
+	}{
+		{status: http.StatusOK, want: "success"},
+		{status: http.StatusAccepted, want: "success"},
+		{status: http.StatusFound, want: "redirect_blocked"},
+		{status: http.StatusRequestTimeout, want: "temporary_http"},
+		{status: http.StatusTooManyRequests, want: "temporary_http"},
+		{status: http.StatusInternalServerError, want: "temporary_http"},
+		{status: http.StatusBadRequest, want: "permanent_http"},
+		{status: http.StatusUnauthorized, want: "permanent_http"},
+	}
+	for _, tt := range tests {
+		t.Run(http.StatusText(tt.status), func(t *testing.T) {
+			if got := classify(tt.status); got != tt.want {
+				t.Fatalf("classify(%d)=%q want %q", tt.status, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestClientRejectsUnsafeCustomHTTPTransport(t *testing.T) {
+	client := Client{
+		HTTP: &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+			t.Fatal("unsafe custom transport must not be used")
+			return nil, nil
+		})},
+		Secret: []byte("secret"),
+		SSRF: ssrf.Validator{Resolver: ssrf.StaticResolver{
+			"example.com": {netip.MustParseAddr("93.184.216.34")},
+		}},
+	}
+	result, err := client.Deliver(context.Background(), "https://example.com/webhook", []byte("{}"))
+	if err == nil {
+		t.Fatal("expected unsafe custom transport rejection")
+	}
+	if result.FailureClass != "client_configuration_error" {
+		t.Fatalf("expected client_configuration_error, got %+v", result)
+	}
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return f(req)
+}

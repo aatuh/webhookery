@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/base64"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -450,6 +451,153 @@ func TestNormalizedEventBodyRequiresRawScope(t *testing.T) {
 
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("expected 403, got %d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestRawPayloadRequiresRawScopeBeforeStoreAccess(t *testing.T) {
+	store := &rawPayloadControlStore{}
+	server := NewServer(ServerConfig{
+		Control: app.NewControlService(store, ssrf.Validator{Resolver: ssrf.StaticResolver{}}),
+		Ingest:  app.NewIngestService(&fakeIngestStore{}, app.SystemClock{}),
+		Auth:    app.NewStaticAuthenticator("token", authz.Actor{ID: "usr_1", TenantID: "ten_1", Role: authz.RoleDeveloper, Scopes: []string{"events:read"}}),
+		OpenAPI: []byte("openapi: 3.1.0\n"),
+	})
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/v1/events/evt_1/raw", nil)
+	req.Header.Set("Authorization", "Bearer token")
+
+	server.Routes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("expected 403, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if store.rawCalled {
+		t.Fatal("raw payload store must not be called without events:raw")
+	}
+}
+
+func TestRawPayloadEndpointEncodesBodyAndTenantActorContext(t *testing.T) {
+	store := &rawPayloadControlStore{}
+	server := NewServer(ServerConfig{
+		Control: app.NewControlService(store, ssrf.Validator{Resolver: ssrf.StaticResolver{}}),
+		Ingest:  app.NewIngestService(&fakeIngestStore{}, app.SystemClock{}),
+		Auth:    app.NewStaticAuthenticator("token", authz.Actor{ID: "usr_raw", TenantID: "ten_raw", Role: authz.RoleOwner, Scopes: []string{"events:raw"}}),
+		OpenAPI: []byte("openapi: 3.1.0\n"),
+	})
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/v1/events/evt_raw/raw", nil)
+	req.Header.Set("Authorization", "Bearer token")
+
+	server.Routes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if !store.rawCalled || store.tenantID != "ten_raw" || store.eventID != "evt_raw" || store.actorID != "usr_raw" {
+		t.Fatalf("raw payload store called with wrong context: %+v", store)
+	}
+	wantBody := base64.StdEncoding.EncodeToString([]byte("raw evidence bytes"))
+	body := rec.Body.String()
+	if !strings.Contains(body, `"body_base64":"`+wantBody+`"`) {
+		t.Fatalf("raw payload body was not base64 encoded: %s", body)
+	}
+	if strings.Contains(body, "raw evidence bytes") {
+		t.Fatalf("raw payload response leaked plaintext body outside base64 field: %s", body)
+	}
+}
+
+func TestCreateReplayPropagatesReasonAndConfig(t *testing.T) {
+	store := &replayControlStore{}
+	server := NewServer(ServerConfig{
+		Control: app.NewControlService(store, ssrf.Validator{Resolver: ssrf.StaticResolver{}}),
+		Ingest:  app.NewIngestService(&fakeIngestStore{}, app.SystemClock{}),
+		Auth:    app.NewStaticAuthenticator("token", authz.Actor{ID: "usr_replay", TenantID: "ten_replay", Role: authz.RoleOperator, Scopes: []string{"replay:write"}}),
+		OpenAPI: []byte("openapi: 3.1.0\n"),
+	})
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/v1/replay-jobs", bytes.NewBufferString(`{"event_id":"evt_1","reason":"customer fixed receiver","config_mode":"original","rate_limit_per_minute":25}`))
+	req.Header.Set("Authorization", "Bearer token")
+	req.Header.Set("Content-Type", "application/json")
+
+	server.Routes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("expected 202, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if !store.replayCalled || store.tenantID != "ten_replay" || store.actorID != "usr_replay" {
+		t.Fatalf("replay store called with wrong context: %+v", store)
+	}
+	if store.replayReq.EventID != "evt_1" || store.replayReq.Reason != "customer fixed receiver" || store.replayReq.ConfigMode != app.ReplayConfigOriginal || store.replayReq.RateLimitPerMinute != 25 {
+		t.Fatalf("replay request was not propagated: %+v", store.replayReq)
+	}
+}
+
+func TestCreateReplayRejectsMissingReasonBeforeStoreAccess(t *testing.T) {
+	store := &replayControlStore{}
+	server := NewServer(ServerConfig{
+		Control: app.NewControlService(store, ssrf.Validator{Resolver: ssrf.StaticResolver{}}),
+		Ingest:  app.NewIngestService(&fakeIngestStore{}, app.SystemClock{}),
+		Auth:    app.NewStaticAuthenticator("token", authz.Actor{ID: "usr_replay", TenantID: "ten_replay", Role: authz.RoleOperator, Scopes: []string{"replay:write"}}),
+		OpenAPI: []byte("openapi: 3.1.0\n"),
+	})
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/v1/replay-jobs", bytes.NewBufferString(`{"event_id":"evt_1"}`))
+	req.Header.Set("Authorization", "Bearer token")
+	req.Header.Set("Content-Type", "application/json")
+
+	server.Routes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if store.replayCalled {
+		t.Fatal("missing replay reason must be rejected before store side effects")
+	}
+}
+
+func TestDeadLetterReleasePropagatesReason(t *testing.T) {
+	store := &replayControlStore{}
+	server := NewServer(ServerConfig{
+		Control: app.NewControlService(store, ssrf.Validator{Resolver: ssrf.StaticResolver{}}),
+		Ingest:  app.NewIngestService(&fakeIngestStore{}, app.SystemClock{}),
+		Auth:    app.NewStaticAuthenticator("token", authz.Actor{ID: "usr_ops", TenantID: "ten_ops", Role: authz.RoleOperator, Scopes: []string{"deliveries:retry"}}),
+		OpenAPI: []byte("openapi: 3.1.0\n"),
+	})
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/v1/dead-letter/dlq_1:release", bytes.NewBufferString(`{"reason":"receiver recovered"}`))
+	req.Header.Set("Authorization", "Bearer token")
+	req.Header.Set("Content-Type", "application/json")
+
+	server.Routes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("expected 202, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if !store.deadLetterCalled || store.entryID != "dlq_1" || store.reason != "receiver recovered" || store.tenantID != "ten_ops" || store.actorID != "usr_ops" {
+		t.Fatalf("dead-letter release used wrong context: %+v", store)
+	}
+}
+
+func TestDeadLetterReleaseRequiresRetryScopeBeforeStoreAccess(t *testing.T) {
+	store := &replayControlStore{}
+	server := NewServer(ServerConfig{
+		Control: app.NewControlService(store, ssrf.Validator{Resolver: ssrf.StaticResolver{}}),
+		Ingest:  app.NewIngestService(&fakeIngestStore{}, app.SystemClock{}),
+		Auth:    app.NewStaticAuthenticator("token", authz.Actor{ID: "usr_support", TenantID: "ten_ops", Role: authz.RoleSupport, Scopes: []string{"deliveries:read"}}),
+		OpenAPI: []byte("openapi: 3.1.0\n"),
+	})
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/v1/dead-letter/dlq_1:release", bytes.NewBufferString(`{"reason":"receiver recovered"}`))
+	req.Header.Set("Authorization", "Bearer token")
+	req.Header.Set("Content-Type", "application/json")
+
+	server.Routes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("expected 403, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if store.deadLetterCalled {
+		t.Fatal("dead-letter release store must not be called without deliveries:retry")
 	}
 }
 
@@ -1154,4 +1302,58 @@ func (noopControlStore) ListTransformationVersions(context.Context, string, stri
 }
 func (noopControlStore) ActivateTransformationVersion(context.Context, string, string, string, string, string) (domain.TransformationVersion, error) {
 	return domain.TransformationVersion{}, nil
+}
+
+type rawPayloadControlStore struct {
+	noopControlStore
+	rawCalled bool
+	tenantID  string
+	eventID   string
+	actorID   string
+}
+
+func (s *rawPayloadControlStore) GetRawPayload(_ context.Context, tenantID, eventID, actorID string) (domain.RawPayload, error) {
+	s.rawCalled = true
+	s.tenantID = tenantID
+	s.eventID = eventID
+	s.actorID = actorID
+	return domain.RawPayload{
+		ID:             "raw_1",
+		TenantID:       tenantID,
+		EventID:        eventID,
+		SHA256:         domain.HashSHA256([]byte("raw evidence bytes")),
+		ContentType:    "application/json",
+		SizeBytes:      int64(len("raw evidence bytes")),
+		Body:           []byte("raw evidence bytes"),
+		StorageBackend: domain.RawStoragePostgres,
+		StorageStatus:  domain.StorageStatusStored,
+	}, nil
+}
+
+type replayControlStore struct {
+	noopControlStore
+	replayCalled     bool
+	deadLetterCalled bool
+	tenantID         string
+	actorID          string
+	entryID          string
+	reason           string
+	replayReq        app.ReplayRequest
+}
+
+func (s *replayControlStore) CreateReplay(_ context.Context, tenantID, actorID string, req app.ReplayRequest) (app.ReplayJob, error) {
+	s.replayCalled = true
+	s.tenantID = tenantID
+	s.actorID = actorID
+	s.replayReq = req
+	return app.ReplayJob{ID: "rpl_1", State: "scheduled", ConfigMode: req.ConfigMode, RateLimitPerMinute: req.RateLimitPerMinute, TotalItems: 1}, nil
+}
+
+func (s *replayControlStore) ReleaseDeadLetter(_ context.Context, tenantID, entryID, actorID, reason string) (app.ReplayJob, error) {
+	s.deadLetterCalled = true
+	s.tenantID = tenantID
+	s.actorID = actorID
+	s.entryID = entryID
+	s.reason = reason
+	return app.ReplayJob{ID: "rpl_dlq_1", State: "scheduled", TotalItems: 1}, nil
 }
