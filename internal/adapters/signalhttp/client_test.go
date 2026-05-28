@@ -65,3 +65,77 @@ func TestSafeDoErrorDoesNotLeakCustomerURLTokens(t *testing.T) {
 		t.Fatalf("network error leaked customer URL detail: %v", err)
 	}
 }
+
+func TestSignalClassifyHTTPStatuses(t *testing.T) {
+	tests := []struct {
+		status int
+		want   string
+	}{
+		{status: http.StatusOK, want: "success"},
+		{status: http.StatusNoContent, want: "success"},
+		{status: http.StatusTemporaryRedirect, want: "redirect_blocked"},
+		{status: http.StatusTooManyRequests, want: "temporary_http"},
+		{status: http.StatusBadGateway, want: "temporary_http"},
+		{status: http.StatusBadRequest, want: "permanent_http"},
+	}
+	for _, tt := range tests {
+		t.Run(http.StatusText(tt.status), func(t *testing.T) {
+			if got := classify(tt.status); got != tt.want {
+				t.Fatalf("classify(%d)=%q want %q", tt.status, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestDeliverRejectsUnsafeCustomHTTPTransport(t *testing.T) {
+	client := Client{
+		HTTP: &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+			t.Fatal("unsafe custom transport must not be used")
+			return nil, nil
+		})},
+		SSRF: ssrf.Validator{Resolver: ssrf.StaticResolver{
+			"signals.example": {netip.MustParseAddr("93.184.216.34")},
+		}},
+	}
+	result, err := client.Deliver(context.Background(), "https://signals.example/hook", []byte("{}"), []byte("secret"))
+	if err == nil {
+		t.Fatal("expected unsafe custom transport rejection")
+	}
+	if result.FailureClass != "client_configuration_error" {
+		t.Fatalf("expected client_configuration_error, got %+v", result)
+	}
+}
+
+func TestReadTruncatedSignalResponse(t *testing.T) {
+	body, err := readTruncated(strings.NewReader(strings.Repeat("x", 20)), 8)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(body) != "xxxxxxxx" {
+		t.Fatalf("unexpected truncated body %q", string(body))
+	}
+}
+
+func TestSafeDoErrorPreservesPolicyErrors(t *testing.T) {
+	failureClass, err := safeDoError(ssrf.PolicyError{Reasons: []string{"blocked_ip_range"}})
+	if failureClass != "policy_blocked" {
+		t.Fatalf("expected policy_blocked, got %q", failureClass)
+	}
+	var policyErr ssrf.PolicyError
+	if !errors.As(err, &policyErr) {
+		t.Fatalf("expected policy error, got %v", err)
+	}
+}
+
+func TestHTTPClientDisablesRedirects(t *testing.T) {
+	client := HTTPClient(2 * time.Second)
+	if err := client.CheckRedirect(nil, nil); !errors.Is(err, http.ErrUseLastResponse) {
+		t.Fatalf("expected redirects disabled, got %v", err)
+	}
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return f(req)
+}

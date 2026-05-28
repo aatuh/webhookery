@@ -48,6 +48,175 @@ func TestControlRoutesRequireBearer(t *testing.T) {
 	}
 }
 
+func TestAuthenticatedReadRoutesReturnJSON(t *testing.T) {
+	server := testServerWithActor(authz.Actor{ID: "usr_1", TenantID: "ten_1", Role: authz.RoleOwner, Scopes: []string{"*"}})
+	routes := []string{
+		"/v1/auth/session",
+		"/v1/auth/sessions",
+		"/v1/identity-providers",
+		"/v1/identity-providers/idp_1",
+		"/v1/scim-tokens",
+		"/v1/role-bindings",
+		"/v1/access-policies",
+		"/v1/api-keys",
+		"/v1/producer-clients",
+		"/v1/producer-clients/pcl_1",
+		"/v1/producer-mtls-identities",
+		"/v1/producer-mtls-identities/pmi_1",
+		"/v1/sources",
+		"/v1/sources/src_1",
+		"/v1/provider-connections",
+		"/v1/provider-connections/pcn_1",
+		"/v1/adapters",
+		"/v1/adapters/pad_1",
+		"/v1/adapters/pad_1/versions",
+		"/v1/endpoints",
+		"/v1/endpoints/end_1",
+		"/v1/subscriptions",
+		"/v1/subscriptions/sub_1",
+		"/v1/retry-policies",
+		"/v1/retry-policies/rtp_1",
+		"/v1/routes",
+		"/v1/routes/rte_1",
+		"/v1/routes/rte_1/versions",
+		"/v1/event-types",
+		"/v1/event-types/invoice.paid",
+		"/v1/event-types/invoice.paid/schemas",
+		"/v1/event-types/invoice.paid/schemas/2026-05-01",
+		"/v1/events",
+		"/v1/events/evt_1",
+		"/v1/events/evt_1/timeline",
+		"/v1/transformations",
+		"/v1/transformations/trn_1",
+		"/v1/transformations/trn_1/versions",
+		"/v1/deliveries",
+		"/v1/deliveries/del_1/attempts",
+		"/v1/delivery-attempts/att_1",
+		"/v1/replay-jobs",
+		"/v1/reconciliation-jobs",
+		"/v1/reconciliation-jobs/rec_1",
+		"/v1/reconciliation-jobs/rec_1/items",
+		"/v1/dead-letter",
+		"/v1/quarantine",
+		"/v1/audit-events",
+		"/v1/audit-chain/head",
+		"/v1/audit-chain/anchors",
+		"/v1/audit-chain/anchors/anc_1",
+		"/v1/audit-exports",
+		"/v1/audit-exports/exp_1",
+		"/v1/admin/retention-policies",
+		"/v1/endpoint-health",
+		"/v1/ops/metrics",
+		"/v1/ops/metrics/rollups?metric_name=deliveries",
+		"/v1/ops/storage",
+		"/v1/ops/workers",
+		"/v1/ops/workers/wrk_1",
+		"/v1/ops/queues",
+		"/v1/alerts",
+		"/v1/alerts/alr_1",
+		"/v1/alert-firings",
+		"/v1/alert-firings/afr_1",
+		"/v1/notification-channels",
+		"/v1/notification-channels/nch_1",
+		"/v1/notification-deliveries",
+		"/v1/notification-deliveries/ndel_1/attempts",
+		"/v1/siem-sinks",
+		"/v1/siem-sinks/snk_1",
+		"/v1/siem-deliveries",
+		"/v1/siem-deliveries/sdel_1/attempts",
+	}
+	expectedStatus := map[string]int{
+		"/v1/auth/session":                   http.StatusUnauthorized,
+		"/v1/auth/sessions":                  http.StatusBadRequest,
+		"/v1/identity-providers":             http.StatusBadRequest,
+		"/v1/identity-providers/idp_1":       http.StatusBadRequest,
+		"/v1/scim-tokens":                    http.StatusBadRequest,
+		"/v1/role-bindings":                  http.StatusBadRequest,
+		"/v1/access-policies":                http.StatusBadRequest,
+		"/v1/producer-clients":               http.StatusNotFound,
+		"/v1/producer-clients/pcl_1":         http.StatusNotFound,
+		"/v1/producer-mtls-identities":       http.StatusNotFound,
+		"/v1/producer-mtls-identities/pmi_1": http.StatusNotFound,
+	}
+	for _, path := range routes {
+		t.Run(path, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			req := httptest.NewRequest(http.MethodGet, path, nil)
+			req.Header.Set("Authorization", "Bearer token")
+
+			server.Routes().ServeHTTP(rec, req)
+
+			wantStatus := http.StatusOK
+			if status := expectedStatus[path]; status != 0 {
+				wantStatus = status
+			}
+			if rec.Code != wantStatus {
+				t.Fatalf("expected %d, got %d body=%s", wantStatus, rec.Code, rec.Body.String())
+			}
+			if got := rec.Header().Get("Content-Type"); !strings.Contains(got, "application/json") {
+				t.Fatalf("expected JSON response, got content-type %q body=%s", got, rec.Body.String())
+			}
+		})
+	}
+}
+
+func TestAuthenticatedMutationRoutesPreserveContracts(t *testing.T) {
+	server := testServerWithActor(authz.Actor{ID: "usr_1", TenantID: "ten_1", Role: authz.RoleOwner, Scopes: []string{"*"}})
+	tests := []struct {
+		name       string
+		method     string
+		path       string
+		body       string
+		wantStatus int
+	}{
+		{name: "revoke api key", method: http.MethodPost, path: "/v1/api-keys/key_1:revoke", body: `{"reason":"rotate"}`, wantStatus: http.StatusOK},
+		{name: "delete source", method: http.MethodDelete, path: "/v1/sources/src_1", body: `{"reason":"retire"}`, wantStatus: http.StatusOK},
+		{name: "rotate source secret", method: http.MethodPost, path: "/v1/sources/src_1/secrets:rotate", body: `{"new_secret":"next-secret","reason":"rotate","grace_period_hours":1}`, wantStatus: http.StatusOK},
+		{name: "verify provider connection", method: http.MethodPost, path: "/v1/provider-connections/pcn_1:verify", body: `{"reason":"check"}`, wantStatus: http.StatusOK},
+		{name: "transition adapter", method: http.MethodPost, path: "/v1/adapters/pad_1/versions/adv_1:transition", body: `{"action":"activate","reason":"promote"}`, wantStatus: http.StatusOK},
+		{name: "delete endpoint", method: http.MethodDelete, path: "/v1/endpoints/end_1", body: `{"reason":"retire"}`, wantStatus: http.StatusOK},
+		{name: "validate endpoint url", method: http.MethodPost, path: "/v1/endpoints:validate-url", body: `{"url":"https://receiver.example/hook"}`, wantStatus: http.StatusOK},
+		{name: "test endpoint", method: http.MethodPost, path: "/v1/endpoints/end_1:test", body: `{"reason":"smoke"}`, wantStatus: http.StatusAccepted},
+		{name: "activate route", method: http.MethodPost, path: "/v1/routes/rte_1:activate", body: `{"reason":"publish"}`, wantStatus: http.StatusOK},
+		{name: "dry run route", method: http.MethodPost, path: "/v1/routes/rte_1:dry-run", body: `{"event_id":"evt_1"}`, wantStatus: http.StatusOK},
+		{name: "validate schema", method: http.MethodPost, path: "/v1/event-types/invoice.paid/schemas/2026-05-01:validate", body: `{"payload":"{\"id\":\"evt_1\"}"}`, wantStatus: http.StatusOK},
+		{name: "check schema compatibility", method: http.MethodPost, path: "/v1/event-types/invoice.paid/schemas/2026-05-01:check-compatibility", body: `{"new_schema":"{\"type\":\"object\"}"}`, wantStatus: http.StatusOK},
+		{name: "retry delivery", method: http.MethodPost, path: "/v1/deliveries/del_1:retry", body: `{"reason":"retry"}`, wantStatus: http.StatusAccepted},
+		{name: "cancel delivery", method: http.MethodPost, path: "/v1/deliveries/del_1:cancel", body: `{"reason":"cancel"}`, wantStatus: http.StatusOK},
+		{name: "dry run replay", method: http.MethodPost, path: "/v1/replay-jobs:dry-run", body: `{"event_id":"evt_1","reason":"inspect"}`, wantStatus: http.StatusOK},
+		{name: "approve replay", method: http.MethodPost, path: "/v1/replay-jobs/rpl_1:approve", body: `{"reason":"approve"}`, wantStatus: http.StatusOK},
+		{name: "pause replay", method: http.MethodPost, path: "/v1/replay-jobs/rpl_1:pause", body: `{"reason":"pause"}`, wantStatus: http.StatusOK},
+		{name: "cancel reconciliation", method: http.MethodPost, path: "/v1/reconciliation-jobs/rec_1:cancel", body: `{"reason":"stop"}`, wantStatus: http.StatusOK},
+		{name: "bulk release dead letter", method: http.MethodPost, path: "/v1/dead-letter:bulk-release", body: `{"entry_ids":["dlq_1"],"reason":"release"}`, wantStatus: http.StatusAccepted},
+		{name: "approve quarantine", method: http.MethodPost, path: "/v1/quarantine/qrn_1:approve", body: `{"reason":"safe","route_after_release":true}`, wantStatus: http.StatusOK},
+		{name: "reject quarantine", method: http.MethodPost, path: "/v1/quarantine/qrn_1:reject", body: `{"reason":"reject"}`, wantStatus: http.StatusOK},
+		{name: "verify audit chain", method: http.MethodPost, path: "/v1/audit-chain:verify", body: `{"from_sequence":1,"to_sequence":2}`, wantStatus: http.StatusOK},
+		{name: "update retention", method: http.MethodPatch, path: "/v1/admin/retention-policies/ret_1", body: `{"retention_days":30}`, wantStatus: http.StatusOK},
+		{name: "ack alert", method: http.MethodPost, path: "/v1/alert-firings/afr_1:acknowledge", body: `{"reason":"seen"}`, wantStatus: http.StatusOK},
+		{name: "test notification", method: http.MethodPost, path: "/v1/notification-channels/nch_1:test", body: `{"reason":"smoke"}`, wantStatus: http.StatusBadRequest},
+		{name: "retry notification", method: http.MethodPost, path: "/v1/notification-deliveries/ndel_1:retry", body: `{"reason":"retry"}`, wantStatus: http.StatusOK},
+		{name: "test siem", method: http.MethodPost, path: "/v1/siem-sinks/snk_1:test", body: `{"reason":"smoke"}`, wantStatus: http.StatusBadRequest},
+		{name: "retry siem", method: http.MethodPost, path: "/v1/siem-deliveries/sdel_1:retry", body: `{"reason":"retry"}`, wantStatus: http.StatusOK},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			req := httptest.NewRequest(tt.method, tt.path, bytes.NewBufferString(tt.body))
+			req.Header.Set("Authorization", "Bearer token")
+			req.Header.Set("Content-Type", "application/json")
+
+			server.Routes().ServeHTTP(rec, req)
+
+			if rec.Code != tt.wantStatus {
+				t.Fatalf("expected %d, got %d body=%s", tt.wantStatus, rec.Code, rec.Body.String())
+			}
+			if got := rec.Header().Get("Content-Type"); !strings.Contains(got, "application/json") {
+				t.Fatalf("expected JSON response, got content-type %q body=%s", got, rec.Body.String())
+			}
+		})
+	}
+}
+
 func TestProductEventSourceIDExtractionPreservesRawBodyPath(t *testing.T) {
 	sourceID := productSourceID([]byte(`{"source_id":"src_internal","id":"evt_1"}`))
 	if sourceID != "src_internal" {
@@ -1006,7 +1175,7 @@ func (noopControlStore) ListEventSchemas(context.Context, string, string, int) (
 	return nil, nil
 }
 func (noopControlStore) GetEventSchema(context.Context, string, string, string) (domain.EventSchema, error) {
-	return domain.EventSchema{}, nil
+	return domain.EventSchema{Schema: `{"type":"object"}`}, nil
 }
 func (noopControlStore) UpdateEventSchema(context.Context, string, string, string, string, app.UpdateEventSchemaRequest) (domain.EventSchema, error) {
 	return domain.EventSchema{}, nil

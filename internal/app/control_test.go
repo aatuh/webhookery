@@ -21,7 +21,7 @@ import (
 )
 
 func TestControlServiceScopesEventReadsToActorTenant(t *testing.T) {
-	store := &fakeControlStore{}
+	store := &fakeControlStore{eventSchema: domain.EventSchema{Schema: `{"type":"object"}`}}
 	svc := NewControlService(store, ssrf.Validator{Resolver: ssrf.StaticResolver{}})
 	actor := authz.Actor{ID: "usr_1", TenantID: "ten_a", Role: authz.RoleDeveloper, Scopes: []string{"events:read"}}
 
@@ -59,6 +59,225 @@ func TestControlServiceScopesEventTypeReadsToActorTenant(t *testing.T) {
 	}
 	if store.schemaTenantID != "ten_a" {
 		t.Fatalf("expected tenant-scoped event type read, got %q", store.schemaTenantID)
+	}
+}
+
+func TestControlServiceOwnerHappyPathSurface(t *testing.T) {
+	store := &fakeControlStore{eventSchema: domain.EventSchema{Schema: `{"type":"object"}`}}
+	svc := NewControlService(store, ssrf.Validator{Resolver: ssrf.StaticResolver{
+		"receiver.example": {netip.MustParseAddr("93.184.216.34")},
+		"signals.example":  {netip.MustParseAddr("93.184.216.34")},
+		"siem.example":     {netip.MustParseAddr("93.184.216.34")},
+	}})
+	actor := authz.Actor{ID: "usr_owner", TenantID: "ten_owner", Role: authz.RoleOwner, Scopes: []string{"*"}}
+	active := domain.StateActive
+	disabled := domain.StateDisabled
+	tests := []struct {
+		name string
+		run  func(context.Context) error
+	}{
+		{name: "api keys", run: func(ctx context.Context) error {
+			if _, err := svc.ListAPIKeys(ctx, actor, 10); err != nil {
+				return err
+			}
+			_, err := svc.RevokeAPIKey(ctx, actor, "key_1", RevokeAPIKeyRequest{Reason: "rotate"})
+			return err
+		}},
+		{name: "sources", run: func(ctx context.Context) error {
+			if _, err := svc.CreateSource(ctx, actor, CreateSourceRequest{Name: "stripe", Provider: "stripe", Adapter: "stripe", VerificationSecret: "whsec_test"}); err != nil {
+				return err
+			}
+			if _, err := svc.ListSources(ctx, actor, 10); err != nil {
+				return err
+			}
+			_, err := svc.RotateSourceSecret(ctx, actor, "src_1", RotateSourceSecretRequest{NewSecret: "next", GracePeriodHours: 1, Reason: "rotate"})
+			return err
+		}},
+		{name: "endpoints", run: func(ctx context.Context) error {
+			if _, _, err := svc.CreateEndpoint(ctx, actor, CreateEndpointRequest{Name: "receiver", URL: "https://receiver.example/hook"}); err != nil {
+				return err
+			}
+			if _, err := svc.ListEndpoints(ctx, actor, 10); err != nil {
+				return err
+			}
+			if _, err := svc.TestEndpoint(ctx, actor, "end_1", TestEndpointRequest{Reason: "smoke"}); err != nil {
+				return err
+			}
+			_, err := svc.RotateEndpointSecret(ctx, actor, "end_1", RotateEndpointSecretRequest{GracePeriodHours: 1, Reason: "rotate"})
+			return err
+		}},
+		{name: "subscriptions and routes", run: func(ctx context.Context) error {
+			if _, err := svc.CreateSubscription(ctx, actor, CreateSubscriptionRequest{EndpointID: "end_1", EventTypes: []string{"invoice.paid"}}); err != nil {
+				return err
+			}
+			if _, err := svc.ListSubscriptions(ctx, actor, 10); err != nil {
+				return err
+			}
+			if _, err := svc.CreateRoute(ctx, actor, CreateRouteRequest{Name: "route", SourceID: "src_1", EndpointID: "end_1", EventTypes: []string{"invoice.paid"}}); err != nil {
+				return err
+			}
+			if _, err := svc.ListRoutes(ctx, actor, 10); err != nil {
+				return err
+			}
+			if _, err := svc.ListRouteVersions(ctx, actor, "rte_1", 10); err != nil {
+				return err
+			}
+			if _, err := svc.ActivateRoute(ctx, actor, "rte_1", "publish"); err != nil {
+				return err
+			}
+			_, err := svc.DryRunRoute(ctx, actor, "rte_1", "evt_1")
+			return err
+		}},
+		{name: "retry policies", run: func(ctx context.Context) error {
+			if _, err := svc.CreateRetryPolicy(ctx, actor, CreateRetryPolicyRequest{Name: "standard", MaxAttempts: 3, MaxDurationSeconds: 3600, InitialDelaySeconds: 1, MaxDelaySeconds: 60}); err != nil {
+				return err
+			}
+			if _, err := svc.ListRetryPolicies(ctx, actor, 10); err != nil {
+				return err
+			}
+			_, err := svc.DeleteRetryPolicy(ctx, actor, "rtp_1", StateChangeRequest{Reason: "retire"})
+			return err
+		}},
+		{name: "event schemas", run: func(ctx context.Context) error {
+			if _, err := svc.CreateEventType(ctx, actor, CreateEventTypeRequest{Name: "invoice.paid", Description: "Invoice paid"}); err != nil {
+				return err
+			}
+			if _, err := svc.ListEventTypes(ctx, actor, 10); err != nil {
+				return err
+			}
+			if _, err := svc.CreateEventSchema(ctx, actor, "invoice.paid", CreateEventSchemaRequest{Version: "2026-05-01", Schema: `{"type":"object"}`}); err != nil {
+				return err
+			}
+			if _, err := svc.ListEventSchemas(ctx, actor, "invoice.paid", 10); err != nil {
+				return err
+			}
+			if _, err := svc.ValidateEventSchema(ctx, actor, "invoice.paid", "2026-05-01", ValidateSchemaRequest{Payload: `{"id":"evt_1"}`}); err != nil {
+				return err
+			}
+			if _, err := svc.CheckEventSchemaCompatibility(ctx, actor, "invoice.paid", "2026-05-01", CheckSchemaCompatibilityRequest{NewSchema: `{"type":"object"}`}); err != nil {
+				return err
+			}
+			_, err := svc.DeleteEventSchema(ctx, actor, "invoice.paid", "2026-05-01", StateChangeRequest{Reason: "retire"})
+			return err
+		}},
+		{name: "events and deliveries", run: func(ctx context.Context) error {
+			if _, err := svc.ListEvents(ctx, actor, 10); err != nil {
+				return err
+			}
+			if _, err := svc.ListEventTimeline(ctx, actor, "evt_1", 10); err != nil {
+				return err
+			}
+			if _, err := svc.ListDeliveries(ctx, actor, 10); err != nil {
+				return err
+			}
+			if _, err := svc.ListDeliveryAttempts(ctx, actor, "del_1", 10); err != nil {
+				return err
+			}
+			if _, err := svc.GetDeliveryAttempt(ctx, actor, "att_1"); err != nil {
+				return err
+			}
+			if _, err := svc.RetryDelivery(ctx, actor, "del_1", "retry"); err != nil {
+				return err
+			}
+			_, err := svc.CancelDelivery(ctx, actor, "del_1", StateChangeRequest{Reason: "cancel"})
+			return err
+		}},
+		{name: "ops and signals", run: func(ctx context.Context) error {
+			if _, err := svc.ListEndpointHealth(ctx, actor, 10); err != nil {
+				return err
+			}
+			if _, err := svc.OpsMetrics(ctx, actor); err != nil {
+				return err
+			}
+			if _, err := svc.PublicOpsMetrics(ctx); err != nil {
+				return err
+			}
+			if _, err := svc.ListWorkers(ctx, actor, 10); err != nil {
+				return err
+			}
+			if _, err := svc.GetWorker(ctx, actor, "wrk_1"); err != nil {
+				return err
+			}
+			if _, err := svc.ListAlertRules(ctx, actor, 10); err != nil {
+				return err
+			}
+			if _, err := svc.GetAlertRule(ctx, actor, "alr_1"); err != nil {
+				return err
+			}
+			if _, err := svc.UpdateAlertRule(ctx, actor, "alr_1", UpdateAlertRuleRequest{Name: ptrString("latency"), State: &active, Reason: "tune"}); err != nil {
+				return err
+			}
+			if _, err := svc.ListAlertFirings(ctx, actor, domain.AlertFiringOpen, 10); err != nil {
+				return err
+			}
+			if _, err := svc.GetAlertFiring(ctx, actor, "afr_1"); err != nil {
+				return err
+			}
+			if _, _, err := svc.CreateNotificationChannel(ctx, actor, CreateNotificationChannelRequest{Name: "pager", ChannelType: domain.NotificationChannelWebhook, URL: "https://signals.example/hook", SigningSecret: "0123456789abcdef"}); err != nil {
+				return err
+			}
+			if _, err := svc.ListNotificationChannels(ctx, actor, 10); err != nil {
+				return err
+			}
+			if _, err := svc.GetNotificationChannel(ctx, actor, "nch_1"); err != nil {
+				return err
+			}
+			if _, _, err := svc.UpdateNotificationChannel(ctx, actor, "nch_1", UpdateNotificationChannelRequest{State: &disabled, Reason: "pause"}); err != nil {
+				return err
+			}
+			if _, err := svc.DeleteNotificationChannel(ctx, actor, "nch_1", StateChangeRequest{Reason: "retire"}); err != nil {
+				return err
+			}
+			if _, _, err := svc.CreateSIEMSink(ctx, actor, CreateSIEMSinkRequest{Name: "siem", SinkType: domain.SIEMSinkWebhook, URL: "https://siem.example/ingest", SigningSecret: "0123456789abcdef"}); err != nil {
+				return err
+			}
+			if _, err := svc.ListSIEMSinks(ctx, actor, 10); err != nil {
+				return err
+			}
+			if _, err := svc.GetSIEMSink(ctx, actor, "snk_1"); err != nil {
+				return err
+			}
+			_, _, err := svc.UpdateSIEMSink(ctx, actor, "snk_1", UpdateSIEMSinkRequest{State: &disabled, Reason: "pause"})
+			return err
+		}},
+		{name: "audit and replay", run: func(ctx context.Context) error {
+			if _, err := svc.ListAuditEvents(ctx, actor, 10); err != nil {
+				return err
+			}
+			if _, err := svc.GetAuditChainHead(ctx, actor); err != nil {
+				return err
+			}
+			if _, err := svc.ListAuditChainAnchors(ctx, actor, 10); err != nil {
+				return err
+			}
+			if _, err := svc.GetAuditChainAnchor(ctx, actor, "anc_1"); err != nil {
+				return err
+			}
+			if _, err := svc.ListRetentionPolicies(ctx, actor, 10); err != nil {
+				return err
+			}
+			if _, err := svc.ListReplayJobs(ctx, actor, 10); err != nil {
+				return err
+			}
+			if _, err := svc.DryRunReplay(ctx, actor, ReplayRequest{EventID: "evt_1"}); err != nil {
+				return err
+			}
+			if _, err := svc.PauseReplayJob(ctx, actor, "rpl_1", StateChangeRequest{Reason: "pause"}); err != nil {
+				return err
+			}
+			if _, err := svc.ResumeReplayJob(ctx, actor, "rpl_1", StateChangeRequest{Reason: "resume"}); err != nil {
+				return err
+			}
+			_, err := svc.CancelReplayJob(ctx, actor, "rpl_1", StateChangeRequest{Reason: "cancel"})
+			return err
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if err := tt.run(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+		})
 	}
 }
 

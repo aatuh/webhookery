@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -155,6 +156,133 @@ func TestPostJSONSendsBearerAndJSONBody(t *testing.T) {
 	}
 	if gotBody != `{"event_id":"evt_1"}` {
 		t.Fatalf("unexpected JSON body %q", gotBody)
+	}
+}
+
+func TestJSONRequestHelpersUseExpectedMethodsAndPaths(t *testing.T) {
+	var seen []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		seen = append(seen, r.Method+" "+r.URL.Path+" "+r.Header.Get("Authorization")+" "+string(body))
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+	defer server.Close()
+
+	if err := getJSON(server.URL, "whkey_test", "/v1/events"); err != nil {
+		t.Fatal(err)
+	}
+	if err := patchJSON(server.URL, "whkey_test", "/v1/sources/src_1", map[string]string{"reason": "rename"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := deleteJSON(server.URL, "whkey_test", "/v1/sources/src_1", map[string]string{"reason": "delete"}); err != nil {
+		t.Fatal(err)
+	}
+
+	want := []string{
+		`GET /v1/events Bearer whkey_test `,
+		`PATCH /v1/sources/src_1 Bearer whkey_test {"reason":"rename"}`,
+		`DELETE /v1/sources/src_1 Bearer whkey_test {"reason":"delete"}`,
+	}
+	if strings.Join(seen, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("unexpected requests:\ngot:\n%s\nwant:\n%s", strings.Join(seen, "\n"), strings.Join(want, "\n"))
+	}
+}
+
+func TestDownloadAuditExportWritesPrivateFile(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/audit-exports/exp_1:download" {
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+		if got := r.Header.Get("Authorization"); got != "Bearer whkey_test" {
+			t.Fatalf("unexpected auth header %q", got)
+		}
+		_, _ = w.Write([]byte("bundle"))
+	}))
+	defer server.Close()
+
+	output := filepath.Join(t.TempDir(), "exp.tar.gz")
+	if err := downloadAuditExport(server.URL, "whkey_test", "exp_1", output); err != nil {
+		t.Fatal(err)
+	}
+	body, err := os.ReadFile(output)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(body) != "bundle" {
+		t.Fatalf("unexpected bundle body %q", string(body))
+	}
+	info, err := os.Stat(output)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := info.Mode().Perm(); got != 0o600 {
+		t.Fatalf("permissions=%o want 0600", got)
+	}
+}
+
+func TestExportRawPayloadDecodesBase64ToPrivateFile(t *testing.T) {
+	rawBody := []byte("raw evidence bytes")
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/events/evt_1/raw" {
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]string{"body_base64": base64.StdEncoding.EncodeToString(rawBody)})
+	}))
+	defer server.Close()
+
+	output := filepath.Join(t.TempDir(), "raw.bin")
+	if err := exportRawPayload(server.URL, "whkey_test", "evt_1", output); err != nil {
+		t.Fatal(err)
+	}
+	body, err := os.ReadFile(output)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(body, rawBody) {
+		t.Fatalf("unexpected raw body %q", string(body))
+	}
+}
+
+func TestOperatorFileHelpers(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "secret.txt")
+	if err := os.WriteFile(path, []byte("secret\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got, err := readRequiredOperatorFile(path, "secret-file")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "secret\n" {
+		t.Fatalf("unexpected file body %q", got)
+	}
+	if _, err := readRequiredOperatorFile("", "secret-file"); err == nil {
+		t.Fatal("expected required file validation")
+	}
+	if got, err := readOptionalOperatorFile(""); err != nil || got != "" {
+		t.Fatalf("empty optional file got %q err=%v", got, err)
+	}
+	if got, err := readOptionalOperatorFile(path); err != nil || got != "secret\n" {
+		t.Fatalf("optional file got %q err=%v", got, err)
+	}
+}
+
+func TestSmallCLIValueHelpers(t *testing.T) {
+	if valueOrDefault(-1, 10) != 10 || valueOrDefault(0, 10) != 0 {
+		t.Fatal("unexpected integer default behavior")
+	}
+	if valueOrDefaultString("  ", "fallback") != "fallback" || valueOrDefaultString("value", "fallback") != "value" {
+		t.Fatal("unexpected string default behavior")
+	}
+	if nullableCLITime(time.Time{}) != nil {
+		t.Fatal("zero CLI time should encode as null")
+	}
+	now := time.Unix(1, 0).UTC()
+	if nullableCLITime(now) != now {
+		t.Fatal("non-zero CLI time should be preserved")
 	}
 }
 
