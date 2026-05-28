@@ -790,6 +790,639 @@ func TestPostgresControlResourcesTenantIsolationAndEvidence(t *testing.T) {
 	} {
 		assertPostgresAuditEvent(t, ctx, store, actor.TenantID, item.action, item.resource, item.resourceID)
 	}
+
+	sources, err := control.ListSources(ctx, actor, 20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !containsPostgresSource(sources, source.ID, domain.StateActive) {
+		t.Fatalf("expected source in tenant list, got %+v", sources)
+	}
+	if found, err := store.FindSourceByProviderPath(ctx, source.Provider, source.ID); err != nil || found.ID != source.ID {
+		t.Fatalf("expected provider path source lookup to find %s, found=%+v err=%v", source.ID, found, err)
+	}
+	endpoints, err := control.ListEndpoints(ctx, actor, 20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !containsPostgresEndpoint(endpoints, endpoint.ID, domain.StateActive) {
+		t.Fatalf("expected endpoint in tenant list, got %+v", endpoints)
+	}
+	testDelivery, err := control.TestEndpoint(ctx, actor, endpoint.ID, app.TestEndpointRequest{Reason: "integration endpoint test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if testDelivery.ID == "" || testDelivery.EndpointID != endpoint.ID || testDelivery.State != "scheduled" {
+		t.Fatalf("unexpected endpoint test delivery: %+v", testDelivery)
+	}
+	subscriptions, err := control.ListSubscriptions(ctx, actor, 20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !containsPostgresSubscription(subscriptions, subscription.ID, domain.StateActive) {
+		t.Fatalf("expected subscription in tenant list, got %+v", subscriptions)
+	}
+	routes, err := control.ListRoutes(ctx, actor, 20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !containsPostgresRoute(routes, route.ID, domain.StateActive) {
+		t.Fatalf("expected route in tenant list, got %+v", routes)
+	}
+	activatedRoute, err := control.ActivateRoute(ctx, actor, route.ID, "integration activation")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if activatedRoute.State != domain.StateActive {
+		t.Fatalf("expected active route, got %+v", activatedRoute)
+	}
+	routeVersions, err := control.ListRouteVersions(ctx, actor, route.ID, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(routeVersions) == 0 {
+		t.Fatal("expected route versions")
+	}
+	retryPolicies, err := control.ListRetryPolicies(ctx, actor, 20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !containsPostgresRetryPolicy(retryPolicies, retryPolicy.ID, domain.StateActive) {
+		t.Fatalf("expected retry policy in tenant list, got %+v", retryPolicies)
+	}
+	alerts, err := control.ListAlertRules(ctx, actor, 20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !containsPostgresAlertRule(alerts, alert.ID, domain.StateActive) {
+		t.Fatalf("expected alert rule in tenant list, got %+v", alerts)
+	}
+	channels, err := control.ListNotificationChannels(ctx, actor, 20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !containsPostgresNotificationChannel(channels, channel.ID, domain.StateActive) {
+		t.Fatalf("expected notification channel in tenant list, got %+v", channels)
+	}
+	notificationDelivery, err := control.TestNotificationChannel(ctx, actor, channel.ID, app.StateChangeRequest{Reason: "integration notification test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if notificationDelivery.ID == "" || notificationDelivery.ChannelID != channel.ID {
+		t.Fatalf("unexpected notification test delivery: %+v", notificationDelivery)
+	}
+	sinks, err := control.ListSIEMSinks(ctx, actor, 20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !containsPostgresSIEMSink(sinks, sink.ID, domain.StateActive) {
+		t.Fatalf("expected SIEM sink in tenant list, got %+v", sinks)
+	}
+	siemDelivery, err := control.TestSIEMSink(ctx, actor, sink.ID, app.StateChangeRequest{Reason: "integration siem test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if siemDelivery.ID == "" || siemDelivery.SinkID != sink.ID {
+		t.Fatalf("unexpected SIEM test delivery: %+v", siemDelivery)
+	}
+	if _, err := control.ListEndpointHealth(ctx, actor, 20); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := control.ListWorkers(ctx, actor, 20); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := control.ListQueues(ctx, actor); err != nil {
+		t.Fatal(err)
+	}
+
+	if deleted, err := control.DeleteSubscription(ctx, actor, subscription.ID, app.StateChangeRequest{Reason: "integration disable"}); err != nil || deleted.State != domain.StateDisabled {
+		t.Fatalf("expected disabled subscription, got %+v err=%v", deleted, err)
+	}
+	if deleted, err := control.DeleteRoute(ctx, actor, route.ID, app.StateChangeRequest{Reason: "integration inactivate"}); err != nil || deleted.State != domain.StateInactive {
+		t.Fatalf("expected inactive route, got %+v err=%v", deleted, err)
+	}
+	if deleted, err := control.DeleteRetryPolicy(ctx, actor, retryPolicy.ID, app.StateChangeRequest{Reason: "integration disable"}); err != nil || deleted.State != domain.StateDisabled {
+		t.Fatalf("expected disabled retry policy, got %+v err=%v", deleted, err)
+	}
+	if deleted, err := control.DeleteAlertRule(ctx, actor, alert.ID, app.StateChangeRequest{Reason: "integration disable"}); err != nil || deleted.State != domain.StateDisabled {
+		t.Fatalf("expected disabled alert rule, got %+v err=%v", deleted, err)
+	}
+	if deleted, err := control.DeleteNotificationChannel(ctx, actor, channel.ID, app.StateChangeRequest{Reason: "integration disable"}); err != nil || deleted.State != domain.StateDisabled {
+		t.Fatalf("expected disabled notification channel, got %+v err=%v", deleted, err)
+	}
+	if deleted, err := control.DeleteSIEMSink(ctx, actor, sink.ID, app.StateChangeRequest{Reason: "integration disable"}); err != nil || deleted.State != domain.StateDisabled {
+		t.Fatalf("expected disabled SIEM sink, got %+v err=%v", deleted, err)
+	}
+	if deleted, err := control.DeleteEndpoint(ctx, actor, endpoint.ID, app.StateChangeRequest{Reason: "integration disable"}); err != nil || deleted.State != domain.StateDisabled {
+		t.Fatalf("expected disabled endpoint, got %+v err=%v", deleted, err)
+	}
+	if deleted, err := control.DeleteSource(ctx, actor, source.ID, app.StateChangeRequest{Reason: "integration disable"}); err != nil || deleted.State != domain.StateDisabled {
+		t.Fatalf("expected disabled source, got %+v err=%v", deleted, err)
+	}
+}
+
+func TestPostgresEnterpriseIdentitySessionsAndProviderLifecycle(t *testing.T) {
+	ctx, store, actor := openPostgresIntegrationStore(t)
+	defer store.Close()
+
+	suffix := time.Now().UTC().Format("150405.000000000")
+	idp, err := store.CreateIdentityProvider(ctx, actor.TenantID, actor.ID, app.CreateIdentityProviderRequest{
+		Name:                " Integration OIDC ",
+		IssuerURL:           " https://issuer.example.com ",
+		AuthorizationURL:    " https://issuer.example.com/authorize ",
+		TokenURL:            " https://issuer.example.com/token ",
+		JWKSURL:             " https://issuer.example.com/jwks.json ",
+		ClientID:            " client-" + suffix + " ",
+		ClientSecret:        " oidc-secret-" + suffix + " ",
+		RedirectURI:         " https://webhookery.example.com/auth/callback ",
+		AllowedEmailDomains: []string{" Example.COM ", "example.com", "", "Ops.Example.com"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if idp.ProviderType != app.IdentityProviderOIDC || idp.Name != "Integration OIDC" {
+		t.Fatalf("expected default OIDC provider with trimmed name, got %+v", idp)
+	}
+	if strings.Join(idp.AllowedEmailDomains, ",") != "example.com,ops.example.com" {
+		t.Fatalf("expected normalized allowed domains, got %v", idp.AllowedEmailDomains)
+	}
+	assertPostgresAuditEvent(t, ctx, store, actor.TenantID, "identity_provider.created", "identity_provider", idp.ID)
+	idps, err := store.ListIdentityProviders(ctx, actor.TenantID, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !containsPostgresIdentityProvider(idps, idp.ID, domain.StateActive) {
+		t.Fatalf("expected identity provider in tenant list, got %+v", idps)
+	}
+
+	gotIDP, err := store.GetIdentityProvider(ctx, actor.TenantID, idp.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(gotIDP.ClientSecret) != " oidc-secret-"+suffix+" " {
+		t.Fatalf("expected decrypted client secret to round trip")
+	}
+	if _, err := store.GetIdentityProvider(ctx, "ten_it_wrong_"+suffix, idp.ID); !errors.Is(err, app.ErrNotFound) {
+		t.Fatalf("wrong-tenant identity provider lookup must be hidden, got %v", err)
+	}
+	testedIDP, err := store.TestIdentityProvider(ctx, actor.TenantID, idp.ID, actor.ID, "integration smoke")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(testedIDP.ClientSecret) != 0 {
+		t.Fatal("identity provider test result must not expose the client secret")
+	}
+
+	stateHash := app.HashToken("state-" + suffix)
+	if err := store.CreateOIDCLoginState(ctx, domain.OIDCLoginState{
+		TenantID:           actor.TenantID,
+		IdentityProviderID: idp.ID,
+		StateHash:          stateHash,
+		NonceHash:          app.HashToken("nonce-" + suffix),
+		PKCEVerifier:       []byte("pkce-verifier-" + suffix),
+		RedirectAfter:      "/events",
+		ExpiresAt:          time.Now().UTC().Add(time.Hour),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	consumed, consumedIDP, err := store.ConsumeOIDCLoginState(ctx, stateHash)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if consumed.IdentityProviderID != idp.ID || consumedIDP.ID != idp.ID || string(consumed.PKCEVerifier) != "pkce-verifier-"+suffix {
+		t.Fatalf("unexpected consumed OIDC state/provider: state=%+v idp=%+v", consumed, consumedIDP)
+	}
+	if _, _, err := store.ConsumeOIDCLoginState(ctx, stateHash); !errors.Is(err, app.ErrUnauthorized) {
+		t.Fatalf("OIDC login state must be one-time use, got %v", err)
+	}
+
+	sessionHash := app.HashToken("session-" + suffix)
+	session, sessionActor, err := store.CreateOIDCSession(ctx, app.OIDCSessionInput{
+		TenantID:           actor.TenantID,
+		IdentityProviderID: idp.ID,
+		ExternalSubject:    "sub-" + suffix,
+		Email:              "User+" + suffix + "@Example.com",
+		EmailVerified:      true,
+		DisplayName:        "OIDC User",
+		SessionHash:        sessionHash,
+		UserAgentHash:      app.HashToken("ua-" + suffix),
+		IPHash:             app.HashToken("ip-" + suffix),
+		ExpiresAt:          time.Now().UTC().Add(time.Hour),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if session.ExternalIdentityID == "" || sessionActor.TenantID != actor.TenantID || sessionActor.Role != authz.RoleSupport {
+		t.Fatalf("unexpected OIDC session/actor: session=%+v actor=%+v", session, sessionActor)
+	}
+	authenticated, err := store.AuthenticateSession(ctx, sessionHash)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if authenticated.ID != sessionActor.ID || authenticated.TenantID != actor.TenantID {
+		t.Fatalf("unexpected authenticated actor: %+v", authenticated)
+	}
+	current, err := store.CurrentAuthSession(ctx, actor.TenantID, sessionActor.ID, sessionHash)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if current.ID != session.ID {
+		t.Fatalf("expected current session %s, got %+v", session.ID, current)
+	}
+	sessions, err := store.ListAuthSessions(ctx, actor.TenantID, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !containsPostgresAuthSession(sessions, session.ID, domain.StateActive) {
+		t.Fatalf("expected active session in tenant list, got %+v", sessions)
+	}
+	revoked, err := store.RevokeAuthSessionByID(ctx, actor.TenantID, session.ID, actor.ID, "integration revoke")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if revoked.State != "revoked" {
+		t.Fatalf("expected revoked session, got %+v", revoked)
+	}
+	if _, err := store.AuthenticateSession(ctx, sessionHash); !errors.Is(err, app.ErrUnauthorized) {
+		t.Fatalf("revoked session must not authenticate, got %v", err)
+	}
+	assertPostgresAuditEvent(t, ctx, store, actor.TenantID, "auth_session.revoked", "auth_session", session.ID)
+
+	logoutSessionHash := app.HashToken("session-logout-" + suffix)
+	if _, _, err := store.CreateOIDCSession(ctx, app.OIDCSessionInput{
+		TenantID:           actor.TenantID,
+		IdentityProviderID: idp.ID,
+		ExternalSubject:    "sub-logout-" + suffix,
+		Email:              "logout+" + suffix + "@example.com",
+		DisplayName:        "Logout User",
+		SessionHash:        logoutSessionHash,
+		ExpiresAt:          time.Now().UTC().Add(time.Hour),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.RevokeAuthSession(ctx, actor.TenantID, actor.ID, logoutSessionHash, "integration logout"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.AuthenticateSession(ctx, logoutSessionHash); !errors.Is(err, app.ErrUnauthorized) {
+		t.Fatalf("logged-out session must not authenticate, got %v", err)
+	}
+
+	secondSessionHash := app.HashToken("session-disabled-idp-" + suffix)
+	secondSession, _, err := store.CreateOIDCSession(ctx, app.OIDCSessionInput{
+		TenantID:           actor.TenantID,
+		IdentityProviderID: idp.ID,
+		ExternalSubject:    "sub-disabled-" + suffix,
+		Email:              "disabled+" + suffix + "@example.com",
+		DisplayName:        "Disabled IDP User",
+		SessionHash:        secondSessionHash,
+		ExpiresAt:          time.Now().UTC().Add(time.Hour),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	disabled, err := store.DisableIdentityProvider(ctx, actor.TenantID, idp.ID, actor.ID, "integration disable")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if disabled.State != domain.StateDisabled {
+		t.Fatalf("expected disabled identity provider, got %+v", disabled)
+	}
+	if _, err := store.AuthenticateSession(ctx, secondSessionHash); !errors.Is(err, app.ErrUnauthorized) {
+		t.Fatalf("sessions from disabled identity providers must not authenticate, got %v", err)
+	}
+	sessions, err = store.ListAuthSessions(ctx, actor.TenantID, 20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !containsPostgresAuthSession(sessions, secondSession.ID, "revoked") {
+		t.Fatalf("disabling identity provider should revoke active sessions, got %+v", sessions)
+	}
+}
+
+func TestPostgresSCIMAndPolicyLifecycle(t *testing.T) {
+	ctx, store, actor := openPostgresIntegrationStore(t)
+	defer store.Close()
+
+	suffix := time.Now().UTC().Format("150405.000000000")
+	tokenValue := "scim-token-" + suffix
+	scimToken, err := store.CreateSCIMToken(ctx, actor.TenantID, actor.ID, domain.SCIMToken{
+		Name:   "SCIM integration token",
+		Hash:   app.HashToken(tokenValue),
+		Prefix: "scim",
+		Last4:  "test",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	scimActor, err := store.AuthenticateSCIMTokenHash(ctx, app.HashToken(tokenValue))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if scimActor.TenantID != actor.TenantID || scimActor.Role != authz.RoleSecurity || scimActor.ID != "scim:"+scimToken.ID {
+		t.Fatalf("unexpected SCIM actor: %+v", scimActor)
+	}
+	tokens, err := store.ListSCIMTokens(ctx, actor.TenantID, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !containsPostgresSCIMToken(tokens, scimToken.ID, domain.StateActive) {
+		t.Fatalf("expected active SCIM token in tenant list, got %+v", tokens)
+	}
+
+	user, err := store.SCIMCreateOrReplaceUser(ctx, actor.TenantID, scimActor.ID, app.SCIMUserRequest{
+		ExternalID:  "scim-user-" + suffix,
+		UserName:    "Scim.User+" + suffix + "@Example.com",
+		DisplayName: "SCIM User",
+	}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if user.ID == "" || user.UserName != "Scim.User+"+suffix+"@Example.com" || !user.Active {
+		t.Fatalf("unexpected provisioned SCIM user: %+v", user)
+	}
+	patchedUser, err := store.SCIMPatchUser(ctx, actor.TenantID, scimActor.ID, user.ID, app.SCIMPatchRequest{Operations: []app.SCIMOperation{{
+		Op:    "replace",
+		Path:  "displayName",
+		Value: json.RawMessage(`"SCIM User Patched"`),
+	}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if patchedUser.DisplayName != "SCIM User Patched" {
+		t.Fatalf("expected patched display name, got %+v", patchedUser)
+	}
+	if _, err := store.SCIMGetUser(ctx, "ten_it_wrong_"+suffix, user.ID); !errors.Is(err, app.ErrNotFound) {
+		t.Fatalf("wrong-tenant SCIM user lookup must be hidden, got %v", err)
+	}
+	users, err := store.SCIMListUsers(ctx, actor.TenantID, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !containsPostgresSCIMUser(users, user.ID, true) {
+		t.Fatalf("expected active SCIM user in tenant list, got %+v", users)
+	}
+
+	group, err := store.SCIMCreateOrReplaceGroup(ctx, actor.TenantID, scimActor.ID, app.SCIMGroupRequest{
+		ExternalID:  "scim-group-" + suffix,
+		DisplayName: "SCIM Operators",
+		Members:     []app.SCIMGroupMember{{Value: user.ID}},
+	}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if group.ID == "" || len(group.Members) != 1 || group.Members[0].Value != user.ID {
+		t.Fatalf("unexpected SCIM group: %+v", group)
+	}
+	patchedGroup, err := store.SCIMPatchGroup(ctx, actor.TenantID, scimActor.ID, group.ID, app.SCIMPatchRequest{Operations: []app.SCIMOperation{{
+		Op:    "replace",
+		Path:  "displayName",
+		Value: json.RawMessage(`"SCIM Security"`),
+	}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if patchedGroup.DisplayName != "SCIM Security" {
+		t.Fatalf("expected patched group display name, got %+v", patchedGroup)
+	}
+	if groups, err := store.SCIMListGroups(ctx, actor.TenantID, 10); err != nil {
+		t.Fatal(err)
+	} else if !containsPostgresSCIMGroup(groups, group.ID, true) {
+		t.Fatalf("expected active SCIM group in tenant list, got %+v", groups)
+	}
+
+	binding, err := store.CreateRoleBinding(ctx, actor.TenantID, actor.ID, app.CreateRoleBindingRequest{
+		PrincipalType:  "group",
+		PrincipalID:    group.ID,
+		Role:           authz.RoleOwner,
+		ResourceFamily: "secrets",
+		ResourceID:     "secret-" + suffix,
+		Environment:    "prod",
+		Reason:         "integration group elevation",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	bindings, err := store.ListRoleBindings(ctx, actor.TenantID, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !containsPostgresRoleBinding(bindings, binding.ID, domain.StateActive) {
+		t.Fatalf("expected active role binding in tenant list, got %+v", bindings)
+	}
+	decision, err := store.ExplainAuthorization(ctx, actor.TenantID, user.ID, app.AuthzExplainRequest{
+		Action:         "security:write",
+		ResourceFamily: "secrets",
+		ResourceID:     "secret-" + suffix,
+		Environment:    "prod",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !decision.Allowed || decision.MatchedRoleBindingID != binding.ID {
+		t.Fatalf("expected group role binding to allow security write, got %+v", decision)
+	}
+
+	policy, err := store.CreateAccessPolicyRule(ctx, actor.TenantID, actor.ID, app.CreateAccessPolicyRuleRequest{
+		Name:           "deny integration secret writes",
+		Action:         "security:write",
+		Effect:         app.PolicyEffectDeny,
+		ResourceFamily: "secrets",
+		Environment:    "prod",
+		Conditions:     json.RawMessage(`{"reason":"integration"}`),
+		Reason:         "integration deny override",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	policies, err := store.ListAccessPolicyRules(ctx, actor.TenantID, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !containsPostgresAccessPolicyRule(policies, policy.ID, domain.StateActive) {
+		t.Fatalf("expected active access policy in tenant list, got %+v", policies)
+	}
+	denied, err := store.ExplainAuthorization(ctx, actor.TenantID, user.ID, app.AuthzExplainRequest{
+		Action:         "security:write",
+		ResourceFamily: "secrets",
+		ResourceID:     "secret-" + suffix,
+		Environment:    "prod",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if denied.Allowed || denied.MatchedPolicyRuleID != policy.ID || denied.Reason != "denied by access policy" {
+		t.Fatalf("expected deny policy to override role binding, got %+v", denied)
+	}
+	if _, err := store.UpdateRoleBinding(ctx, actor.TenantID, binding.ID, actor.ID, app.UpdateRoleBindingRequest{Reason: "integration binding update"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.DisableRoleBinding(ctx, actor.TenantID, binding.ID, actor.ID, "integration binding disable"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.UpdateAccessPolicyRule(ctx, actor.TenantID, policy.ID, actor.ID, app.UpdateAccessPolicyRuleRequest{Reason: "integration policy update"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.DisableAccessPolicyRule(ctx, actor.TenantID, policy.ID, actor.ID, "integration policy disable"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.SCIMDeactivateGroup(ctx, actor.TenantID, scimActor.ID, group.ID); err != nil {
+		t.Fatal(err)
+	}
+	deactivatedUser, err := store.SCIMDeactivateUser(ctx, actor.TenantID, scimActor.ID, user.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if deactivatedUser.Active {
+		t.Fatalf("expected deactivated SCIM user, got %+v", deactivatedUser)
+	}
+	revokedToken, err := store.RevokeSCIMToken(ctx, actor.TenantID, scimToken.ID, actor.ID, "integration revoke")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if revokedToken.State != "revoked" {
+		t.Fatalf("expected revoked SCIM token, got %+v", revokedToken)
+	}
+	if _, err := store.AuthenticateSCIMTokenHash(ctx, app.HashToken(tokenValue)); !errors.Is(err, app.ErrUnauthorized) {
+		t.Fatalf("revoked SCIM token must not authenticate, got %v", err)
+	}
+
+	assertPostgresAuditEvent(t, ctx, store, actor.TenantID, "scim_token.revoked", "scim_token", scimToken.ID)
+	assertPostgresAuditEvent(t, ctx, store, actor.TenantID, "role_binding.updated", "role_binding", binding.ID)
+	assertPostgresAuditEvent(t, ctx, store, actor.TenantID, "access_policy.updated", "access_policy", policy.ID)
+}
+
+func TestPostgresSchemaAndTransformationLifecycle(t *testing.T) {
+	ctx, store, actor := openPostgresIntegrationStore(t)
+	defer store.Close()
+
+	control := app.NewControlService(store, ssrf.Validator{})
+	suffix := strings.ReplaceAll(time.Now().UTC().Format("150405.000000000"), ".", "_")
+	eventTypeName := "invoice.schema_" + suffix
+	eventType, err := control.CreateEventType(ctx, actor, app.CreateEventTypeRequest{
+		Name:        eventTypeName,
+		Description: "schema lifecycle integration",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if eventType.Name != eventTypeName || eventType.State != domain.StateActive {
+		t.Fatalf("unexpected event type: %+v", eventType)
+	}
+	eventTypes, err := control.ListEventTypes(ctx, actor, 20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !containsPostgresEventType(eventTypes, eventTypeName, domain.StateActive) {
+		t.Fatalf("expected event type in tenant list, got %+v", eventTypes)
+	}
+	if got, err := control.GetEventType(ctx, actor, eventTypeName); err != nil || got.Name != eventTypeName {
+		t.Fatalf("expected event type lookup to round trip, got=%+v err=%v", got, err)
+	}
+	updatedDescription := "schema lifecycle integration updated"
+	updatedEventType, err := control.UpdateEventType(ctx, actor, eventTypeName, app.UpdateEventTypeRequest{
+		Description: &updatedDescription,
+		Reason:      "integration update",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updatedEventType.Description != updatedDescription {
+		t.Fatalf("expected updated event type description, got %+v", updatedEventType)
+	}
+
+	schema, err := control.CreateEventSchema(ctx, actor, eventTypeName, app.CreateEventSchemaRequest{
+		Version: "1",
+		Schema:  `{"type":"object","required":["id"],"properties":{"id":{"type":"string"}}}`,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if schema.ID == "" || schema.State != domain.StateActive {
+		t.Fatalf("unexpected event schema: %+v", schema)
+	}
+	schemas, err := control.ListEventSchemas(ctx, actor, eventTypeName, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !containsPostgresEventSchema(schemas, schema.ID, domain.StateActive) {
+		t.Fatalf("expected event schema in tenant list, got %+v", schemas)
+	}
+	if got, err := control.GetEventSchema(ctx, actor, eventTypeName, "1"); err != nil || got.ID != schema.ID {
+		t.Fatalf("expected event schema lookup to round trip, got=%+v err=%v", got, err)
+	}
+	deprecated := domain.StateDeprecated
+	updatedSchema, err := control.UpdateEventSchema(ctx, actor, eventTypeName, "1", app.UpdateEventSchemaRequest{
+		State:  &deprecated,
+		Reason: "integration deprecation",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updatedSchema.State != domain.StateDeprecated {
+		t.Fatalf("expected deprecated schema, got %+v", updatedSchema)
+	}
+
+	transformation, err := control.CreateTransformation(ctx, actor, app.CreateTransformationRequest{
+		Name:       "integration transformation",
+		Operations: json.RawMessage(`[{"op":"set","path":"/metadata/integration","value":"created"}]`),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if transformation.ID == "" || transformation.ActiveVersionID == "" {
+		t.Fatalf("expected transformation with active version, got %+v", transformation)
+	}
+	transformations, err := control.ListTransformations(ctx, actor, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !containsPostgresTransformation(transformations, transformation.ID, domain.StateActive) {
+		t.Fatalf("expected transformation in tenant list, got %+v", transformations)
+	}
+	if got, err := control.GetTransformation(ctx, actor, transformation.ID); err != nil || got.ID != transformation.ID {
+		t.Fatalf("expected transformation lookup to round trip, got=%+v err=%v", got, err)
+	}
+	version, err := control.CreateTransformationVersion(ctx, actor, transformation.ID, app.CreateTransformationVersionRequest{
+		Operations: json.RawMessage(`[{"op":"set","path":"/metadata/integration","value":"version2"}]`),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if version.State != "draft" {
+		t.Fatalf("expected draft transformation version, got %+v", version)
+	}
+	versions, err := control.ListTransformationVersions(ctx, actor, transformation.ID, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !containsPostgresTransformationVersion(versions, version.ID, "draft") {
+		t.Fatalf("expected draft transformation version in tenant list, got %+v", versions)
+	}
+	activated, err := control.ActivateTransformationVersion(ctx, actor, transformation.ID, version.ID, app.ActivateTransformationVersionRequest{Reason: "integration activation"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if activated.State != domain.StateActive {
+		t.Fatalf("expected activated transformation version, got %+v", activated)
+	}
+	retiredSchema, err := control.DeleteEventSchema(ctx, actor, eventTypeName, "1", app.StateChangeRequest{Reason: "integration retire"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if retiredSchema.State != domain.StateRetired {
+		t.Fatalf("expected retired schema, got %+v", retiredSchema)
+	}
+	disabledType, err := control.DeleteEventType(ctx, actor, eventTypeName, app.StateChangeRequest{Reason: "integration disable"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if disabledType.State != domain.StateDisabled {
+		t.Fatalf("expected disabled event type, got %+v", disabledType)
+	}
+
+	assertPostgresAuditEvent(t, ctx, store, actor.TenantID, "event_type.updated", "event_type", eventTypeName)
+	assertPostgresAuditEvent(t, ctx, store, actor.TenantID, "event_schema.retired", "event_schema", schema.ID)
+	assertPostgresAuditEvent(t, ctx, store, actor.TenantID, "transformation_version.activated", "transformation", transformation.ID)
 }
 
 func TestPostgresMigrationsAreIdempotentAndEnforceKeyConstraints(t *testing.T) {
@@ -1024,6 +1657,177 @@ func assertPostgresNoAuditEvent(t *testing.T, ctx context.Context, store *Store,
 	if count != 0 {
 		t.Fatalf("expected no audit event %s for %s/%s, got %d", action, resource, resourceID, count)
 	}
+}
+
+func containsPostgresAuthSession(sessions []domain.AuthSession, id, state string) bool {
+	for _, session := range sessions {
+		if session.ID == id && session.State == state {
+			return true
+		}
+	}
+	return false
+}
+
+func containsPostgresSource(sources []domain.Source, id, state string) bool {
+	for _, source := range sources {
+		if source.ID == id && source.State == state {
+			return true
+		}
+	}
+	return false
+}
+
+func containsPostgresEndpoint(endpoints []domain.Endpoint, id, state string) bool {
+	for _, endpoint := range endpoints {
+		if endpoint.ID == id && endpoint.State == state {
+			return true
+		}
+	}
+	return false
+}
+
+func containsPostgresSubscription(subscriptions []domain.Subscription, id, state string) bool {
+	for _, subscription := range subscriptions {
+		if subscription.ID == id && subscription.State == state {
+			return true
+		}
+	}
+	return false
+}
+
+func containsPostgresRoute(routes []domain.Route, id, state string) bool {
+	for _, route := range routes {
+		if route.ID == id && route.State == state {
+			return true
+		}
+	}
+	return false
+}
+
+func containsPostgresRetryPolicy(policies []domain.RetryPolicy, id, state string) bool {
+	for _, policy := range policies {
+		if policy.ID == id && policy.State == state {
+			return true
+		}
+	}
+	return false
+}
+
+func containsPostgresAlertRule(rules []domain.AlertRule, id, state string) bool {
+	for _, rule := range rules {
+		if rule.ID == id && rule.State == state {
+			return true
+		}
+	}
+	return false
+}
+
+func containsPostgresNotificationChannel(channels []domain.NotificationChannel, id, state string) bool {
+	for _, channel := range channels {
+		if channel.ID == id && channel.State == state {
+			return true
+		}
+	}
+	return false
+}
+
+func containsPostgresSIEMSink(sinks []domain.SIEMSink, id, state string) bool {
+	for _, sink := range sinks {
+		if sink.ID == id && sink.State == state {
+			return true
+		}
+	}
+	return false
+}
+
+func containsPostgresEventType(types []domain.EventType, name, state string) bool {
+	for _, eventType := range types {
+		if eventType.Name == name && eventType.State == state {
+			return true
+		}
+	}
+	return false
+}
+
+func containsPostgresEventSchema(schemas []domain.EventSchema, id, state string) bool {
+	for _, schema := range schemas {
+		if schema.ID == id && schema.State == state {
+			return true
+		}
+	}
+	return false
+}
+
+func containsPostgresTransformation(transformations []domain.Transformation, id, state string) bool {
+	for _, transformation := range transformations {
+		if transformation.ID == id && transformation.State == state {
+			return true
+		}
+	}
+	return false
+}
+
+func containsPostgresTransformationVersion(versions []domain.TransformationVersion, id, state string) bool {
+	for _, version := range versions {
+		if version.ID == id && version.State == state {
+			return true
+		}
+	}
+	return false
+}
+
+func containsPostgresIdentityProvider(idps []domain.IdentityProvider, id, state string) bool {
+	for _, idp := range idps {
+		if idp.ID == id && idp.State == state {
+			return true
+		}
+	}
+	return false
+}
+
+func containsPostgresSCIMToken(tokens []domain.SCIMToken, id, state string) bool {
+	for _, token := range tokens {
+		if token.ID == id && token.State == state {
+			return true
+		}
+	}
+	return false
+}
+
+func containsPostgresSCIMUser(users []app.SCIMUser, id string, active bool) bool {
+	for _, user := range users {
+		if user.ID == id && user.Active == active {
+			return true
+		}
+	}
+	return false
+}
+
+func containsPostgresSCIMGroup(groups []app.SCIMGroup, id string, active bool) bool {
+	for _, group := range groups {
+		if group.ID == id && group.Active == active {
+			return true
+		}
+	}
+	return false
+}
+
+func containsPostgresRoleBinding(bindings []domain.RoleBinding, id, state string) bool {
+	for _, binding := range bindings {
+		if binding.ID == id && binding.State == state {
+			return true
+		}
+	}
+	return false
+}
+
+func containsPostgresAccessPolicyRule(rules []domain.AccessPolicyRule, id, state string) bool {
+	for _, rule := range rules {
+		if rule.ID == id && rule.State == state {
+			return true
+		}
+	}
+	return false
 }
 
 func poisonNextPostgresAuditSequence(t *testing.T, ctx context.Context, store *Store, tenantID string) {
