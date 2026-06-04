@@ -362,6 +362,8 @@ const (
 	ReplayConfigOriginal = "original"
 )
 
+const ReplayApprovalDefaultExpiry = 24 * time.Hour
+
 const (
 	ReplayReasonReceiverFixed          = "receiver_fixed"
 	ReplayReasonProviderReconciliation = "provider_reconciliation"
@@ -383,15 +385,16 @@ var replayReasonCodes = map[string]struct{}{
 }
 
 type ReplayRequest struct {
-	EventID            string `json:"event_id"`
-	DeliveryID         string `json:"delivery_id"`
-	EndpointID         string `json:"endpoint_id"`
-	ReasonCode         string `json:"reason_code"`
-	Reason             string `json:"reason"`
-	DryRun             bool   `json:"dry_run"`
-	ConfigMode         string `json:"config_mode,omitempty"`
-	RateLimitPerMinute int    `json:"rate_limit_per_minute,omitempty"`
-	RequireApproval    bool   `json:"require_approval,omitempty"`
+	EventID            string     `json:"event_id"`
+	DeliveryID         string     `json:"delivery_id"`
+	EndpointID         string     `json:"endpoint_id"`
+	ReasonCode         string     `json:"reason_code"`
+	Reason             string     `json:"reason"`
+	DryRun             bool       `json:"dry_run"`
+	ConfigMode         string     `json:"config_mode,omitempty"`
+	RateLimitPerMinute int        `json:"rate_limit_per_minute,omitempty"`
+	RequireApproval    bool       `json:"require_approval,omitempty"`
+	ApprovalExpiresAt  *time.Time `json:"approval_expires_at,omitempty"`
 }
 
 type DeadLetterReleaseRequest struct {
@@ -428,6 +431,7 @@ type ReplayJob struct {
 	ProcessedItems     int        `json:"processed_items"`
 	FailedItems        int        `json:"failed_items"`
 	ApprovalRequired   bool       `json:"approval_required"`
+	ApprovalExpiresAt  *time.Time `json:"approval_expires_at,omitempty"`
 	ApprovedBy         string     `json:"approved_by,omitempty"`
 	ApprovedAt         *time.Time `json:"approved_at,omitempty"`
 	CreatedBy          string     `json:"created_by,omitempty"`
@@ -3062,6 +3066,22 @@ func normalizeReplayRequest(req *ReplayRequest, requireScope, requireReason bool
 	}
 	if req.RateLimitPerMinute < 0 || req.RateLimitPerMinute > 60000 {
 		return fmt.Errorf("%w: rate_limit_per_minute must be between 0 and 60000", ErrInvalidInput)
+	}
+	if req.ApprovalExpiresAt != nil {
+		approvalExpiresAt := req.ApprovalExpiresAt.UTC()
+		req.ApprovalExpiresAt = &approvalExpiresAt
+	}
+	if !req.RequireApproval && req.ApprovalExpiresAt != nil {
+		return fmt.Errorf("%w: approval_expires_at requires require_approval", ErrInvalidInput)
+	}
+	if req.RequireApproval {
+		if req.ApprovalExpiresAt == nil {
+			approvalExpiresAt := time.Now().UTC().Add(ReplayApprovalDefaultExpiry)
+			req.ApprovalExpiresAt = &approvalExpiresAt
+		}
+		if !req.ApprovalExpiresAt.After(time.Now().UTC()) {
+			return fmt.Errorf("%w: approval_expires_at must be in the future", ErrInvalidInput)
+		}
 	}
 	if requireScope && strings.TrimSpace(req.EventID) == "" && strings.TrimSpace(req.DeliveryID) == "" {
 		return fmt.Errorf("%w: event_id or delivery_id is required", ErrInvalidInput)

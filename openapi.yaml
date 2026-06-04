@@ -3382,6 +3382,8 @@ paths:
               reason: "customer requested replay after downstream fix"
               config_mode: current
               rate_limit_per_minute: 60
+              require_approval: true
+              approval_expires_at: "2026-06-05T12:00:00Z"
       responses:
         "202":
           description: Replay job scheduled or pending approval when require_approval is true.
@@ -3389,7 +3391,7 @@ paths:
             application/json:
               example:
                 id: rpl_example
-                state: scheduled
+                state: pending_approval
                 scope_hash: sha256:2c26b46b68ffc68ff99b453c1d304134
                 reason_code: receiver_fixed
                 reason: "customer requested replay after downstream fix"
@@ -3398,14 +3400,15 @@ paths:
                 total_items: 1
                 processed_items: 0
                 failed_items: 0
-                approval_required: false
+                approval_required: true
+                approval_expires_at: "2026-06-05T12:00:00Z"
   /v1/replay-jobs/{replay_job_id}:approve:
     post:
       tags:
         - Delivery And Replay
       operationId: postReplayJobsReplayJobIdApprove
       summary: Approve pending replay job
-      description: Moves a tenant-scoped pending replay job into scheduled state and enqueues durable replay work.
+      description: Moves a tenant-scoped pending replay job into scheduled state and enqueues durable replay work. The approving actor must be different from the creator and the approval window must not be expired.
       security:
         - bearerAuth: []
       parameters:
@@ -7338,6 +7341,10 @@ components:
           type: boolean
           default: false
           description: Create the replay job in pending_approval state. Delivery work is not enqueued until the job is approved.
+        approval_expires_at:
+          type: string
+          format: date-time
+          description: Optional approval expiry for pending replay jobs. When omitted with require_approval=true, the server defaults to 24 hours from creation. The field is rejected unless require_approval is true.
     CreateAuditExportRequest:
       type: object
       additionalProperties: false

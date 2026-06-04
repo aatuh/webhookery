@@ -118,7 +118,9 @@ Replay modes:
 
 Replay jobs may be paused, resumed, canceled, rate-limited, or created with
 `require_approval=true`. Approval records approver metadata and a chained audit
-event. This is a single approval gate, not a two-person approval workflow.
+event. Pending approval jobs default to a 24-hour approval window unless
+`approval_expires_at` is provided, and approval must come from a different
+authorized actor than the creator. Canceling a pending job is the deny path.
 Replay creation, preview, and dry-run requests require both a structured
 `reason_code` and a free-text `reason`. Implemented reason codes are `receiver_fixed`,
 `provider_reconciliation`, `operator_requested`, `support_investigation`,
