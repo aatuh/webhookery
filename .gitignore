@@ -13,6 +13,8 @@ dist/
 tmp/
 release-evidence/
 backups/
+live-proof-private/
+launch-metrics-private/
 examples/webhook-evidence-demo/output/
 __pycache__/
 sdk/typescript/.build/

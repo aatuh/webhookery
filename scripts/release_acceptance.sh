@@ -119,6 +119,10 @@ grep -q "Pilot Review Checklist" docs/pilot-review-checklist.md
 grep -q ".refs" .dockerignore
 grep -q "release-evidence" .dockerignore
 grep -q "backups" .dockerignore
+grep -q "live-proof-private" .dockerignore
+grep -q "launch-metrics-private" .dockerignore
+grep -q "live-proof-private" .gitignore
+grep -q "launch-metrics-private" .gitignore
 
 test -f Dockerfile
 test -f docker-compose.yml
