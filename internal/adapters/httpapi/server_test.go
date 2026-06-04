@@ -922,6 +922,58 @@ func TestRawPayloadEndpointEncodesBodyAndTenantActorContext(t *testing.T) {
 	}
 }
 
+func TestCrossTenantEvidenceAccessReturnsNotFoundWithoutLeak(t *testing.T) {
+	store := &tenantIsolationControlStore{ownerTenantID: "ten_owner", foreignEventID: "evt_foreign"}
+	server := NewServer(ServerConfig{
+		Control: app.NewControlService(store, ssrf.Validator{Resolver: ssrf.StaticResolver{}}),
+		Ingest:  app.NewIngestService(&fakeIngestStore{}, app.SystemClock{}),
+		Auth: app.NewStaticAuthenticator("token", authz.Actor{
+			ID:       "usr_security",
+			TenantID: "ten_requester",
+			Role:     authz.RoleSecurity,
+			Scopes:   []string{"events:read", "events:raw", "incidents:write"},
+		}),
+		OpenAPI: []byte("openapi: 3.1.0\n"),
+	})
+
+	cases := []struct {
+		name   string
+		method string
+		path   string
+		body   string
+	}{
+		{name: "event detail", method: http.MethodGet, path: "/v1/events/evt_foreign"},
+		{name: "raw payload", method: http.MethodGet, path: "/v1/events/evt_foreign/raw?reason=security+review"},
+		{name: "incident link", method: http.MethodPost, path: "/v1/incidents/inc_requester/events", body: `{"event_id":"evt_foreign","reason":"investigate"}`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			req := httptest.NewRequest(tc.method, tc.path, bytes.NewBufferString(tc.body))
+			req.Header.Set("Authorization", "Bearer token")
+			req.Header.Set("Content-Type", "application/json")
+
+			server.Routes().ServeHTTP(rec, req)
+
+			if rec.Code != http.StatusNotFound {
+				t.Fatalf("expected 404, got %d body=%s", rec.Code, rec.Body.String())
+			}
+			body := rec.Body.String()
+			for _, forbidden := range []string{"evt_foreign", "ten_owner", "raw-secret"} {
+				if strings.Contains(body, forbidden) {
+					t.Fatalf("wrong-tenant response leaked %q: %s", forbidden, body)
+				}
+			}
+		})
+	}
+	if store.lastEventTenantID != "ten_requester" || store.lastRawTenantID != "ten_requester" || store.lastIncidentTenantID != "ten_requester" {
+		t.Fatalf("wrong-tenant attempts were not scoped to actor tenant: %+v", store)
+	}
+	if store.addIncidentCalled {
+		t.Fatal("foreign event must not be linked into an incident")
+	}
+}
+
 func TestCreateReplayPropagatesReasonCodeReasonAndConfig(t *testing.T) {
 	store := &replayControlStore{}
 	server := NewServer(ServerConfig{
@@ -1823,6 +1875,42 @@ func (s *rawPayloadControlStore) GetRawPayload(_ context.Context, tenantID, even
 		StorageBackend: domain.RawStoragePostgres,
 		StorageStatus:  domain.StorageStatusStored,
 	}, nil
+}
+
+type tenantIsolationControlStore struct {
+	noopControlStore
+	ownerTenantID        string
+	foreignEventID       string
+	lastEventTenantID    string
+	lastRawTenantID      string
+	lastIncidentTenantID string
+	addIncidentCalled    bool
+}
+
+func (s *tenantIsolationControlStore) GetEvent(_ context.Context, tenantID, eventID string) (domain.Event, error) {
+	s.lastEventTenantID = tenantID
+	if tenantID != s.ownerTenantID && eventID == s.foreignEventID {
+		return domain.Event{}, app.ErrNotFound
+	}
+	return domain.Event{ID: eventID, TenantID: tenantID, RawPayloadHash: "sha256:raw"}, nil
+}
+
+func (s *tenantIsolationControlStore) GetRawPayload(_ context.Context, tenantID, eventID, actorID, reason string) (domain.RawPayload, error) {
+	s.lastRawTenantID = tenantID
+	if tenantID != s.ownerTenantID && eventID == s.foreignEventID {
+		return domain.RawPayload{}, app.ErrNotFound
+	}
+	return domain.RawPayload{ID: "raw_1", TenantID: tenantID, EventID: eventID, Body: []byte("raw-secret"), StorageStatus: domain.StorageStatusStored}, nil
+}
+
+func (s *tenantIsolationControlStore) GetIncident(_ context.Context, tenantID, incidentID string) (domain.Incident, error) {
+	s.lastIncidentTenantID = tenantID
+	return domain.Incident{ID: incidentID, TenantID: tenantID, State: domain.StateActive}, nil
+}
+
+func (s *tenantIsolationControlStore) AddIncidentEvent(_ context.Context, tenantID, incidentID, eventID, actorID, reason string) (domain.IncidentEvent, error) {
+	s.addIncidentCalled = true
+	return domain.IncidentEvent{ID: "ine_1", TenantID: tenantID, IncidentID: incidentID, EventID: eventID, AddedBy: actorID, Reason: reason}, nil
 }
 
 type replayControlStore struct {
