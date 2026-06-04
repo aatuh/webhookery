@@ -1,0 +1,11 @@
+* @aatuh
+
+/.github/ @aatuh
+/cmd/ @aatuh
+/internal/ @aatuh
+/migrations/ @aatuh
+/openapi.yaml @aatuh
+/docs/security-promise.md @aatuh
+/docs/release-evidence-template.md @aatuh
+/docs/provider-conformance.md @aatuh
+/docs/provider-proof-manifest.json @aatuh

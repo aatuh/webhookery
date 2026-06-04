@@ -1,0 +1,71 @@
+name: Bug report
+description: Report a reproducible Webhookery bug without secrets or raw payloads.
+title: "[bug]: "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Do not include API keys, webhook secrets, bearer tokens, session cookies, private keys, provider credentials, database URLs with passwords, raw signatures, raw payload bodies, customer data, or exploit payloads.
+  - type: input
+    id: version
+    attributes:
+      label: Webhookery version or commit
+      placeholder: v0.1.0-rc1 or c43dc1d
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - ingest
+        - provider verification
+        - delivery/replay
+        - incident/evidence export
+        - CLI
+        - API/OpenAPI
+        - deployment/operations
+        - documentation
+        - other
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Reproduction steps
+      description: Use synthetic data, placeholders, hashes, and redacted output.
+      placeholder: |
+        1. Run ...
+        2. Call ...
+        3. Observe ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      description: Include redacted errors or IDs. Do not include raw payloads or secrets.
+    validations:
+      required: true
+  - type: textarea
+    id: validation
+    attributes:
+      label: Checks run
+      placeholder: |
+        make docs-check: passed
+        make rc-check: failed at ...
+  - type: checkboxes
+    id: no_secrets
+    attributes:
+      label: No-secrets confirmation
+      options:
+        - label: I confirm this issue contains no secrets, raw payload bodies, raw signatures, private customer data, or production database URLs.
+          required: true

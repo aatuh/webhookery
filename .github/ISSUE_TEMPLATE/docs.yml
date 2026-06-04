@@ -1,0 +1,45 @@
+name: Documentation issue
+description: Report a docs gap, unclear guide, or stale public claim.
+title: "[docs]: "
+labels:
+  - documentation
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Do not include secrets, raw provider signatures, raw payload bodies, customer data, private proof artifacts, or production database URLs.
+  - type: input
+    id: doc_path
+    attributes:
+      label: Document path
+      placeholder: docs/evaluator-quickstart.md
+    validations:
+      required: true
+  - type: dropdown
+    id: issue_type
+    attributes:
+      label: Issue type
+      options:
+        - unclear setup step
+        - stale provider claim
+        - missing command output
+        - missing non-claim
+        - broken link
+        - typo or wording
+        - other
+    validations:
+      required: true
+  - type: textarea
+    id: details
+    attributes:
+      label: Details
+      description: Explain what is wrong and what evidence or source supports the correction.
+    validations:
+      required: true
+  - type: checkboxes
+    id: boundaries
+    attributes:
+      label: Claim boundaries
+      options:
+        - label: This issue does not ask Webhookery to claim exactly-once delivery, provider-side completeness, compliance certification, live-provider acceptance, or legal evidentiary certification without evidence.
+          required: true

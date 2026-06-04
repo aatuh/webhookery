@@ -8,7 +8,7 @@ GOSEC_VERSION ?= v2.25.0
 GOVULNCHECK_VERSION ?= v1.2.0
 FUZZTIME ?= 5s
 
-.PHONY: help tools fmt lint vuln gosec test test-race coverage openapi-check test-vectors-check provider-conformance-check provider-proof-check crypto-inventory deployment-profile-check collections-check documentation-structure-check failure-drills-check demo-media-check static-site-check meta-files-check fuzz-smoke perf-smoke demo-media restore-drill sdk-generate sdk-check docs-check release-acceptance rc-check compose-up compose-down migrate live-postgres-check postgres-integration-test redis-integration-test fast-check finalize clean
+.PHONY: help tools fmt lint vuln gosec test test-race coverage openapi-check openapi-reference-generate openapi-reference-check test-vectors-check provider-conformance-check provider-proof-check crypto-inventory deployment-profile-check collections-check documentation-structure-check failure-drills-check demo-media-check static-site-check meta-files-check fuzz-smoke perf-smoke demo-media restore-drill sdk-generate sdk-check docs-check release-acceptance rc-check compose-up compose-down migrate live-postgres-check postgres-integration-test redis-integration-test fast-check finalize clean
 
 help: ## Show help
 	@awk 'BEGIN {FS=":.*## "}; /^[a-zA-Z0-9_.-]+:.*## / { printf "  %-16s %s\n", $$1, $$2 }' $(MAKEFILE_LIST)
@@ -43,6 +43,25 @@ coverage: ## Run tests with coverage
 openapi-check: ## Validate OpenAPI source and route contract smoke tests
 	@test -f openapi.yaml
 	@$(GO) test ./internal/adapters/httpapi -run 'TestOpenAPI|TestRoute'
+
+openapi-reference-generate: ## Regenerate rendered OpenAPI reference artifacts
+	@$(GO) run ./scripts/openapi_reference.go \
+		-input openapi.yaml \
+		-html docs/openapi/index.html \
+		-matrix docs/reference/api-contract-matrix.md \
+		-summary docs/reference/openapi.md
+
+openapi-reference-check: ## Validate rendered OpenAPI reference artifacts are current
+	@tmp_dir="$$(mktemp -d)"; \
+	trap 'rm -rf "$$tmp_dir"' EXIT; \
+	$(GO) run ./scripts/openapi_reference.go \
+		-input openapi.yaml \
+		-html "$$tmp_dir/index.html" \
+		-matrix "$$tmp_dir/api-contract-matrix.md" \
+		-summary "$$tmp_dir/openapi.md"; \
+	cmp -s "$$tmp_dir/index.html" docs/openapi/index.html || (printf '%s\n' "docs/openapi/index.html is stale; run make openapi-reference-generate" >&2; exit 1); \
+	cmp -s "$$tmp_dir/api-contract-matrix.md" docs/reference/api-contract-matrix.md || (printf '%s\n' "docs/reference/api-contract-matrix.md is stale; run make openapi-reference-generate" >&2; exit 1); \
+	cmp -s "$$tmp_dir/openapi.md" docs/reference/openapi.md || (printf '%s\n' "docs/reference/openapi.md is stale; run make openapi-reference-generate" >&2; exit 1)
 
 test-vectors-check: ## Validate committed public audit test vectors
 	@$(GO) test ./internal/provider -run TestProviderSignatureVectors
@@ -104,6 +123,12 @@ collections-check: ## Check committed API client collections
 documentation-structure-check: ## Check canonical documentation structure
 	@test -f CHANGELOG.md
 	@test -f docs/index.md
+	@test -f docs/reference/source-of-truth.md
+	@test -f docs/reference/openapi.md
+	@test -f docs/openapi/index.html
+	@test -f docs/reference/api-contract-matrix.md
+	@test -f docs/reference/release-evidence-index.md
+	@test -f docs/reference/release-validation.md
 	@test -f docs/evaluator-quickstart.md
 	@test -f docs/why-webhookery.md
 	@test -f docs/evidence-bundle-profiles.md
@@ -167,7 +192,14 @@ documentation-structure-check: ## Check canonical documentation structure
 	@test -f docs/external-review-findings-template.md
 	@test -f docs/external-review-accepted-risks.md
 	@test -f docs/release-evidence-template.md
+	@test -f release/current.json
 	@grep -q "Documentation Map" docs/index.md
+	@grep -q "Source Of Truth" docs/reference/source-of-truth.md
+	@grep -q "OpenAPI Reference" docs/reference/openapi.md
+	@grep -q "Webhookery API Contract Matrix" docs/reference/api-contract-matrix.md
+	@grep -q "Release Evidence Index" docs/reference/release-evidence-index.md
+	@grep -q "Release Validation" docs/reference/release-validation.md
+	@grep -q "webhookery-current-release.v1" release/current.json
 	@grep -q "Why Webhookery" docs/why-webhookery.md
 	@grep -q "Evidence Bundle Profiles" docs/evidence-bundle-profiles.md
 	@grep -q "Stripe Payment Investigation" docs/use-cases/stripe-payment-investigation.md
@@ -176,6 +208,9 @@ documentation-structure-check: ## Check canonical documentation structure
 	@grep -q "Internal Integration Replay" docs/use-cases/internal-integration-replay.md
 	@grep -q "docs/evaluator-quickstart.md" README.md
 	@grep -q "docs/why-webhookery.md" README.md
+	@grep -q "docs/reference/api-contract-matrix.md" README.md
+	@grep -q "docs/reference/release-evidence-index.md" README.md
+	@grep -q "release/current.json" README.md
 	@grep -q "docs/evidence-bundle-profiles.md" README.md
 	@grep -q "examples/webhook-evidence-demo" README.md
 	@grep -q "site/index.html" README.md
@@ -269,11 +304,13 @@ demo-media-check: ## Check demo media script and sanitized outline generation
 static-site-check: ## Check static landing page assets
 	@test -f site/index.html
 	@test -f site/styles.css
+	@test -f .github/workflows/site-pages.yml
 	@grep -q "Self-hosted webhook evidence infrastructure" site/index.html
 	@grep -q "Try the self-hosted quickstart" site/index.html
 	@grep -q "Request commercial evaluation" site/index.html
 	@grep -q "Review commercial options" site/index.html
 	@grep -q "No exactly-once delivery claim" site/index.html
+	@grep -q "github-pages" .github/workflows/site-pages.yml
 	@! grep -qi "<script" site/index.html
 
 meta-files-check: ## Check governance, licensing, and release-evidence metadata
@@ -284,14 +321,35 @@ meta-files-check: ## Check governance, licensing, and release-evidence metadata
 	@test -f SUPPORT.md
 	@test -f CONTRIBUTING.md
 	@test -f GOVERNANCE.md
+	@test -f CODE_OF_CONDUCT.md
+	@test -f CODEOWNERS
 	@test -f TRADEMARKS.md
 	@test -f RELEASE_EVIDENCE.md
+	@test -f .github/dependabot.yml
+	@test -f .github/pull_request_template.md
+	@test -f .github/ISSUE_TEMPLATE.md
+	@test -f .github/ISSUE_TEMPLATE/config.yml
+	@test -f .github/ISSUE_TEMPLATE/bug_report.yml
+	@test -f .github/ISSUE_TEMPLATE/docs.yml
+	@test -f .github/ISSUE_TEMPLATE/feature_request.yml
+	@test -f .github/ISSUE_TEMPLATE/production_support.yml
+	@test -f .github/ISSUE_TEMPLATE/evaluator-feedback.yml
+	@test -f .github/workflows/ci.yml
+	@test -f .github/workflows/security.yml
+	@test -f .github/workflows/integration.yml
+	@test -f .github/workflows/fuzz.yml
+	@test -f .github/workflows/release.yml
+	@test -f .github/workflows/codeql.yml
+	@test -f .github/workflows/scorecard.yml
+	@test -f .github/workflows/scorecard-sarif.yml
 	@test -f docs/release-evidence-template.md
 	@test -f docs/security-review-package.md
 	@test -f .dockerignore
 	@test -f .golangci.yml
 	@grep -q "AGPL-3.0-only" COMMERCIAL.md
 	@grep -q "AGPL-3.0-only" CONTRIBUTING.md
+	@grep -q "Contributor Covenant" CODE_OF_CONDUCT.md
+	@grep -q "@aatuh" CODEOWNERS
 	@grep -q "https://www.linkedin.com/in/aatu-harju" SECURITY.md
 	@grep -q "Do not include" SECURITY.md
 	@grep -q "webhook secrets" SECURITY.md
@@ -302,6 +360,13 @@ meta-files-check: ## Check governance, licensing, and release-evidence metadata
 	@grep -q "live third-party provider" docs/release-evidence-template.md
 	@grep -q "make live-postgres-check" README.md
 	@grep -q "doctor pilot --no-network" README.md
+	@grep -q "actions/workflows/ci.yml/badge.svg" README.md
+	@grep -q "actions/workflows/security.yml/badge.svg" README.md
+	@grep -q "actions/workflows/integration.yml/badge.svg" README.md
+	@grep -q "actions/workflows/fuzz.yml/badge.svg" README.md
+	@grep -q "actions/workflows/codeql.yml/badge.svg" README.md
+	@grep -q "actions/workflows/scorecard.yml/badge.svg" README.md
+	@op_count="$$(grep -c '^[[:space:]]*operationId:' openapi.yaml)"; grep -q "OpenAPI-$${op_count}%20operations" README.md
 	@grep -q "make live-postgres-check" docs/operations.md
 	@grep -q "make live-postgres-check" docs/release-evidence-template.md
 	@grep -q "not a certification" RELEASE_EVIDENCE.md
@@ -312,6 +377,20 @@ meta-files-check: ## Check governance, licensing, and release-evidence metadata
 	@grep -q "launch-metrics-private" .dockerignore
 	@grep -q "live-proof-private" .gitignore
 	@grep -q "launch-metrics-private" .gitignore
+	@grep -q "gomod" .github/dependabot.yml
+	@grep -q "github-actions" .github/dependabot.yml
+	@grep -q "docker" .github/dependabot.yml
+	@grep -q "terraform" .github/dependabot.yml
+	@grep -q "CodeQL Analyze" .github/workflows/codeql.yml
+	@grep -q "security-events: write" .github/workflows/codeql.yml
+	@grep -q "OpenSSF Scorecard" .github/workflows/scorecard.yml
+	@grep -q "OpenSSF Scorecard SARIF" .github/workflows/scorecard-sarif.yml
+	@grep -q "security-events: write" .github/workflows/scorecard-sarif.yml
+	@grep -q "No-secrets confirmation" .github/ISSUE_TEMPLATE/bug_report.yml
+	@grep -q "No-secrets confirmation" .github/ISSUE_TEMPLATE/production_support.yml
+	@grep -q "exactly-once delivery" .github/ISSUE_TEMPLATE/docs.yml
+	@grep -q "arbitrary code plugins" .github/ISSUE_TEMPLATE/feature_request.yml
+	@grep -q "Sensitive Data Check" .github/pull_request_template.md
 	@grep -q "gosec" .golangci.yml
 	@grep -q "bodyclose" .golangci.yml
 	@grep -q "contextcheck" .golangci.yml
@@ -360,6 +439,7 @@ sdk-check: ## Validate committed SDK artifacts are present and aligned
 
 docs-check: ## Run non-mutating documentation-adjacent checks
 	@$(MAKE) openapi-check
+	@$(MAKE) openapi-reference-check
 	@$(MAKE) test-vectors-check
 	@$(MAKE) provider-conformance-check
 	@$(MAKE) provider-proof-check
@@ -395,6 +475,7 @@ redis-integration-test: ## Run live Redis edge-store integration tests
 fast-check: ## Run non-mutating checks
 	@$(GO) test ./...
 	@$(MAKE) openapi-check
+	@$(MAKE) openapi-reference-check
 	@$(MAKE) test-vectors-check
 	@$(MAKE) crypto-inventory
 	@$(MAKE) deployment-profile-check
@@ -414,6 +495,7 @@ finalize: ## Thorough validity check
 	@$(MAKE) test
 	@$(MAKE) test-race
 	@$(MAKE) openapi-check
+	@$(MAKE) openapi-reference-check
 	@$(MAKE) test-vectors-check
 	@$(MAKE) crypto-inventory
 	@$(MAKE) deployment-profile-check

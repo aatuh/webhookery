@@ -1,10 +1,23 @@
 # Webhookery
 
+[![CI](https://github.com/aatuh/webhookery/actions/workflows/ci.yml/badge.svg)](https://github.com/aatuh/webhookery/actions/workflows/ci.yml)
+[![Security](https://github.com/aatuh/webhookery/actions/workflows/security.yml/badge.svg)](https://github.com/aatuh/webhookery/actions/workflows/security.yml)
+[![Integration](https://github.com/aatuh/webhookery/actions/workflows/integration.yml/badge.svg)](https://github.com/aatuh/webhookery/actions/workflows/integration.yml)
+[![Fuzz](https://github.com/aatuh/webhookery/actions/workflows/fuzz.yml/badge.svg)](https://github.com/aatuh/webhookery/actions/workflows/fuzz.yml)
+[![CodeQL](https://github.com/aatuh/webhookery/actions/workflows/codeql.yml/badge.svg)](https://github.com/aatuh/webhookery/actions/workflows/codeql.yml)
+[![OpenSSF Scorecard](https://github.com/aatuh/webhookery/actions/workflows/scorecard.yml/badge.svg)](https://github.com/aatuh/webhookery/actions/workflows/scorecard.yml)
+[![Release](https://github.com/aatuh/webhookery/actions/workflows/release.yml/badge.svg)](https://github.com/aatuh/webhookery/actions/workflows/release.yml)
+[![License: AGPL-3.0-only](https://img.shields.io/badge/license-AGPL--3.0--only-blue.svg)](LICENSE)
+![Go Version](https://img.shields.io/badge/go-1.25.11+-00ADD8.svg)
+![OpenAPI](https://img.shields.io/badge/OpenAPI-214%20operations-brightgreen.svg)
+
 Audit-grade webhook capture, replay, and evidence -- self-hosted.
 
 Webhookery durably captures provider webhooks before acknowledging them,
 verifies signatures, records delivery attempts, supports governed replay, and
 exports verifiable evidence when integrations fail.
+
+Website: <https://aatuh.github.io/webhookery/>
 
 The product promise is narrow by design: Webhookery must not return inbound
 success before durable capture, loss boundaries must be explicit, and replay,
@@ -21,7 +34,11 @@ Start here if you are evaluating Webhookery:
 - GitHub proof guide: `docs/live-provider-proof/github.md`
 - Shopify proof guide: `docs/live-provider-proof/shopify.md`
 - Static product page: `site/index.html`
+- Rendered OpenAPI reference: `docs/openapi/index.html`
+- API contract matrix: `docs/reference/api-contract-matrix.md`
 - Release notes: `docs/releases/v0.1.0-rc1.md`
+- Release evidence index: `docs/reference/release-evidence-index.md`
+- Current public release metadata: `release/current.json`
 - v0.2 pilot checklist: `docs/releases/v0.2.0-pilot.md`
 - Pilot topology: `docs/pilot-topology.md`
 - Commercial evaluation: `docs/commercial-evaluation.md`
@@ -35,7 +52,8 @@ This repository is implementation-bearing. The current codebase includes:
   SSRF, retry, transformation, and configuration code under `internal/`.
 - Public helper packages under `pkg/client` and `pkg/verifier`.
 - `openapi.yaml` as the canonical REST contract, with `sdk/openapi.yaml` as
-  the committed SDK-ready copy.
+  the committed SDK-ready copy and `docs/openapi/index.html` as the rendered
+  reference artifact.
 - PostgreSQL migrations under `migrations/`.
 - Docker Compose, Kubernetes, Helm, and Terraform deployment profiles.
 - SDK artifacts, Postman and Bruno smoke collections, and CI workflows.
@@ -115,7 +133,8 @@ not use live provider or customer credentials for local acceptance gates.
 
 Release-candidate details live in `docs/releases/v0.1.0-rc1.md`. Release
 evidence requirements live in `docs/release-evidence-template.md`, with a
-reader-facing example in `docs/release-evidence-sample.md` and a concise
+reader-facing example in `docs/release-evidence-sample.md`, the current public
+artifact map in `docs/reference/release-evidence-index.md`, and a concise
 operator checklist in `docs/production-rc-checklist.md`.
 
 ## Security Promise And Non-Claims
@@ -141,6 +160,16 @@ reviews, and support package boundaries are described in `COMMERCIAL.md`,
 - `docs/why-webhookery.md`: product wedge and fit/non-fit explanation.
 - `docs/configuration.md`: canonical environment variable and secret handling
   reference.
+- `docs/reference/source-of-truth.md`: public source-of-truth map for release,
+  API, workflow, deployment, and documentation artifacts.
+- `docs/reference/openapi.md`: rendered OpenAPI and API contract matrix
+  reference.
+- `docs/reference/api-contract-matrix.md`: generated operation matrix from
+  `openapi.yaml`.
+- `docs/reference/release-evidence-index.md`: public release artifact map and
+  verification notes.
+- `docs/reference/release-validation.md`: release validation and evidence
+  workflow.
 - `docs/evaluator-quickstart.md`: guided local evaluator walkthrough.
 - `examples/webhook-evidence-demo/`: deterministic local fake-provider and
   fake-receiver evidence demo.
@@ -201,7 +230,8 @@ reviews, and support package boundaries are described in `COMMERCIAL.md`,
 - `deploy/kubernetes/README.md`, `deploy/helm/webhookery/README.md`, and
   `deploy/terraform/webhookery-helm/README.md`: deployment profile notes.
 - `SECURITY.md`, `CONTRIBUTING.md`, `GOVERNANCE.md`, `SUPPORT.md`,
-  `COMMERCIAL.md`, and `TRADEMARKS.md`: project policy docs.
+  `CODE_OF_CONDUCT.md`, `CODEOWNERS`, `COMMERCIAL.md`, and `TRADEMARKS.md`:
+  project policy docs.
 
 Run `make help` for the project-owned command list. Keep README examples short;
 put detailed command workflows in the relevant canonical docs.
