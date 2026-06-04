@@ -11,6 +11,7 @@ Run these from a clean checkout before preparing release evidence:
 
 ```sh
 make docs-check
+make coverage-check
 make release-acceptance
 make rc-check
 make finalize
@@ -58,6 +59,7 @@ Each tagged release evidence packet should record:
 - tag, source commit, release workflow run, and image digest when an image is
   published;
 - `make release-acceptance`, `make rc-check`, and `make finalize` output;
+- `make coverage-check` output and `coverage.out`;
 - DB-backed `make rc-check` and `make live-postgres-check` output when a
   disposable database is available;
 - restore drill output or an accepted-risk decision when skipped;
