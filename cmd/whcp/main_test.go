@@ -694,6 +694,7 @@ func TestProblemResponseErrorIncludesStableCodeAndRequestID(t *testing.T) {
 
 func TestExportRawPayloadDecodesBase64ToPrivateFile(t *testing.T) {
 	rawBody := []byte("raw evidence bytes")
+	var gotAuthorization string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/v1/events/evt_1/raw" {
 			t.Fatalf("unexpected path %s", r.URL.Path)
@@ -701,13 +702,17 @@ func TestExportRawPayloadDecodesBase64ToPrivateFile(t *testing.T) {
 		if got := r.URL.Query().Get("reason"); got != "support case" {
 			t.Fatalf("unexpected raw export reason %q", got)
 		}
+		gotAuthorization = r.Header.Get("Authorization")
 		_ = json.NewEncoder(w).Encode(map[string]string{"body_base64": base64.StdEncoding.EncodeToString(rawBody)})
 	}))
 	defer server.Close()
 
 	output := filepath.Join(t.TempDir(), "raw.bin")
-	if err := exportRawPayload(server.URL, "whkey_test", "evt_1", "support case", output); err != nil {
+	if err := exportRawPayload(server.URL, "whkey_tenant_scoped", "evt_1", "support case", output); err != nil {
 		t.Fatal(err)
+	}
+	if gotAuthorization != "Bearer whkey_tenant_scoped" {
+		t.Fatalf("authorization header %q did not use the scoped key", gotAuthorization)
 	}
 	body, err := os.ReadFile(output)
 	if err != nil {
