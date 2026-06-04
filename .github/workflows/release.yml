@@ -67,6 +67,9 @@ jobs:
       - name: Release-candidate checks
         run: make rc-check
 
+      - name: Coverage gate
+        run: make coverage-check
+
       - uses: docker/setup-buildx-action@v3
 
       - name: Login to GitHub Container Registry
@@ -149,13 +152,14 @@ jobs:
             printf '%s\n' "- make provider-proof-check"
             printf '%s\n' "- make perf-smoke with local Postgres service"
             printf '%s\n' "- make rc-check with local Postgres service"
+            printf '%s\n' "- make coverage-check"
             printf '%s\n' "- Docker build and push"
             printf '%s\n' "- Cosign keyless image signing"
             printf '%s\n' "- SBOM generation"
             printf '%s\n' "- Trivy HIGH/CRITICAL image scan"
             printf '\n'
             printf '%s\n' "## Checksums"
-            sha256sum openapi.yaml sdk/openapi.yaml source.spdx.json image.spdx.json
+            sha256sum openapi.yaml sdk/openapi.yaml coverage.out source.spdx.json image.spdx.json
             printf '\n'
             printf '%s\n' "## Maturity Evidence"
             printf '%s\n' "- Performance smoke output: tmp/perf-smoke/perf-smoke.json and tmp/perf-smoke/perf-smoke.md"
