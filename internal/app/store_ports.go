@@ -202,6 +202,12 @@ type ReplayStore interface {
 	CancelReplayJob(ctx context.Context, tenantID, replayJobID, actorID, reason string) (ReplayJob, error)
 }
 
+type ReplayApprovalPolicyStore interface {
+	CreateReplayApprovalPolicy(ctx context.Context, tenantID, actorID string, req CreateReplayApprovalPolicyRequest) (domain.ReplayApprovalPolicy, error)
+	ListReplayApprovalPolicies(ctx context.Context, tenantID string, limit int) ([]domain.ReplayApprovalPolicy, error)
+	DisableReplayApprovalPolicy(ctx context.Context, tenantID, policyID, actorID, reason string) (domain.ReplayApprovalPolicy, error)
+}
+
 type TransformationStore interface {
 	CreateTransformation(ctx context.Context, tenantID, actorID string, req CreateTransformationRequest) (domain.Transformation, error)
 	ListTransformations(ctx context.Context, tenantID string, limit int) ([]domain.Transformation, error)

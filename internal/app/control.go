@@ -44,6 +44,7 @@ type ControlStore interface {
 	EvidenceExportStore
 	DeadLetterStore
 	ReplayStore
+	ReplayApprovalPolicyStore
 	TransformationStore
 }
 
@@ -365,6 +366,12 @@ const (
 const ReplayApprovalDefaultExpiry = 24 * time.Hour
 
 const (
+	ReplayApprovalScopeTenant = "tenant"
+	ReplayApprovalScopeSource = "source"
+	ReplayApprovalScopeRoute  = "route"
+)
+
+const (
 	ReplayReasonReceiverFixed          = "receiver_fixed"
 	ReplayReasonProviderReconciliation = "provider_reconciliation"
 	ReplayReasonOperatorRequested      = "operator_requested"
@@ -395,6 +402,14 @@ type ReplayRequest struct {
 	RateLimitPerMinute int        `json:"rate_limit_per_minute,omitempty"`
 	RequireApproval    bool       `json:"require_approval,omitempty"`
 	ApprovalExpiresAt  *time.Time `json:"approval_expires_at,omitempty"`
+}
+
+type CreateReplayApprovalPolicyRequest struct {
+	ScopeType            string `json:"scope_type"`
+	ScopeID              string `json:"scope_id,omitempty"`
+	RequireApproval      bool   `json:"require_approval"`
+	DefaultExpirySeconds int    `json:"default_expiry_seconds,omitempty"`
+	Reason               string `json:"reason"`
 }
 
 type DeadLetterReleaseRequest struct {
@@ -2134,6 +2149,34 @@ func (s *ControlService) ListReplayJobs(ctx context.Context, actor authz.Actor, 
 	return s.store.ListReplayJobs(ctx, actor.TenantID, normalizeLimit(limit))
 }
 
+func (s *ControlService) CreateReplayApprovalPolicy(ctx context.Context, actor authz.Actor, req CreateReplayApprovalPolicyRequest) (domain.ReplayApprovalPolicy, error) {
+	if !s.authorized(ctx, actor, "security:write", "replay_approval_policy", "", "") {
+		return domain.ReplayApprovalPolicy{}, ErrForbidden
+	}
+	if err := normalizeReplayApprovalPolicyRequest(&req); err != nil {
+		return domain.ReplayApprovalPolicy{}, err
+	}
+	return s.store.CreateReplayApprovalPolicy(ctx, actor.TenantID, actor.ID, req)
+}
+
+func (s *ControlService) ListReplayApprovalPolicies(ctx context.Context, actor authz.Actor, limit int) ([]domain.ReplayApprovalPolicy, error) {
+	if !s.authorized(ctx, actor, "security:read", "replay_approval_policy", "", "") {
+		return nil, ErrForbidden
+	}
+	return s.store.ListReplayApprovalPolicies(ctx, actor.TenantID, normalizeLimit(limit))
+}
+
+func (s *ControlService) DisableReplayApprovalPolicy(ctx context.Context, actor authz.Actor, policyID string, req StateChangeRequest) (domain.ReplayApprovalPolicy, error) {
+	if !s.authorized(ctx, actor, "security:write", "replay_approval_policy", policyID, "") {
+		return domain.ReplayApprovalPolicy{}, ErrForbidden
+	}
+	policyID = strings.TrimSpace(policyID)
+	if policyID == "" || strings.TrimSpace(req.Reason) == "" {
+		return domain.ReplayApprovalPolicy{}, fmt.Errorf("%w: policy_id and reason are required", ErrInvalidInput)
+	}
+	return s.store.DisableReplayApprovalPolicy(ctx, actor.TenantID, policyID, actor.ID, req.Reason)
+}
+
 func (s *ControlService) ApproveReplayJob(ctx context.Context, actor authz.Actor, replayJobID string, req StateChangeRequest) (ReplayJob, error) {
 	return s.changeReplayState(ctx, actor, replayJobID, req, s.store.ApproveReplayJob)
 }
@@ -3095,6 +3138,35 @@ func validateReplayReasonCode(reasonCode string) error {
 	}
 	if _, ok := replayReasonCodes[reasonCode]; !ok {
 		return fmt.Errorf("%w: reason_code must be one of receiver_fixed, provider_reconciliation, operator_requested, support_investigation, customer_dispute, test_drill, incident_recovery", ErrInvalidInput)
+	}
+	return nil
+}
+
+func normalizeReplayApprovalPolicyRequest(req *CreateReplayApprovalPolicyRequest) error {
+	req.ScopeType = strings.TrimSpace(req.ScopeType)
+	req.ScopeID = strings.TrimSpace(req.ScopeID)
+	req.Reason = strings.TrimSpace(req.Reason)
+	if req.ScopeType == "" || req.Reason == "" {
+		return fmt.Errorf("%w: scope_type and reason are required", ErrInvalidInput)
+	}
+	switch req.ScopeType {
+	case ReplayApprovalScopeTenant:
+		req.ScopeID = ""
+	case ReplayApprovalScopeSource, ReplayApprovalScopeRoute:
+		if req.ScopeID == "" {
+			return fmt.Errorf("%w: scope_id is required for source and route replay approval policies", ErrInvalidInput)
+		}
+	default:
+		return fmt.Errorf("%w: scope_type must be tenant, source, or route", ErrInvalidInput)
+	}
+	if !req.RequireApproval {
+		req.RequireApproval = true
+	}
+	if req.DefaultExpirySeconds == 0 {
+		req.DefaultExpirySeconds = int(ReplayApprovalDefaultExpiry / time.Second)
+	}
+	if req.DefaultExpirySeconds < 300 || req.DefaultExpirySeconds > 7*24*60*60 {
+		return fmt.Errorf("%w: default_expiry_seconds must be between 300 and 604800", ErrInvalidInput)
 	}
 	return nil
 }

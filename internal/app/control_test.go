@@ -1072,6 +1072,53 @@ func TestControlServiceReplayApprovalValidationAndTenantScope(t *testing.T) {
 	}
 }
 
+func TestControlServiceReplayApprovalPoliciesValidateAndScope(t *testing.T) {
+	store := &fakeControlStore{}
+	svc := NewControlService(store, ssrf.Validator{Resolver: ssrf.StaticResolver{}})
+	admin := authz.Actor{ID: "usr_sec", TenantID: "ten_a", Role: authz.RoleSecurity, Scopes: []string{"security:write", "security:read"}}
+
+	policy, err := svc.CreateReplayApprovalPolicy(context.Background(), admin, CreateReplayApprovalPolicyRequest{ScopeType: ReplayApprovalScopeRoute, ScopeID: "rte_1", Reason: "sensitive route"})
+	if err != nil {
+		t.Fatalf("expected policy creation to succeed, got %v", err)
+	}
+	if policy.TenantID != "ten_a" || policy.ScopeType != ReplayApprovalScopeRoute || policy.ScopeID != "rte_1" || !policy.RequireApproval || policy.DefaultExpirySeconds != int(ReplayApprovalDefaultExpiry/time.Second) {
+		t.Fatalf("policy was not normalized or tenant-scoped: %+v", policy)
+	}
+	if store.replayApprovalPolicyReq.ScopeType != ReplayApprovalScopeRoute || store.replayApprovalPolicyReq.ScopeID != "rte_1" || store.replayApprovalPolicyActorID != "usr_sec" {
+		t.Fatalf("policy request was not propagated: %+v actor=%q", store.replayApprovalPolicyReq, store.replayApprovalPolicyActorID)
+	}
+
+	_, err = svc.CreateReplayApprovalPolicy(context.Background(), admin, CreateReplayApprovalPolicyRequest{ScopeType: ReplayApprovalScopeSource, Reason: "missing source"})
+	if !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("expected source scope_id validation, got %v", err)
+	}
+	_, err = svc.CreateReplayApprovalPolicy(context.Background(), admin, CreateReplayApprovalPolicyRequest{ScopeType: ReplayApprovalScopeTenant, DefaultExpirySeconds: 60, Reason: "too short"})
+	if !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("expected default expiry bounds validation, got %v", err)
+	}
+
+	readOnly := authz.Actor{ID: "usr_read", TenantID: "ten_a", Role: authz.RoleAuditor, Scopes: []string{"security:read"}}
+	_, err = svc.CreateReplayApprovalPolicy(context.Background(), readOnly, CreateReplayApprovalPolicyRequest{ScopeType: ReplayApprovalScopeTenant, Reason: "no write"})
+	if err != ErrForbidden {
+		t.Fatalf("expected security write requirement, got %v", err)
+	}
+
+	if _, err := svc.ListReplayApprovalPolicies(context.Background(), readOnly, 10); err != nil {
+		t.Fatalf("expected security read list to succeed, got %v", err)
+	}
+	if store.replayApprovalPolicyTenantID != "ten_a" {
+		t.Fatalf("policy list was not tenant-scoped: %q", store.replayApprovalPolicyTenantID)
+	}
+
+	disabled, err := svc.DisableReplayApprovalPolicy(context.Background(), admin, "rap_1", StateChangeRequest{Reason: "route is no longer sensitive"})
+	if err != nil {
+		t.Fatalf("expected policy disable to succeed, got %v", err)
+	}
+	if disabled.State != domain.StateDisabled || store.replayApprovalPolicyID != "rap_1" || store.replayApprovalPolicyReason != "route is no longer sensitive" {
+		t.Fatalf("policy disable was not propagated: policy=%+v store=%+v", disabled, store)
+	}
+}
+
 func TestControlServiceSecretRotationRequiresSecurityWrite(t *testing.T) {
 	store := &fakeControlStore{}
 	svc := NewControlService(store, ssrf.Validator{Resolver: ssrf.StaticResolver{}})
@@ -1847,72 +1894,77 @@ func testClientCertificatePEM(t *testing.T, commonName string) (string, string) 
 }
 
 type fakeControlStore struct {
-	eventTenantID              string
-	eventSearchTenantID        string
-	eventSearchReq             EventSearchRequest
-	incidentTenantID           string
-	incidentActorID            string
-	incidentID                 string
-	incidentEventID            string
-	incidentReason             string
-	auditExportTenantID        string
-	auditExport                domain.EvidenceExport
-	auditExportDownloaded      bool
-	auditExports               []domain.EvidenceExport
-	apiKeyInput                APIKeyCreateInput
-	producerClientTenantID     string
-	producerClientActorID      string
-	producerClientReason       string
-	producerClientInput        ProducerClientCreateInput
-	producerMTLSTenantID       string
-	producerMTLSActorID        string
-	producerMTLSIdentity       domain.ProducerMTLSIdentity
-	eventSchema                domain.EventSchema
-	schemaTenantID             string
-	schemaReason               string
-	retryPolicyTenantID        string
-	retryPolicyID              string
-	retryPolicyReq             UpdateRetryPolicyRequest
-	normalizedTenantID         string
-	normalizedMetadataOnly     bool
-	rawPayloadTenantID         string
-	rawPayloadEventID          string
-	rawPayloadActorID          string
-	rawPayloadReason           string
-	sourceTenantID             string
-	sourceID                   string
-	sourceReason               string
-	endpointTenantID           string
-	endpointID                 string
-	endpointReason             string
-	subscriptionTenantID       string
-	subscriptionID             string
-	subscriptionReason         string
-	subscription               domain.Subscription
-	routeTenantID              string
-	routeID                    string
-	routeReason                string
-	route                      domain.Route
-	transformationTenantID     string
-	providerConnectionTenantID string
-	providerConnectionReq      CreateProviderConnectionRequest
-	adapterTenantID            string
-	adapterActorID             string
-	adapterVersionReq          CreateAdapterVersionRequest
-	reconciliationTenantID     string
-	opsTenantID                string
-	metricName                 string
-	alertTenantID              string
-	alertActorID               string
-	notificationTenantID       string
-	notificationActorID        string
-	siemTenantID               string
-	siemActorID                string
-	replayReq                  ReplayRequest
-	approveReplayTenantID      string
-	approveReplayActorID       string
-	approveReplayReason        string
-	endpoint                   domain.Endpoint
+	eventTenantID                string
+	eventSearchTenantID          string
+	eventSearchReq               EventSearchRequest
+	incidentTenantID             string
+	incidentActorID              string
+	incidentID                   string
+	incidentEventID              string
+	incidentReason               string
+	auditExportTenantID          string
+	auditExport                  domain.EvidenceExport
+	auditExportDownloaded        bool
+	auditExports                 []domain.EvidenceExport
+	apiKeyInput                  APIKeyCreateInput
+	producerClientTenantID       string
+	producerClientActorID        string
+	producerClientReason         string
+	producerClientInput          ProducerClientCreateInput
+	producerMTLSTenantID         string
+	producerMTLSActorID          string
+	producerMTLSIdentity         domain.ProducerMTLSIdentity
+	eventSchema                  domain.EventSchema
+	schemaTenantID               string
+	schemaReason                 string
+	retryPolicyTenantID          string
+	retryPolicyID                string
+	retryPolicyReq               UpdateRetryPolicyRequest
+	normalizedTenantID           string
+	normalizedMetadataOnly       bool
+	rawPayloadTenantID           string
+	rawPayloadEventID            string
+	rawPayloadActorID            string
+	rawPayloadReason             string
+	sourceTenantID               string
+	sourceID                     string
+	sourceReason                 string
+	endpointTenantID             string
+	endpointID                   string
+	endpointReason               string
+	subscriptionTenantID         string
+	subscriptionID               string
+	subscriptionReason           string
+	subscription                 domain.Subscription
+	routeTenantID                string
+	routeID                      string
+	routeReason                  string
+	route                        domain.Route
+	transformationTenantID       string
+	providerConnectionTenantID   string
+	providerConnectionReq        CreateProviderConnectionRequest
+	adapterTenantID              string
+	adapterActorID               string
+	adapterVersionReq            CreateAdapterVersionRequest
+	reconciliationTenantID       string
+	opsTenantID                  string
+	metricName                   string
+	alertTenantID                string
+	alertActorID                 string
+	notificationTenantID         string
+	notificationActorID          string
+	siemTenantID                 string
+	siemActorID                  string
+	replayReq                    ReplayRequest
+	approveReplayTenantID        string
+	approveReplayActorID         string
+	approveReplayReason          string
+	replayApprovalPolicyTenantID string
+	replayApprovalPolicyActorID  string
+	replayApprovalPolicyID       string
+	replayApprovalPolicyReason   string
+	replayApprovalPolicyReq      CreateReplayApprovalPolicyRequest
+	endpoint                     domain.Endpoint
 }
 
 type policyDecisionStore struct {
@@ -2746,6 +2798,23 @@ func (f *fakeControlStore) ResumeReplayJob(context.Context, string, string, stri
 }
 func (f *fakeControlStore) CancelReplayJob(context.Context, string, string, string, string) (ReplayJob, error) {
 	return ReplayJob{}, nil
+}
+func (f *fakeControlStore) CreateReplayApprovalPolicy(_ context.Context, tenantID, actorID string, req CreateReplayApprovalPolicyRequest) (domain.ReplayApprovalPolicy, error) {
+	f.replayApprovalPolicyTenantID = tenantID
+	f.replayApprovalPolicyActorID = actorID
+	f.replayApprovalPolicyReq = req
+	return domain.ReplayApprovalPolicy{ID: "rap_1", TenantID: tenantID, ScopeType: req.ScopeType, ScopeID: req.ScopeID, RequireApproval: req.RequireApproval, DefaultExpirySeconds: req.DefaultExpirySeconds, State: domain.StateActive, Reason: req.Reason, CreatedBy: actorID}, nil
+}
+func (f *fakeControlStore) ListReplayApprovalPolicies(_ context.Context, tenantID string, limit int) ([]domain.ReplayApprovalPolicy, error) {
+	f.replayApprovalPolicyTenantID = tenantID
+	return []domain.ReplayApprovalPolicy{{ID: "rap_1", TenantID: tenantID, ScopeType: ReplayApprovalScopeTenant, RequireApproval: true, DefaultExpirySeconds: int(ReplayApprovalDefaultExpiry / time.Second), State: domain.StateActive}}, nil
+}
+func (f *fakeControlStore) DisableReplayApprovalPolicy(_ context.Context, tenantID, policyID, actorID, reason string) (domain.ReplayApprovalPolicy, error) {
+	f.replayApprovalPolicyTenantID = tenantID
+	f.replayApprovalPolicyActorID = actorID
+	f.replayApprovalPolicyID = policyID
+	f.replayApprovalPolicyReason = reason
+	return domain.ReplayApprovalPolicy{ID: policyID, TenantID: tenantID, ScopeType: ReplayApprovalScopeTenant, RequireApproval: true, DefaultExpirySeconds: int(ReplayApprovalDefaultExpiry / time.Second), State: domain.StateDisabled, CreatedBy: actorID}, nil
 }
 func (f *fakeControlStore) CreateTransformation(_ context.Context, tenantID, actorID string, req CreateTransformationRequest) (domain.Transformation, error) {
 	f.transformationTenantID = tenantID

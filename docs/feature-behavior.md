@@ -121,6 +121,11 @@ Replay jobs may be paused, resumed, canceled, rate-limited, or created with
 event. Pending approval jobs default to a 24-hour approval window unless
 `approval_expires_at` is provided, and approval must come from a different
 authorized actor than the creator. Canceling a pending job is the deny path.
+Active replay approval policies can also require approval for tenant, source,
+or route scopes. Matching policies are evaluated route first, then source, then
+tenant, and they make replay jobs pending approval before delivery work is
+enqueued. Disabling a policy stops automatic gating for future non-sensitive
+replays; existing pending jobs keep their recorded approval requirement.
 Replay creation, preview, and dry-run requests require both a structured
 `reason_code` and a free-text `reason`. Implemented reason codes are `receiver_fixed`,
 `provider_reconciliation`, `operator_requested`, `support_investigation`,

@@ -3495,6 +3495,76 @@ paths:
       responses:
         "200":
           description: Replay job canceled.
+  /v1/replay-approval-policies:
+    get:
+      tags:
+        - Delivery And Replay
+      operationId: getReplayApprovalPolicies
+      summary: List replay approval policies
+      description: Lists tenant-scoped policies that automatically require replay approval for tenant, source, or route scopes.
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Paginated replay approval policy list.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReplayApprovalPolicyPage"
+    post:
+      tags:
+        - Delivery And Replay
+      operationId: postReplayApprovalPolicies
+      summary: Create or reactivate replay approval policy
+      description: Creates or reactivates an active policy that makes matching replay jobs pending approval before delivery work is enqueued.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateReplayApprovalPolicyRequest"
+            example:
+              scope_type: source
+              scope_id: src_stripe
+              default_expiry_seconds: 86400
+              reason: "payments source requires maker-checker replay"
+      responses:
+        "201":
+          description: Replay approval policy created or reactivated.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReplayApprovalPolicy"
+  /v1/replay-approval-policies/{policy_id}:
+    delete:
+      tags:
+        - Delivery And Replay
+      operationId: deleteReplayApprovalPoliciesPolicyId
+      summary: Disable replay approval policy
+      description: Disables a tenant-scoped replay approval policy. Historical pending jobs keep their approval requirement.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: policy_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ReasonRequest"
+      responses:
+        "200":
+          description: Replay approval policy disabled.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReplayApprovalPolicy"
   /v1/reconciliation-jobs:dry-run:
     post:
       tags:
@@ -7345,6 +7415,71 @@ components:
           type: string
           format: date-time
           description: Optional approval expiry for pending replay jobs. When omitted with require_approval=true, the server defaults to 24 hours from creation. The field is rejected unless require_approval is true.
+    CreateReplayApprovalPolicyRequest:
+      type: object
+      required: [scope_type, reason]
+      additionalProperties: false
+      properties:
+        scope_type:
+          type: string
+          enum: [tenant, source, route]
+        scope_id:
+          type: string
+          description: Required for source and route policies. Omit for tenant-wide policies.
+        require_approval:
+          type: boolean
+          default: true
+          description: Active v1 policies require approval. Disable the policy to stop automatic approval gating.
+        default_expiry_seconds:
+          type: integer
+          minimum: 300
+          maximum: 604800
+          default: 86400
+        reason:
+          type: string
+          minLength: 1
+          maxLength: 500
+    ReplayApprovalPolicy:
+      type: object
+      required: [id, tenant_id, scope_type, require_approval, default_expiry_seconds, state, created_by, created_at, updated_at]
+      properties:
+        id:
+          type: string
+        tenant_id:
+          type: string
+        scope_type:
+          type: string
+          enum: [tenant, source, route]
+        scope_id:
+          type: string
+        require_approval:
+          type: boolean
+        default_expiry_seconds:
+          type: integer
+        state:
+          type: string
+        reason:
+          type: string
+        created_by:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+    ReplayApprovalPolicyPage:
+      type: object
+      properties:
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/ReplayApprovalPolicy"
+        next_cursor:
+          type: string
+          nullable: true
+        has_more:
+          type: boolean
     CreateAuditExportRequest:
       type: object
       additionalProperties: false
