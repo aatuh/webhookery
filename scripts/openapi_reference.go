@@ -386,10 +386,10 @@ func md(value string) string {
 }
 
 func writeFile(path string, data []byte) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
 		return err
 	}
-	return os.WriteFile(path, data, 0o644) // #nosec G304 -- repository generator writes explicit maintainer-provided artifact paths.
+	return os.WriteFile(path, data, 0o644) // #nosec G304,G306 -- repository generator writes explicit public documentation artifact paths.
 }
 
 func fatal(err error) {
