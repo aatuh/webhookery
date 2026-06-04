@@ -1,0 +1,100 @@
+{
+  "schema_version": "webhookery.provider_signature_vectors.v1",
+  "description": "Synthetic local provider signature vectors. These fixtures do not call live providers and do not contain real provider secrets or customer payloads.",
+  "vectors": [
+    {
+      "name": "stripe-valid-v1-hmac-sha256",
+      "provider": "stripe",
+      "source": "https://docs.stripe.com/webhooks/signature",
+      "checked_date": "2026-06-04",
+      "now": "2023-11-14T22:13:20Z",
+      "secret": "whsec_test",
+      "raw_body": "{\"id\":\"evt_123\",\"type\":\"payment_intent.succeeded\",\"event_id\":\"slack_evt\"}",
+      "mutated_raw_body": "{\"type\":\"payment_intent.succeeded\",\"id\":\"evt_123\"}",
+      "headers": {
+        "stripe-signature": [
+          "t=1700000000,v1=9aae435784965c3b24b12c58e70ee43ff01381fd450c94f8a32ce6ea17d4fa46"
+        ]
+      },
+      "expected": {
+        "verified": true,
+        "reason": "ok"
+      }
+    },
+    {
+      "name": "github-valid-sha256-hmac",
+      "provider": "github",
+      "source": "https://docs.github.com/en/webhooks/using-webhooks/validating-webhook-deliveries",
+      "checked_date": "2026-06-04",
+      "now": "2023-11-14T22:13:20Z",
+      "secret": "whsec_test",
+      "raw_body": "{\"id\":\"evt_123\",\"type\":\"payment_intent.succeeded\",\"event_id\":\"slack_evt\"}",
+      "mutated_raw_body": "{\"type\":\"payment_intent.succeeded\",\"id\":\"evt_123\"}",
+      "headers": {
+        "x-hub-signature-256": [
+          "sha256=d0377f7b5aedf7b5f9d70900dd7d10e4f3a25fdd83350ffbefac41e357848153"
+        ],
+        "x-github-delivery": [
+          "delivery-guid"
+        ],
+        "x-github-event": [
+          "push"
+        ]
+      },
+      "expected": {
+        "verified": true,
+        "reason": "ok"
+      }
+    },
+    {
+      "name": "shopify-valid-base64-hmac-sha256",
+      "provider": "shopify",
+      "source": "https://shopify.dev/docs/apps/build/webhooks/verify-deliveries",
+      "checked_date": "2026-06-04",
+      "now": "2023-11-14T22:13:20Z",
+      "secret": "whsec_test",
+      "raw_body": "{\"id\":\"evt_123\",\"type\":\"payment_intent.succeeded\",\"event_id\":\"slack_evt\"}",
+      "mutated_raw_body": "{\"type\":\"payment_intent.succeeded\",\"id\":\"evt_123\"}",
+      "headers": {
+        "x-shopify-hmac-sha256": [
+          "0Dd/e1rt97X51wkA3X0Q5POiX92DNQ/776xB41eEgVM="
+        ],
+        "x-shopify-topic": [
+          "orders/create"
+        ],
+        "x-shopify-shop-domain": [
+          "example.myshopify.com"
+        ],
+        "x-shopify-webhook-id": [
+          "webhook-id"
+        ]
+      },
+      "expected": {
+        "verified": true,
+        "reason": "ok"
+      }
+    },
+    {
+      "name": "slack-valid-v0-hmac-sha256",
+      "provider": "slack",
+      "source": "https://api.slack.com/authentication/verifying-requests-from-slack",
+      "checked_date": "2026-06-04",
+      "now": "2023-11-14T22:13:20Z",
+      "secret": "whsec_test",
+      "raw_body": "{\"id\":\"evt_123\",\"type\":\"payment_intent.succeeded\",\"event_id\":\"slack_evt\"}",
+      "mutated_raw_body": "{\"type\":\"payment_intent.succeeded\",\"id\":\"evt_123\"}",
+      "headers": {
+        "x-slack-request-timestamp": [
+          "1700000000"
+        ],
+        "x-slack-signature": [
+          "v0=63d2c60275d7b0eb2c88a6cd88fc3c0942be3b12eb190d42a267fcbfb90c1f14"
+        ]
+      },
+      "expected": {
+        "verified": true,
+        "reason": "ok"
+      }
+    }
+  ]
+}
