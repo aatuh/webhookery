@@ -8,7 +8,7 @@ GOSEC_VERSION ?= v2.25.0
 GOVULNCHECK_VERSION ?= v1.2.0
 FUZZTIME ?= 5s
 
-.PHONY: help tools fmt lint vuln gosec test test-race coverage openapi-check openapi-reference-generate openapi-reference-check test-vectors-check provider-conformance-check provider-proof-check crypto-inventory deployment-profile-check collections-check documentation-structure-check failure-drills-check demo-media-check static-site-check meta-files-check fuzz-smoke perf-smoke demo-media restore-drill sdk-generate sdk-check docs-check release-acceptance rc-check compose-up compose-down migrate live-postgres-check postgres-integration-test redis-integration-test fast-check finalize clean
+.PHONY: help tools fmt lint vuln gosec test test-race coverage openapi-check openapi-reference-generate openapi-reference-check test-vectors-check provider-conformance-check provider-proof-check crypto-inventory deployment-profile-check collections-check documentation-structure-check failure-drills-check demo-media-check static-site-check meta-files-check release-assets-check fuzz-smoke perf-smoke demo-media restore-drill sdk-generate sdk-check docs-check release-acceptance rc-check compose-up compose-down migrate live-postgres-check postgres-integration-test redis-integration-test fast-check finalize clean
 
 help: ## Show help
 	@awk 'BEGIN {FS=":.*## "}; /^[a-zA-Z0-9_.-]+:.*## / { printf "  %-16s %s\n", $$1, $$2 }' $(MAKEFILE_LIST)
@@ -325,6 +325,7 @@ meta-files-check: ## Check governance, licensing, and release-evidence metadata
 	@test -f CODEOWNERS
 	@test -f TRADEMARKS.md
 	@test -f RELEASE_EVIDENCE.md
+	@test -x scripts/release_assets.sh
 	@test -f .github/dependabot.yml
 	@test -f .github/pull_request_template.md
 	@test -f .github/ISSUE_TEMPLATE.md
@@ -386,6 +387,11 @@ meta-files-check: ## Check governance, licensing, and release-evidence metadata
 	@grep -q "OpenSSF Scorecard" .github/workflows/scorecard.yml
 	@grep -q "OpenSSF Scorecard SARIF" .github/workflows/scorecard-sarif.yml
 	@grep -q "security-events: write" .github/workflows/scorecard-sarif.yml
+	@grep -q "scripts/release_assets.sh" .github/workflows/release.yml
+	@grep -q "gh release upload" .github/workflows/release.yml
+	@grep -q "webhookery-release-manifest.json" scripts/release_assets.sh
+	@grep -q "webhookery-release-provenance.intoto.jsonl" scripts/release_assets.sh
+	@grep -q "release asset summary" scripts/release_assets.sh
 	@grep -q "No-secrets confirmation" .github/ISSUE_TEMPLATE/bug_report.yml
 	@grep -q "No-secrets confirmation" .github/ISSUE_TEMPLATE/production_support.yml
 	@grep -q "exactly-once delivery" .github/ISSUE_TEMPLATE/docs.yml
@@ -396,6 +402,24 @@ meta-files-check: ## Check governance, licensing, and release-evidence metadata
 	@grep -q "contextcheck" .golangci.yml
 	@git ls-files --cached --others --exclude-standard .dockerignore | grep -qx ".dockerignore" || (printf '%s\n' ".dockerignore must be trackable" >&2; exit 1)
 	@git ls-files --cached --others --exclude-standard .golangci.yml | grep -qx ".golangci.yml" || (printf '%s\n' ".golangci.yml must be trackable" >&2; exit 1)
+
+release-assets-check: ## Smoke-test release asset packaging metadata
+	@bash -n scripts/release_assets.sh
+	@tmp_dir="$$(mktemp -d)"; \
+	trap 'rm -rf "$$tmp_dir"' EXIT; \
+	WEBHOOKERY_RELEASE_ASSET_PLATFORMS=linux/amd64 scripts/release_assets.sh v0.0.0-local "$$tmp_dir" "$$(git rev-parse HEAD)" >/dev/null; \
+	test -f "$$tmp_dir/webhookery_v0.0.0-local_linux_amd64.tar.gz"; \
+	test -f "$$tmp_dir/SHA256SUMS"; \
+	test -f "$$tmp_dir/openapi.yaml"; \
+	test -f "$$tmp_dir/openapi.sha256"; \
+	test -f "$$tmp_dir/migrations.sha256"; \
+	test -f "$$tmp_dir/release-check-summary.txt"; \
+	test -f "$$tmp_dir/webhookery-release-manifest.json"; \
+	test -f "$$tmp_dir/webhookery-release-provenance.json"; \
+	test -f "$$tmp_dir/webhookery-release-provenance.intoto.jsonl"; \
+	(cd "$$tmp_dir" && sha256sum -c SHA256SUMS >/dev/null); \
+	grep -q "webhookery-release-manifest.v1" "$$tmp_dir/webhookery-release-manifest.json"; \
+	grep -q "not exactly-once delivery proof" "$$tmp_dir/webhookery-release-manifest.json"
 
 fuzz-smoke: ## Run short CI-safe fuzz/property smoke tests
 	@$(GO) test ./internal/canonicaljson -run '^$$' -fuzz=Fuzz -fuzztime=$(FUZZTIME)
@@ -452,6 +476,7 @@ docs-check: ## Run non-mutating documentation-adjacent checks
 	@$(MAKE) demo-media-check
 	@$(MAKE) static-site-check
 	@$(MAKE) meta-files-check
+	@$(MAKE) release-assets-check
 
 compose-up: ## Start local dependencies and API
 	@docker compose up --build
@@ -485,6 +510,7 @@ fast-check: ## Run non-mutating checks
 	@$(MAKE) demo-media-check
 	@$(MAKE) static-site-check
 	@$(MAKE) meta-files-check
+	@$(MAKE) release-assets-check
 	@$(MAKE) sdk-check
 
 finalize: ## Thorough validity check
@@ -505,6 +531,7 @@ finalize: ## Thorough validity check
 	@$(MAKE) demo-media-check
 	@$(MAKE) static-site-check
 	@$(MAKE) meta-files-check
+	@$(MAKE) release-assets-check
 	@$(MAKE) sdk-check
 
 clean: ## Clean local test artifacts

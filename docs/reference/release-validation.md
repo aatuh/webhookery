@@ -39,12 +39,17 @@ artifacts:
 ```sh
 make openapi-reference-check
 make meta-files-check
+make release-assets-check
 make static-site-check
 ```
 
 `make openapi-reference-check` verifies that `docs/openapi/index.html`,
 `docs/reference/openapi.md`, and `docs/reference/api-contract-matrix.md` match
 the canonical `openapi.yaml`.
+
+`make release-assets-check` smoke-tests `scripts/release_assets.sh` with one
+local Linux amd64 archive and verifies the generated checksums, manifest, and
+provenance metadata.
 
 ## Evidence To Record
 
@@ -58,6 +63,8 @@ Each tagged release evidence packet should record:
 - restore drill output or an accepted-risk decision when skipped;
 - OpenAPI and migration checksum summaries;
 - source and image SBOM references when generated;
+- release archives, `SHA256SUMS`, release manifest, and release provenance
+  metadata from `scripts/release_assets.sh`;
 - Trivy, govulncheck, gosec, CodeQL, and Scorecard status;
 - provider conformance and provider proof metadata status;
 - branch protection or repository ruleset status;
