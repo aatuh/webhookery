@@ -4,79 +4,58 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/base64"
-	"encoding/hex"
 	"encoding/json"
-	"fmt"
+	"os"
 	"strings"
 	"testing"
 	"time"
 )
 
 func TestProviderSignatureVectors(t *testing.T) {
-	now := time.Unix(1_700_000_000, 0)
-	body := []byte(`{"id":"evt_123","type":"payment_intent.succeeded","event_id":"slack_evt"}`)
-
-	tests := []struct {
-		name    string
-		adapter string
-		headers map[string][]string
-	}{
-		{
-			name:    "stripe",
-			adapter: "stripe",
-			headers: map[string][]string{
-				"stripe-signature": {fmt.Sprintf("t=%d,v1=%s", now.Unix(), hmacHex([]byte("whsec_test"), []byte(fmt.Sprintf("%d.%s", now.Unix(), body))))},
-			},
-		},
-		{
-			name:    "github",
-			adapter: "github",
-			headers: map[string][]string{
-				"x-hub-signature-256": {"sha256=" + hmacHex([]byte("whsec_test"), body)},
-				"x-github-delivery":   {"delivery-guid"},
-				"x-github-event":      {"push"},
-			},
-		},
-		{
-			name:    "shopify",
-			adapter: "shopify",
-			headers: map[string][]string{
-				"x-shopify-hmac-sha256": {hmacBase64([]byte("whsec_test"), body)},
-				"x-shopify-topic":       {"orders/create"},
-				"x-shopify-shop-domain": {"example.myshopify.com"},
-				"x-shopify-webhook-id":  {"webhook-id"},
-			},
-		},
-		{
-			name:    "slack",
-			adapter: "slack",
-			headers: map[string][]string{
-				"x-slack-request-timestamp": {fmt.Sprint(now.Unix())},
-				"x-slack-signature":         {"v0=" + hmacHex([]byte("whsec_test"), []byte(fmt.Sprintf("v0:%d:%s", now.Unix(), body)))},
-			},
-		},
+	registry := loadSignatureVectorRegistry(t)
+	if registry.SchemaVersion != "webhookery.provider_signature_vectors.v1" {
+		t.Fatalf("unexpected provider vector registry schema_version %q", registry.SchemaVersion)
+	}
+	if len(registry.Vectors) == 0 {
+		t.Fatal("provider vector registry must contain at least one vector")
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			adapter, ok := BuiltInRegistry().Adapter(tt.adapter)
+	seen := map[string]bool{}
+	for _, vector := range registry.Vectors {
+		vector := vector
+		t.Run(vector.Name, func(t *testing.T) {
+			if vector.Provider == "" || vector.Source == "" || vector.CheckedDate == "" || vector.Expected.Reason == "" {
+				t.Fatalf("vector must include provider, source, checked_date, and expected reason: %+v", vector)
+			}
+			if _, err := time.Parse("2006-01-02", vector.CheckedDate); err != nil {
+				t.Fatalf("vector checked_date must use YYYY-MM-DD: %v", err)
+			}
+			if seen[vector.Provider] {
+				t.Fatalf("duplicate provider vector for %s", vector.Provider)
+			}
+			seen[vector.Provider] = true
+			adapter, ok := BuiltInRegistry().Adapter(vector.Provider)
 			if !ok {
-				t.Fatalf("missing adapter %s", tt.adapter)
+				t.Fatalf("missing adapter %s", vector.Provider)
+			}
+			now, err := time.Parse(time.RFC3339, vector.Now)
+			if err != nil {
+				t.Fatalf("vector now must use RFC3339: %v", err)
 			}
 			result := adapter.Verify(VerifyInput{
-				RawBody: body,
-				Headers: tt.headers,
-				Secret:  []byte("whsec_test"),
+				RawBody: []byte(vector.RawBody),
+				Headers: vector.Headers,
+				Secret:  []byte(vector.Secret),
 				Now:     now,
 			})
-			if !result.Verified {
-				t.Fatalf("expected verified signature, got %s", result.Reason)
+			if result.Verified != vector.Expected.Verified || result.Reason != vector.Expected.Reason {
+				t.Fatalf("expected verified=%v reason=%s, got verified=%v reason=%s", vector.Expected.Verified, vector.Expected.Reason, result.Verified, result.Reason)
 			}
 
 			bad := adapter.Verify(VerifyInput{
-				RawBody: []byte(`{"type":"payment_intent.succeeded","id":"evt_123"}`),
-				Headers: tt.headers,
-				Secret:  []byte("whsec_test"),
+				RawBody: []byte(vector.MutatedRawBody),
+				Headers: vector.Headers,
+				Secret:  []byte(vector.Secret),
 				Now:     now,
 			})
 			if bad.Verified {
@@ -84,6 +63,46 @@ func TestProviderSignatureVectors(t *testing.T) {
 			}
 		})
 	}
+
+	for _, provider := range []string{"stripe", "github", "shopify", "slack"} {
+		if !seen[provider] {
+			t.Fatalf("provider vector registry missing %s", provider)
+		}
+	}
+}
+
+type signatureVectorRegistry struct {
+	SchemaVersion string                    `json:"schema_version"`
+	Vectors       []providerSignatureVector `json:"vectors"`
+}
+
+type providerSignatureVector struct {
+	Name           string              `json:"name"`
+	Provider       string              `json:"provider"`
+	Source         string              `json:"source"`
+	CheckedDate    string              `json:"checked_date"`
+	Now            string              `json:"now"`
+	Secret         string              `json:"secret"`
+	RawBody        string              `json:"raw_body"`
+	MutatedRawBody string              `json:"mutated_raw_body"`
+	Headers        map[string][]string `json:"headers"`
+	Expected       struct {
+		Verified bool   `json:"verified"`
+		Reason   string `json:"reason"`
+	} `json:"expected"`
+}
+
+func loadSignatureVectorRegistry(t *testing.T) signatureVectorRegistry {
+	t.Helper()
+	raw, err := os.ReadFile("testdata/signature_vectors.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var registry signatureVectorRegistry
+	if err := json.Unmarshal(raw, &registry); err != nil {
+		t.Fatal(err)
+	}
+	return registry
 }
 
 func TestFailedVerificationResultDoesNotExposeSensitiveInputs(t *testing.T) {
@@ -228,18 +247,6 @@ func TestGenericJWTAdapterRejectsAlgNone(t *testing.T) {
 	if result.Verified || result.Reason != "unsupported_algorithm" {
 		t.Fatalf("alg none must be rejected, verified=%v reason=%s", result.Verified, result.Reason)
 	}
-}
-
-func hmacHex(secret, payload []byte) string {
-	mac := hmac.New(sha256.New, secret)
-	_, _ = mac.Write(payload)
-	return hex.EncodeToString(mac.Sum(nil))
-}
-
-func hmacBase64(secret, payload []byte) string {
-	mac := hmac.New(sha256.New, secret)
-	_, _ = mac.Write(payload)
-	return base64.StdEncoding.EncodeToString(mac.Sum(nil))
 }
 
 func jwtHS256(t *testing.T, secret []byte, claims map[string]any) string {

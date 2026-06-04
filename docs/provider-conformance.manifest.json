@@ -9,6 +9,7 @@
     "go test ./internal/provider -run TestGenericJWTAdapter",
     "go test ./pkg/verifier -run TestTimestampedSignatureWindow"
   ],
+  "signature_vector_registry": "internal/provider/testdata/signature_vectors.json",
   "providers": [
     {
       "name": "stripe",
