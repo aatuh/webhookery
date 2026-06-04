@@ -21,6 +21,10 @@ release-evidence
 release-evidence/
 backups
 backups/
+live-proof-private
+live-proof-private/
+launch-metrics-private
+launch-metrics-private/
 coverage.out
 *.prof
 *.pprof

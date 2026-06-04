@@ -308,6 +308,10 @@ meta-files-check: ## Check governance, licensing, and release-evidence metadata
 	@grep -q ".refs" .dockerignore
 	@grep -q "release-evidence" .dockerignore
 	@grep -q "backups" .dockerignore
+	@grep -q "live-proof-private" .dockerignore
+	@grep -q "launch-metrics-private" .dockerignore
+	@grep -q "live-proof-private" .gitignore
+	@grep -q "launch-metrics-private" .gitignore
 	@grep -q "gosec" .golangci.yml
 	@grep -q "bodyclose" .golangci.yml
 	@grep -q "contextcheck" .golangci.yml

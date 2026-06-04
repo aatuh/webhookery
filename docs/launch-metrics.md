@@ -46,6 +46,9 @@ Review launch signals weekly for the first four weeks after `v0.1.0-rc1`:
 Keep the launch tracker private unless every row is sanitized for public
 sharing. A spreadsheet, CRM, or private issue board is enough; do not add
 runtime analytics or product telemetry to collect these fields.
+If you use a file-based tracker in this checkout, keep it under
+`launch-metrics-private/`; that path is ignored by git and Docker build
+contexts.
 
 | Week | Metric | Count | Source | Quality notes | Follow-up owner | Next action |
 | --- | --- | ---: | --- | --- | --- | --- |
