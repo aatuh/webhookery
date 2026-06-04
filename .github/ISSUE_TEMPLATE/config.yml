@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/aatuh/webhookery/security/policy
+    about: Report vulnerabilities through the private security policy path.
+  - name: Commercial evaluation or support
+    url: https://github.com/aatuh/webhookery/blob/master/COMMERCIAL.md
+    about: Review commercial evaluation, license exception, and support boundaries.

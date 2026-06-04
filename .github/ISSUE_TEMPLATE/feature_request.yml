@@ -1,0 +1,54 @@
+name: Feature request
+description: Propose product work through the roadmap intake policy.
+title: "[feature]: "
+labels:
+  - enhancement
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Keep requests evidence-first and sanitized. Do not include secrets, raw payloads, customer data, provider credentials, or private proof artifacts.
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What webhook evidence, replay, audit, deployment, or operator problem does this solve?
+    validations:
+      required: true
+  - type: textarea
+    id: workflow
+    attributes:
+      label: Target workflow
+      description: Describe the current workaround and the desired operator/evaluator workflow.
+    validations:
+      required: true
+  - type: dropdown
+    id: category
+    attributes:
+      label: Roadmap category
+      description: Choose the closest category from docs/roadmap-intake-policy.md.
+      options:
+        - docs gap
+        - bug
+        - evaluator friction
+        - missing provider compatibility
+        - production hardening
+        - paid custom integration
+        - commercial packaging
+        - general roadmap candidate
+        - enterprise/future
+        - out of scope
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Evidence or urgency
+      description: Use sanitized examples, repeated evaluator feedback, or operational impact. Do not include sensitive data.
+  - type: checkboxes
+    id: non_goals
+    attributes:
+      label: Non-goal fit
+      options:
+        - label: This request does not require exactly-once semantics, arbitrary code plugins, a generic workflow engine, or unsafe routing of unverified provider payloads.
+          required: true
