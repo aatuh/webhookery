@@ -65,6 +65,7 @@ func TestRunDispatchesSubcommandUsage(t *testing.T) {
 		"transformations",
 		"deliveries",
 		"replay-jobs",
+		"replay-approval-policies",
 		"reconciliation-jobs",
 		"ops",
 		"alerts",
@@ -459,6 +460,20 @@ func TestCLIResourceCommandsSendExpectedRequests(t *testing.T) {
 			wantMethod:   http.MethodPost,
 			wantPath:     "/v1/replay-jobs/preview",
 			bodyContains: []string{`"event_id":"evt_1"`, `"reason_code":"operator_requested"`, `"reason":"inspect"`},
+		},
+		{
+			name:         "replay approval policy create",
+			args:         append([]string{"replay-approval-policies", "create", "--scope-type", "source", "--scope-id", "src_1", "--default-expiry-seconds", "3600", "--reason", "sensitive source"}, common...),
+			wantMethod:   http.MethodPost,
+			wantPath:     "/v1/replay-approval-policies",
+			bodyContains: []string{`"scope_type":"source"`, `"scope_id":"src_1"`, `"require_approval":true`, `"default_expiry_seconds":3600`, `"reason":"sensitive source"`},
+		},
+		{
+			name:         "replay approval policy disable",
+			args:         append([]string{"replay-approval-policies", "disable", "--policy-id", "rap_1", "--reason", "retire policy"}, common...),
+			wantMethod:   http.MethodDelete,
+			wantPath:     "/v1/replay-approval-policies/rap_1",
+			bodyContains: []string{`"reason":"retire policy"`},
 		},
 		{
 			name:       "alert firings filter",

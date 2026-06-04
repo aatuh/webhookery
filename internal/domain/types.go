@@ -373,6 +373,20 @@ type AccessPolicyRule struct {
 	UpdatedAt      time.Time       `json:"updated_at"`
 }
 
+type ReplayApprovalPolicy struct {
+	ID                   string    `json:"id"`
+	TenantID             string    `json:"tenant_id"`
+	ScopeType            string    `json:"scope_type"`
+	ScopeID              string    `json:"scope_id,omitempty"`
+	RequireApproval      bool      `json:"require_approval"`
+	DefaultExpirySeconds int       `json:"default_expiry_seconds"`
+	State                string    `json:"state"`
+	Reason               string    `json:"reason,omitempty"`
+	CreatedBy            string    `json:"created_by,omitempty"`
+	CreatedAt            time.Time `json:"created_at"`
+	UpdatedAt            time.Time `json:"updated_at"`
+}
+
 type AuthzDecisionLog struct {
 	ID                   string    `json:"id"`
 	TenantID             string    `json:"tenant_id"`

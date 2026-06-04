@@ -116,6 +116,41 @@ func (s *Server) cancelReplayJob(w http.ResponseWriter, r *http.Request) {
 	s.changeReplayJobState(w, r, s.cfg.Control.CancelReplayJob)
 }
 
+func (s *Server) listReplayApprovalPolicies(w http.ResponseWriter, r *http.Request) {
+	items, err := s.cfg.Control.ListReplayApprovalPolicies(r.Context(), actorFrom(r), queryLimit(r))
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, page(items))
+}
+
+func (s *Server) createReplayApprovalPolicy(w http.ResponseWriter, r *http.Request) {
+	var req app.CreateReplayApprovalPolicyRequest
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	item, err := s.cfg.Control.CreateReplayApprovalPolicy(r.Context(), actorFrom(r), req)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, item)
+}
+
+func (s *Server) disableReplayApprovalPolicy(w http.ResponseWriter, r *http.Request) {
+	var req app.StateChangeRequest
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	item, err := s.cfg.Control.DisableReplayApprovalPolicy(r.Context(), actorFrom(r), chi.URLParam(r, "policy_id"), req)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, item)
+}
+
 func (s *Server) changeReplayJobState(w http.ResponseWriter, r *http.Request, fn func(context.Context, authz.Actor, string, app.StateChangeRequest) (app.ReplayJob, error)) {
 	var req app.StateChangeRequest
 	if !decodeJSON(w, r, &req) {

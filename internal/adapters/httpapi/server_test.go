@@ -203,6 +203,7 @@ func TestAuthenticatedReadRoutesReturnJSON(t *testing.T) {
 		"/v1/deliveries/del_1/attempts",
 		"/v1/delivery-attempts/att_1",
 		"/v1/replay-jobs",
+		"/v1/replay-approval-policies",
 		"/v1/reconciliation-jobs",
 		"/v1/reconciliation-jobs/rec_1",
 		"/v1/reconciliation-jobs/rec_1/items",
@@ -350,6 +351,8 @@ func TestAuthenticatedMutationRoutesPreserveContracts(t *testing.T) {
 		{name: "pause replay", method: http.MethodPost, path: "/v1/replay-jobs/rpl_1:pause", body: `{"reason":"pause"}`, wantStatus: http.StatusOK},
 		{name: "resume replay", method: http.MethodPost, path: "/v1/replay-jobs/rpl_1:resume", body: `{"reason":"resume"}`, wantStatus: http.StatusOK},
 		{name: "cancel replay", method: http.MethodPost, path: "/v1/replay-jobs/rpl_1:cancel", body: `{"reason":"cancel"}`, wantStatus: http.StatusOK},
+		{name: "create replay approval policy", method: http.MethodPost, path: "/v1/replay-approval-policies", body: `{"scope_type":"source","scope_id":"src_1","reason":"sensitive source"}`, wantStatus: http.StatusCreated},
+		{name: "disable replay approval policy", method: http.MethodDelete, path: "/v1/replay-approval-policies/rap_1", body: `{"reason":"retire"}`, wantStatus: http.StatusOK},
 		{name: "dry run reconciliation", method: http.MethodPost, path: "/v1/reconciliation-jobs:dry-run", body: `{"connection_id":"pcn_1","reason":"preview"}`, wantStatus: http.StatusOK},
 		{name: "cancel reconciliation", method: http.MethodPost, path: "/v1/reconciliation-jobs/rec_1:cancel", body: `{"reason":"stop"}`, wantStatus: http.StatusOK},
 		{name: "bulk release dead letter", method: http.MethodPost, path: "/v1/dead-letter:bulk-release", body: `{"entry_ids":["dlq_1"],"reason_code":"incident_recovery","reason":"release"}`, wantStatus: http.StatusAccepted},
@@ -1765,6 +1768,15 @@ func (noopControlStore) ResumeReplayJob(context.Context, string, string, string,
 }
 func (noopControlStore) CancelReplayJob(context.Context, string, string, string, string) (app.ReplayJob, error) {
 	return app.ReplayJob{}, nil
+}
+func (noopControlStore) CreateReplayApprovalPolicy(_ context.Context, tenantID, actorID string, req app.CreateReplayApprovalPolicyRequest) (domain.ReplayApprovalPolicy, error) {
+	return domain.ReplayApprovalPolicy{ID: "rap_1", TenantID: tenantID, ScopeType: req.ScopeType, ScopeID: req.ScopeID, RequireApproval: req.RequireApproval, DefaultExpirySeconds: req.DefaultExpirySeconds, State: domain.StateActive, CreatedBy: actorID}, nil
+}
+func (noopControlStore) ListReplayApprovalPolicies(context.Context, string, int) ([]domain.ReplayApprovalPolicy, error) {
+	return nil, nil
+}
+func (noopControlStore) DisableReplayApprovalPolicy(_ context.Context, tenantID, policyID, actorID, reason string) (domain.ReplayApprovalPolicy, error) {
+	return domain.ReplayApprovalPolicy{ID: policyID, TenantID: tenantID, ScopeType: app.ReplayApprovalScopeTenant, RequireApproval: true, DefaultExpirySeconds: int(app.ReplayApprovalDefaultExpiry / time.Second), State: domain.StateDisabled, CreatedBy: actorID, Reason: reason}, nil
 }
 func (noopControlStore) CreateTransformation(_ context.Context, tenantID, actorID string, req app.CreateTransformationRequest) (domain.Transformation, error) {
 	return domain.Transformation{ID: "trn_1", TenantID: tenantID, Name: req.Name, CreatedBy: actorID}, nil

@@ -103,6 +103,49 @@ func runReplayJobs(args []string) error {
 	}
 }
 
+func runReplayApprovalPolicies(args []string) error {
+	if len(args) == 0 {
+		return fmt.Errorf("usage: whcp replay-approval-policies <list|create|disable>")
+	}
+	fs := flag.NewFlagSet("replay-approval-policies "+args[0], flag.ContinueOnError)
+	baseURL := fs.String("base-url", "http://localhost:8080", "API base URL")
+	apiKey := fs.String("api-key", os.Getenv("WEBHOOKERY_API_KEY"), "API key")
+	policyID := fs.String("policy-id", "", "replay approval policy id")
+	scopeType := fs.String("scope-type", "", "tenant, source, or route")
+	scopeID := fs.String("scope-id", "", "source or route id")
+	defaultExpirySeconds := fs.Int("default-expiry-seconds", 0, "approval expiry seconds for policy-created pending jobs")
+	reason := fs.String("reason", "", "operator reason")
+	if err := fs.Parse(args[1:]); err != nil {
+		return err
+	}
+	switch args[0] {
+	case "list":
+		return getJSON(*baseURL, *apiKey, "/v1/replay-approval-policies")
+	case "create":
+		if strings.TrimSpace(*scopeType) == "" {
+			return fmt.Errorf("scope-type is required")
+		}
+		if strings.TrimSpace(*reason) == "" {
+			return fmt.Errorf("reason is required")
+		}
+		body := map[string]any{"scope_type": *scopeType, "scope_id": *scopeID, "require_approval": true, "reason": *reason}
+		if *defaultExpirySeconds > 0 {
+			body["default_expiry_seconds"] = *defaultExpirySeconds
+		}
+		return postJSON(*baseURL, *apiKey, "/v1/replay-approval-policies", body)
+	case "disable":
+		if strings.TrimSpace(*policyID) == "" {
+			return fmt.Errorf("policy-id is required")
+		}
+		if strings.TrimSpace(*reason) == "" {
+			return fmt.Errorf("reason is required")
+		}
+		return deleteJSON(*baseURL, *apiKey, "/v1/replay-approval-policies/"+url.PathEscape(*policyID), map[string]string{"reason": *reason})
+	default:
+		return fmt.Errorf("usage: whcp replay-approval-policies <list|create|disable>")
+	}
+}
+
 func runReconciliationJobs(args []string) error {
 	if len(args) == 0 {
 		return fmt.Errorf("usage: whcp reconciliation-jobs <list|get|items|dry-run|create|cancel>")

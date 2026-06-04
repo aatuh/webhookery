@@ -5450,6 +5450,209 @@ func (s *Store) RejectQuarantine(ctx context.Context, tenantID, entryID, actorID
 	return map[string]any{"id": entryID, "event_id": eventID, "state": "rejected"}, nil
 }
 
+const replayApprovalPolicyColumns = `id, tenant_id, scope_type, scope_id, require_approval, default_expiry_seconds, state, reason, created_by, created_at, updated_at`
+
+func scanReplayApprovalPolicy(scanner rowScanner) (domain.ReplayApprovalPolicy, error) {
+	var item domain.ReplayApprovalPolicy
+	if err := scanner.Scan(&item.ID, &item.TenantID, &item.ScopeType, &item.ScopeID, &item.RequireApproval, &item.DefaultExpirySeconds, &item.State, &item.Reason, &item.CreatedBy, &item.CreatedAt, &item.UpdatedAt); err != nil {
+		return domain.ReplayApprovalPolicy{}, err
+	}
+	item.CreatedAt = item.CreatedAt.UTC()
+	item.UpdatedAt = item.UpdatedAt.UTC()
+	return item, nil
+}
+
+func (s *Store) CreateReplayApprovalPolicy(ctx context.Context, tenantID, actorID string, req app.CreateReplayApprovalPolicyRequest) (domain.ReplayApprovalPolicy, error) {
+	scopeType := strings.TrimSpace(req.ScopeType)
+	scopeID := strings.TrimSpace(req.ScopeID)
+	if scopeType == app.ReplayApprovalScopeTenant {
+		scopeID = ""
+	}
+	if req.DefaultExpirySeconds == 0 {
+		req.DefaultExpirySeconds = int(app.ReplayApprovalDefaultExpiry / time.Second)
+	}
+	if !req.RequireApproval {
+		req.RequireApproval = true
+	}
+	id := mustID("rap")
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return domain.ReplayApprovalPolicy{}, err
+	}
+	defer rollback(ctx, tx)
+	item, err := scanReplayApprovalPolicy(tx.QueryRow(ctx, `
+		INSERT INTO replay_approval_policies(id, tenant_id, scope_type, scope_id, require_approval, default_expiry_seconds, state, reason, created_by)
+		VALUES($1,$2,$3,$4,$5,$6,'active',$7,$8)
+		ON CONFLICT (tenant_id, scope_type, scope_id) DO UPDATE
+		SET require_approval=EXCLUDED.require_approval,
+		    default_expiry_seconds=EXCLUDED.default_expiry_seconds,
+		    state='active',
+		    reason=EXCLUDED.reason,
+		    updated_at=now()
+		RETURNING `+replayApprovalPolicyColumns,
+		id, tenantID, scopeType, scopeID, req.RequireApproval, req.DefaultExpirySeconds, strings.TrimSpace(req.Reason), actorID,
+	))
+	if err != nil {
+		return domain.ReplayApprovalPolicy{}, err
+	}
+	if _, err := recordAuditEventTx(ctx, tx, auditEventInput{TenantID: tenantID, ActorID: actorID, Action: "replay_approval_policy.upserted", Resource: "replay_approval_policy", ResourceID: item.ID, Reason: req.Reason}); err != nil {
+		return domain.ReplayApprovalPolicy{}, err
+	}
+	return item, tx.Commit(ctx)
+}
+
+func (s *Store) ListReplayApprovalPolicies(ctx context.Context, tenantID string, limit int) ([]domain.ReplayApprovalPolicy, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT `+replayApprovalPolicyColumns+`
+		FROM replay_approval_policies
+		WHERE tenant_id=$1
+		ORDER BY scope_type, scope_id, updated_at DESC
+		LIMIT $2`, tenantID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []domain.ReplayApprovalPolicy
+	for rows.Next() {
+		item, err := scanReplayApprovalPolicy(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, item)
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) DisableReplayApprovalPolicy(ctx context.Context, tenantID, policyID, actorID, reason string) (domain.ReplayApprovalPolicy, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return domain.ReplayApprovalPolicy{}, err
+	}
+	defer rollback(ctx, tx)
+	item, err := scanReplayApprovalPolicy(tx.QueryRow(ctx, `
+		UPDATE replay_approval_policies
+		SET state='disabled', reason=$3, updated_at=now()
+		WHERE tenant_id=$1 AND id=$2
+		RETURNING `+replayApprovalPolicyColumns,
+		tenantID, policyID, strings.TrimSpace(reason),
+	))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return domain.ReplayApprovalPolicy{}, app.ErrNotFound
+	}
+	if err != nil {
+		return domain.ReplayApprovalPolicy{}, err
+	}
+	if _, err := recordAuditEventTx(ctx, tx, auditEventInput{TenantID: tenantID, ActorID: actorID, Action: "replay_approval_policy.disabled", Resource: "replay_approval_policy", ResourceID: policyID, Reason: reason}); err != nil {
+		return domain.ReplayApprovalPolicy{}, err
+	}
+	return item, tx.Commit(ctx)
+}
+
+func (s *Store) replayApprovalPolicyForReplay(ctx context.Context, tenantID string, req app.ReplayRequest) (domain.ReplayApprovalPolicy, bool, error) {
+	var sourceID string
+	var routeIDs []string
+	if req.DeliveryID != "" {
+		var routeID string
+		err := s.pool.QueryRow(ctx, `
+			SELECT COALESCE(d.route_id,''), e.source_id
+			FROM deliveries d
+			JOIN events e ON e.tenant_id=d.tenant_id AND e.id=d.event_id
+			WHERE d.tenant_id=$1 AND d.id=$2`, tenantID, req.DeliveryID).Scan(&routeID, &sourceID)
+		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+			return domain.ReplayApprovalPolicy{}, false, err
+		}
+		if routeID != "" {
+			routeIDs = append(routeIDs, routeID)
+		}
+	}
+	if req.EventID != "" {
+		var eventType string
+		err := s.pool.QueryRow(ctx, `SELECT source_id, type FROM events WHERE tenant_id=$1 AND id=$2`, tenantID, req.EventID).Scan(&sourceID, &eventType)
+		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+			return domain.ReplayApprovalPolicy{}, false, err
+		}
+		if sourceID != "" {
+			rows, err := s.pool.Query(ctx, `
+				SELECT id
+				FROM routes
+				WHERE tenant_id=$1 AND source_id=$2 AND state='active' AND $3 = ANY(event_types)`, tenantID, sourceID, eventType)
+			if err != nil {
+				return domain.ReplayApprovalPolicy{}, false, err
+			}
+			defer rows.Close()
+			for rows.Next() {
+				var routeID string
+				if err := rows.Scan(&routeID); err != nil {
+					return domain.ReplayApprovalPolicy{}, false, err
+				}
+				routeIDs = append(routeIDs, routeID)
+			}
+			if err := rows.Err(); err != nil {
+				return domain.ReplayApprovalPolicy{}, false, err
+			}
+		}
+		if req.ConfigMode == app.ReplayConfigOriginal {
+			rows, err := s.pool.Query(ctx, `
+				SELECT DISTINCT COALESCE(route_id,'')
+				FROM deliveries
+				WHERE tenant_id=$1 AND event_id=$2 AND COALESCE(route_id,'') <> ''`, tenantID, req.EventID)
+			if err != nil {
+				return domain.ReplayApprovalPolicy{}, false, err
+			}
+			defer rows.Close()
+			for rows.Next() {
+				var routeID string
+				if err := rows.Scan(&routeID); err != nil {
+					return domain.ReplayApprovalPolicy{}, false, err
+				}
+				routeIDs = append(routeIDs, routeID)
+			}
+			if err := rows.Err(); err != nil {
+				return domain.ReplayApprovalPolicy{}, false, err
+			}
+		}
+	}
+	if len(routeIDs) > 0 {
+		item, err := scanReplayApprovalPolicy(s.pool.QueryRow(ctx, `
+			SELECT `+replayApprovalPolicyColumns+`
+			FROM replay_approval_policies
+			WHERE tenant_id=$1 AND scope_type='route' AND scope_id=ANY($2::text[]) AND state='active' AND require_approval=true
+			ORDER BY updated_at DESC
+			LIMIT 1`, tenantID, routeIDs))
+		if err == nil {
+			return item, true, nil
+		}
+		if !errors.Is(err, pgx.ErrNoRows) {
+			return domain.ReplayApprovalPolicy{}, false, err
+		}
+	}
+	if sourceID != "" {
+		item, err := scanReplayApprovalPolicy(s.pool.QueryRow(ctx, `
+			SELECT `+replayApprovalPolicyColumns+`
+			FROM replay_approval_policies
+			WHERE tenant_id=$1 AND scope_type='source' AND scope_id=$2 AND state='active' AND require_approval=true
+			LIMIT 1`, tenantID, sourceID))
+		if err == nil {
+			return item, true, nil
+		}
+		if !errors.Is(err, pgx.ErrNoRows) {
+			return domain.ReplayApprovalPolicy{}, false, err
+		}
+	}
+	item, err := scanReplayApprovalPolicy(s.pool.QueryRow(ctx, `
+		SELECT `+replayApprovalPolicyColumns+`
+		FROM replay_approval_policies
+		WHERE tenant_id=$1 AND scope_type='tenant' AND scope_id='' AND state='active' AND require_approval=true
+		LIMIT 1`, tenantID))
+	if err == nil {
+		return item, true, nil
+	}
+	if errors.Is(err, pgx.ErrNoRows) {
+		return domain.ReplayApprovalPolicy{}, false, nil
+	}
+	return domain.ReplayApprovalPolicy{}, false, err
+}
+
 func (s *Store) DryRunReplay(ctx context.Context, tenantID string, req app.ReplayRequest) (app.ReplayDryRun, error) {
 	if req.ConfigMode == "" {
 		req.ConfigMode = app.ReplayConfigCurrent
@@ -5562,6 +5765,19 @@ func (s *Store) CreateReplay(ctx context.Context, tenantID, actorID string, req 
 		req.ReasonCode = app.ReplayReasonOperatorRequested
 	}
 	req.Reason = strings.TrimSpace(req.Reason)
+	if policy, ok, err := s.replayApprovalPolicyForReplay(ctx, tenantID, req); err != nil {
+		return app.ReplayJob{}, err
+	} else if ok && policy.RequireApproval {
+		req.RequireApproval = true
+		if req.ApprovalExpiresAt == nil {
+			defaultExpirySeconds := policy.DefaultExpirySeconds
+			if defaultExpirySeconds <= 0 {
+				defaultExpirySeconds = int(app.ReplayApprovalDefaultExpiry / time.Second)
+			}
+			approvalExpiresAt := time.Now().UTC().Add(time.Duration(defaultExpirySeconds) * time.Second)
+			req.ApprovalExpiresAt = &approvalExpiresAt
+		}
+	}
 	if req.RequireApproval {
 		if req.ApprovalExpiresAt == nil {
 			approvalExpiresAt := time.Now().UTC().Add(app.ReplayApprovalDefaultExpiry)
