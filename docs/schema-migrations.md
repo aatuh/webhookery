@@ -26,7 +26,7 @@ review and compatibility artifacts, not a production rollback workflow.
 ## Migration Ordering
 
 Current migration files are ordered from `001_init` through
-`025_producer_mtls`. Review new files by filename, not commit order.
+`028_replay_approval_expiry`. Review new files by filename, not commit order.
 
 | Range | Schema area |
 |-------|-------------|
@@ -40,6 +40,7 @@ Current migration files are ordered from `001_init` through
 | `018`-`021` | Metrics rollups, alerts, notification delivery, and SIEM delivery evidence. |
 | `022` | Enterprise identity, SCIM, role bindings, access policies, and authz decision logs. |
 | `023`-`025` | Adapter registry governance, producer trust, producer access tokens, and producer mTLS identities. |
+| `026`-`028` | Incidents, replay reason codes, and replay approval expiry. |
 
 For every new migration, document whether it changes evidence capture,
 authorization, raw payload retention, replay, exports, or outbound delivery

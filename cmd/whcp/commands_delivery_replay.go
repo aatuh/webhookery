@@ -52,6 +52,7 @@ func runReplayJobs(args []string) error {
 	configMode := fs.String("config-mode", apppkg.ReplayConfigCurrent, "current or original")
 	rateLimitPerMinute := fs.Int("rate-limit-per-minute", 0, "optional replay rate limit")
 	requireApproval := fs.Bool("require-approval", false, "create job in pending approval state")
+	approvalExpiresAtRaw := fs.String("approval-expires-at", "", "RFC3339 approval expiry for pending replay jobs")
 	if err := fs.Parse(args[1:]); err != nil {
 		return err
 	}
@@ -77,7 +78,18 @@ func runReplayJobs(args []string) error {
 		if strings.TrimSpace(*reason) == "" {
 			return fmt.Errorf("reason is required")
 		}
-		return postJSON(*baseURL, *apiKey, "/v1/replay-jobs", map[string]any{"event_id": *eventID, "delivery_id": *deliveryID, "endpoint_id": *endpointID, "reason_code": *reasonCode, "reason": *reason, "config_mode": *configMode, "rate_limit_per_minute": *rateLimitPerMinute, "require_approval": *requireApproval})
+		approvalExpiresAt, err := parseOptionalTime(*approvalExpiresAtRaw)
+		if err != nil {
+			return err
+		}
+		if !approvalExpiresAt.IsZero() && !*requireApproval {
+			return fmt.Errorf("approval-expires-at requires require-approval")
+		}
+		body := map[string]any{"event_id": *eventID, "delivery_id": *deliveryID, "endpoint_id": *endpointID, "reason_code": *reasonCode, "reason": *reason, "config_mode": *configMode, "rate_limit_per_minute": *rateLimitPerMinute, "require_approval": *requireApproval}
+		if !approvalExpiresAt.IsZero() {
+			body["approval_expires_at"] = approvalExpiresAt
+		}
+		return postJSON(*baseURL, *apiKey, "/v1/replay-jobs", body)
 	case "approve":
 		return postJSON(*baseURL, *apiKey, "/v1/replay-jobs/"+url.PathEscape(*replayJobID)+":approve", map[string]string{"reason": *reason})
 	case "pause":

@@ -308,6 +308,13 @@ func TestReplayCreateRequiresReasonCodeBeforeRequest(t *testing.T) {
 	}
 }
 
+func TestReplayCreateApprovalExpiryRequiresApproval(t *testing.T) {
+	err := runReplayJobs([]string{"create", "--event-id", "evt_1", "--reason-code", "support_investigation", "--reason", "debug", "--approval-expires-at", "2026-06-05T12:00:00Z", "--base-url", "https://api.example", "--api-key", "whkey_test"})
+	if err == nil || !strings.Contains(err.Error(), "approval-expires-at requires require-approval") {
+		t.Fatalf("expected approval expiry validation, got %v", err)
+	}
+}
+
 func TestPostJSONSendsBearerAndJSONBody(t *testing.T) {
 	var gotAuth, gotContentType, gotBody string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -441,10 +448,10 @@ func TestCLIResourceCommandsSendExpectedRequests(t *testing.T) {
 		},
 		{
 			name:         "replay create",
-			args:         append([]string{"replay-jobs", "create", "--event-id", "evt_1", "--endpoint-id", "end_1", "--reason-code", "support_investigation", "--reason", "debug", "--require-approval"}, common...),
+			args:         append([]string{"replay-jobs", "create", "--event-id", "evt_1", "--endpoint-id", "end_1", "--reason-code", "support_investigation", "--reason", "debug", "--require-approval", "--approval-expires-at", "2026-06-05T12:00:00Z"}, common...),
 			wantMethod:   http.MethodPost,
 			wantPath:     "/v1/replay-jobs",
-			bodyContains: []string{`"event_id":"evt_1"`, `"endpoint_id":"end_1"`, `"reason_code":"support_investigation"`, `"reason":"debug"`, `"require_approval":true`},
+			bodyContains: []string{`"event_id":"evt_1"`, `"endpoint_id":"end_1"`, `"reason_code":"support_investigation"`, `"reason":"debug"`, `"require_approval":true`, `"approval_expires_at":"2026-06-05T12:00:00Z"`},
 		},
 		{
 			name:         "replay preview",

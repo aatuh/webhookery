@@ -1016,6 +1016,16 @@ func TestControlServiceReplayValidatesConfigModeAndRate(t *testing.T) {
 	if !errors.Is(err, ErrInvalidInput) {
 		t.Fatalf("expected invalid reason code rejection, got %v", err)
 	}
+	approvalExpiresAt := time.Now().UTC().Add(time.Hour)
+	_, err = svc.CreateReplay(context.Background(), actor, ReplayRequest{EventID: "evt_1", ReasonCode: ReplayReasonReceiverFixed, Reason: "repair", ApprovalExpiresAt: &approvalExpiresAt})
+	if !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("expected approval expiry without approval rejection, got %v", err)
+	}
+	expiredApproval := time.Now().UTC().Add(-time.Hour)
+	_, err = svc.CreateReplay(context.Background(), actor, ReplayRequest{EventID: "evt_1", ReasonCode: ReplayReasonReceiverFixed, Reason: "repair", RequireApproval: true, ApprovalExpiresAt: &expiredApproval})
+	if !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("expected expired approval window rejection, got %v", err)
+	}
 	_, err = svc.DryRunReplay(context.Background(), actor, ReplayRequest{EventID: "evt_1", Reason: "repair", ConfigMode: ReplayConfigOriginal})
 	if !errors.Is(err, ErrInvalidInput) {
 		t.Fatalf("expected dry-run missing reason code rejection, got %v", err)
@@ -1034,6 +1044,9 @@ func TestControlServiceReplayApprovalValidationAndTenantScope(t *testing.T) {
 	if !store.replayReq.RequireApproval || !job.ApprovalRequired {
 		t.Fatalf("expected approval requirement to propagate, req=%+v job=%+v", store.replayReq, job)
 	}
+	if store.replayReq.ApprovalExpiresAt == nil || job.ApprovalExpiresAt == nil {
+		t.Fatalf("expected approval expiry to default and propagate, req=%+v job=%+v", store.replayReq, job)
+	}
 	if store.replayReq.ReasonCode != ReplayReasonIncidentRecovery || job.ReasonCode != ReplayReasonIncidentRecovery || job.Reason != "repair" {
 		t.Fatalf("expected reason code and reason to propagate, req=%+v job=%+v", store.replayReq, job)
 	}
@@ -1049,11 +1062,12 @@ func TestControlServiceReplayApprovalValidationAndTenantScope(t *testing.T) {
 		t.Fatalf("expected replay write permission requirement, got %v", err)
 	}
 
-	_, err = svc.ApproveReplayJob(context.Background(), actor, "rpl_1", StateChangeRequest{Reason: "approved"})
+	approver := authz.Actor{ID: "usr_3", TenantID: "ten_a", Role: authz.RoleDeveloper, Scopes: []string{"replay:write", "replay:read"}}
+	_, err = svc.ApproveReplayJob(context.Background(), approver, "rpl_1", StateChangeRequest{Reason: "approved"})
 	if err != nil {
 		t.Fatalf("expected approval to succeed, got %v", err)
 	}
-	if store.approveReplayTenantID != "ten_a" || store.approveReplayActorID != "usr_1" || store.approveReplayReason != "approved" {
+	if store.approveReplayTenantID != "ten_a" || store.approveReplayActorID != "usr_3" || store.approveReplayReason != "approved" {
 		t.Fatalf("approval was not tenant-scoped with reason: tenant=%q actor=%q reason=%q", store.approveReplayTenantID, store.approveReplayActorID, store.approveReplayReason)
 	}
 }
@@ -2713,7 +2727,7 @@ func (f *fakeControlStore) DryRunReplay(context.Context, string, ReplayRequest) 
 }
 func (f *fakeControlStore) CreateReplay(_ context.Context, tenantID, actorID string, req ReplayRequest) (ReplayJob, error) {
 	f.replayReq = req
-	return ReplayJob{ID: "rpl_1", State: "pending_approval", ScopeHash: "sha256:abc", ReasonCode: req.ReasonCode, Reason: req.Reason, TotalItems: 1, ApprovalRequired: req.RequireApproval}, nil
+	return ReplayJob{ID: "rpl_1", State: "pending_approval", ScopeHash: "sha256:abc", ReasonCode: req.ReasonCode, Reason: req.Reason, TotalItems: 1, ApprovalRequired: req.RequireApproval, ApprovalExpiresAt: req.ApprovalExpiresAt}, nil
 }
 func (f *fakeControlStore) ListReplayJobs(context.Context, string, int) ([]ReplayJob, error) {
 	return nil, nil
