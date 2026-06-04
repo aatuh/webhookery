@@ -10,6 +10,7 @@ test -f "$manifest"
 test -f docs/live-provider-proof/stripe.md
 test -f docs/live-provider-proof/github.md
 test -f docs/live-provider-proof/shopify.md
+test -f docs/live-provider-proof/run-record-template.md
 test -f docs/live-provider-proof/stripe-redaction-policy.md
 test -f docs/live-provider-proof/samples/stripe-incident-report.redacted.md
 test -f docs/live-provider-proof/samples/github-incident-report.redacted.md
@@ -21,10 +22,13 @@ test -f docs/providers/shopify.md
 grep -q "not provider certification" docs/live-provider-proof/stripe.md
 grep -q "not provider certification" docs/live-provider-proof/github.md
 grep -q "not provider certification" docs/live-provider-proof/shopify.md
+grep -q "Do not commit completed run records" docs/live-provider-proof/run-record-template.md
+grep -q "not provider certification" docs/live-provider-proof/run-record-template.md
 grep -q "Do not commit" docs/live-provider-proof/stripe-redaction-policy.md
 grep -q "docs/live-provider-proof/stripe.md" docs/provider-conformance.md
 grep -q "docs/live-provider-proof/github.md" docs/provider-conformance.md
 grep -q "docs/live-provider-proof/shopify.md" docs/provider-conformance.md
+grep -q "docs/live-provider-proof/run-record-template.md" docs/provider-conformance.md
 
 python3 - "$manifest" <<'PY'
 import datetime
