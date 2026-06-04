@@ -31,6 +31,8 @@ Manual sanitized live-provider proof guides are tracked separately:
 - GitHub proof guide: `docs/live-provider-proof/github.md`
 - Shopify operator guide: `docs/providers/shopify.md`
 - Shopify proof guide: `docs/live-provider-proof/shopify.md`
+- Private proof run record template:
+  `docs/live-provider-proof/run-record-template.md`
 - Proof freshness metadata: `docs/provider-proof-manifest.json`
 
 Run:
