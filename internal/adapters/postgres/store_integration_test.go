@@ -958,6 +958,158 @@ func TestPostgresReplayApprovalAndFanoutControls(t *testing.T) {
 	assertPostgresAuditEvent(t, ctx, store, actor.TenantID, "replay.canceled", "replay_job", directReplay.ID)
 }
 
+func TestPostgresReplayCurrentDeliveryAndNoopEvidence(t *testing.T) {
+	ctx, store, actor := openPostgresIntegrationStore(t)
+	defer store.Close()
+
+	if _, err := store.pool.Exec(ctx, `UPDATE outbox SET state='completed', locked_by=NULL, lock_expires_at=NULL WHERE (tenant_id LIKE 'ten_it_%' OR tenant_id LIKE 'ten_rc_%') AND state <> 'completed'`); err != nil {
+		t.Fatalf("clear prior integration outbox work: %v", err)
+	}
+	if _, err := store.pool.Exec(ctx, `UPDATE deliveries SET state='succeeded', locked_by=NULL, lock_expires_at=NULL WHERE (tenant_id LIKE 'ten_it_%' OR tenant_id LIKE 'ten_rc_%') AND state IN ('scheduled','in_progress')`); err != nil {
+		t.Fatalf("clear prior integration delivery work: %v", err)
+	}
+
+	now := time.Now().UTC().Truncate(time.Second)
+	eventType := "invoice.replay_current"
+	control := app.NewControlService(store, ssrf.Validator{Resolver: ssrf.StaticResolver{"receiver.example.com": {netip.MustParseAddr("93.184.216.34")}}})
+	fanout := app.NewDeliveryFanoutService(store, fixedIntegrationClock{now: now})
+	source, err := control.CreateSource(ctx, actor, app.CreateSourceRequest{Name: "replay current source", Provider: "stripe", Adapter: "stripe", VerificationSecret: "whsec_it"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	endpoint, _, err := control.CreateEndpoint(ctx, actor, app.CreateEndpointRequest{Name: "replay current endpoint", URL: "https://receiver.example.com/webhook"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	route, err := control.CreateRoute(ctx, actor, app.CreateRouteRequest{SourceID: source.ID, Name: "replay current route", Priority: 4, EventTypes: []string{eventType}, EndpointID: endpoint.ID, State: domain.StateActive})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ingested := ingestPostgresIntegrationEvent(t, ctx, store, actor, source.ID, eventType, "evt_it_replay_current_"+now.Format("150405.000000000"), now)
+
+	outboxItems, err := store.ClaimOutbox(ctx, "it-replay-current-route-outbox", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	routeOutbox := findPostgresOutboxItem(t, outboxItems, app.OutboxKindRouteEvent, ingested.EventID)
+	if err := fanout.ProcessOutbox(ctx, routeOutbox); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.CompleteOutbox(ctx, routeOutbox.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	deliveries, err := control.ListDeliveries(ctx, actor, 20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	originalDelivery := findPostgresDeliveryForEvent(t, deliveries, ingested.EventID)
+	if originalDelivery.RouteID != route.ID || originalDelivery.RouteVersionID == "" || originalDelivery.DeliveryPayloadID == "" {
+		t.Fatalf("expected original route delivery evidence, got %+v", originalDelivery)
+	}
+
+	deliveryReplay, err := control.CreateReplay(ctx, actor, app.ReplayRequest{
+		DeliveryID:         originalDelivery.ID,
+		ReasonCode:         app.ReplayReasonSupportInvestigation,
+		Reason:             "delivery-scoped current replay",
+		ConfigMode:         app.ReplayConfigCurrent,
+		RateLimitPerMinute: 120,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if deliveryReplay.State != "scheduled" || deliveryReplay.TotalItems != 1 || deliveryReplay.ConfigMode != app.ReplayConfigCurrent {
+		t.Fatalf("expected scheduled delivery replay work, got %+v", deliveryReplay)
+	}
+	outboxItems, err = store.ClaimOutbox(ctx, "it-replay-current-delivery-outbox", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deliveryReplayOutbox := findPostgresOutboxItem(t, outboxItems, app.OutboxKindReplayJob, deliveryReplay.ID)
+	if err := fanout.ProcessOutbox(ctx, deliveryReplayOutbox); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.CompleteOutbox(ctx, deliveryReplayOutbox.ID); err != nil {
+		t.Fatal(err)
+	}
+	var originalDeliveryID, newDeliveryID, replayPayloadID, replayPayloadSHA256, configMode string
+	if err := store.pool.QueryRow(ctx, `
+		SELECT original_delivery_id, new_delivery_id, delivery_payload_id, delivery_payload_sha256, config_mode
+		FROM replay_items
+		WHERE tenant_id=$1 AND replay_job_id=$2 AND event_id=$3`,
+		actor.TenantID, deliveryReplay.ID, ingested.EventID,
+	).Scan(&originalDeliveryID, &newDeliveryID, &replayPayloadID, &replayPayloadSHA256, &configMode); err != nil {
+		t.Fatal(err)
+	}
+	if originalDeliveryID != originalDelivery.ID || newDeliveryID == "" || replayPayloadID == "" || replayPayloadSHA256 == "" || configMode != app.ReplayConfigCurrent {
+		t.Fatalf("delivery replay item did not preserve current-mode decision evidence: original=%s new=%s payload=%s hash=%s mode=%s", originalDeliveryID, newDeliveryID, replayPayloadID, replayPayloadSHA256, configMode)
+	}
+	if replayPayloadID == originalDelivery.DeliveryPayloadID {
+		t.Fatalf("current-mode replay should materialize a fresh payload, reused %s", replayPayloadID)
+	}
+	var newRouteVersionID, newDeliveryState string
+	if err := store.pool.QueryRow(ctx, `SELECT route_version_id, state FROM deliveries WHERE tenant_id=$1 AND id=$2 AND replay_job_id=$3`, actor.TenantID, newDeliveryID, deliveryReplay.ID).Scan(&newRouteVersionID, &newDeliveryState); err != nil {
+		t.Fatal(err)
+	}
+	if newRouteVersionID != route.ActiveVersionID || newDeliveryState != "scheduled" {
+		t.Fatalf("current replay did not use active route config: route_version=%s state=%s want_route_version=%s", newRouteVersionID, newDeliveryState, route.ActiveVersionID)
+	}
+
+	inactivatedRoute, err := control.DeleteRoute(ctx, actor, route.ID, app.StateChangeRequest{Reason: "disable route before no-op replay"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if inactivatedRoute.State != domain.StateInactive {
+		t.Fatalf("expected inactive route before no-op replay, got %+v", inactivatedRoute)
+	}
+	noopReplay, err := control.CreateReplay(ctx, actor, app.ReplayRequest{
+		EventID:    ingested.EventID,
+		ReasonCode: app.ReplayReasonSupportInvestigation,
+		Reason:     "prove no current fanout target",
+		ConfigMode: app.ReplayConfigCurrent,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if noopReplay.State != "scheduled" || noopReplay.TotalItems != 0 {
+		t.Fatalf("expected scheduled no-op replay work, got %+v", noopReplay)
+	}
+	outboxItems, err = store.ClaimOutbox(ctx, "it-replay-current-noop-outbox", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	noopOutbox := findPostgresOutboxItem(t, outboxItems, app.OutboxKindReplayJob, noopReplay.ID)
+	if err := fanout.ProcessOutbox(ctx, noopOutbox); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.CompleteOutbox(ctx, noopOutbox.ID); err != nil {
+		t.Fatal(err)
+	}
+	var noopState, noopConfigMode, noopError string
+	if err := store.pool.QueryRow(ctx, `
+		SELECT state, config_mode, error
+		FROM replay_items
+		WHERE tenant_id=$1 AND replay_job_id=$2 AND event_id=$3`,
+		actor.TenantID, noopReplay.ID, ingested.EventID,
+	).Scan(&noopState, &noopConfigMode, &noopError); err != nil {
+		t.Fatal(err)
+	}
+	if noopState != "completed" || noopConfigMode != app.ReplayConfigCurrent || noopError != "no current route or subscription matched" {
+		t.Fatalf("no-op replay item mismatch: state=%s mode=%s error=%s", noopState, noopConfigMode, noopError)
+	}
+	var noopDeliveries int
+	if err := store.pool.QueryRow(ctx, `SELECT count(*) FROM deliveries WHERE tenant_id=$1 AND replay_job_id=$2`, actor.TenantID, noopReplay.ID).Scan(&noopDeliveries); err != nil {
+		t.Fatal(err)
+	}
+	if noopDeliveries != 0 {
+		t.Fatalf("no-op replay should not create deliveries, got %d", noopDeliveries)
+	}
+
+	assertPostgresAuditEvent(t, ctx, store, actor.TenantID, "replay.created", "replay_job", deliveryReplay.ID)
+	assertPostgresAuditEvent(t, ctx, store, actor.TenantID, "route.inactivated", "route", route.ID)
+	assertPostgresAuditEvent(t, ctx, store, actor.TenantID, "replay.created", "replay_job", noopReplay.ID)
+}
+
 func TestPostgresSecretRotationAndOpsVisibility(t *testing.T) {
 	ctx, store, actor := openPostgresIntegrationStore(t)
 	defer store.Close()
