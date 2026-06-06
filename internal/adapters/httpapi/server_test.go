@@ -271,6 +271,116 @@ func TestAuthenticatedReadRoutesReturnJSON(t *testing.T) {
 	}
 }
 
+func TestAuthenticatedReadRoutesEnforceReadScopes(t *testing.T) {
+	unsupportedReader := authz.Actor{ID: "usr_support", TenantID: "ten_1", Role: authz.RoleSupport, Scopes: []string{"events:read"}}
+	nonEventReader := authz.Actor{ID: "usr_dev", TenantID: "ten_1", Role: authz.RoleDeveloper, Scopes: []string{"routes:read"}}
+	tests := []struct {
+		name  string
+		path  string
+		actor authz.Actor
+	}{
+		{name: "api keys", path: "/v1/api-keys", actor: unsupportedReader},
+		{name: "producer clients", path: "/v1/producer-clients", actor: unsupportedReader},
+		{name: "producer mtls identities", path: "/v1/producer-mtls-identities", actor: unsupportedReader},
+		{name: "sources", path: "/v1/sources", actor: unsupportedReader},
+		{name: "source detail", path: "/v1/sources/src_1", actor: unsupportedReader},
+		{name: "provider connections", path: "/v1/provider-connections", actor: unsupportedReader},
+		{name: "provider connection detail", path: "/v1/provider-connections/pcn_1", actor: unsupportedReader},
+		{name: "adapters", path: "/v1/adapters", actor: unsupportedReader},
+		{name: "adapter detail", path: "/v1/adapters/pad_1", actor: unsupportedReader},
+		{name: "adapter versions", path: "/v1/adapters/pad_1/versions", actor: unsupportedReader},
+		{name: "endpoints", path: "/v1/endpoints", actor: unsupportedReader},
+		{name: "endpoint detail", path: "/v1/endpoints/end_1", actor: unsupportedReader},
+		{name: "subscriptions", path: "/v1/subscriptions", actor: unsupportedReader},
+		{name: "subscription detail", path: "/v1/subscriptions/sub_1", actor: unsupportedReader},
+		{name: "retry policies", path: "/v1/retry-policies", actor: unsupportedReader},
+		{name: "retry policy detail", path: "/v1/retry-policies/rtp_1", actor: unsupportedReader},
+		{name: "routes", path: "/v1/routes", actor: unsupportedReader},
+		{name: "route detail", path: "/v1/routes/rte_1", actor: unsupportedReader},
+		{name: "route versions", path: "/v1/routes/rte_1/versions", actor: unsupportedReader},
+		{name: "event types", path: "/v1/event-types", actor: unsupportedReader},
+		{name: "event type detail", path: "/v1/event-types/invoice.paid", actor: unsupportedReader},
+		{name: "event schemas", path: "/v1/event-types/invoice.paid/schemas", actor: unsupportedReader},
+		{name: "event schema detail", path: "/v1/event-types/invoice.paid/schemas/2026-05-01", actor: unsupportedReader},
+		{name: "events", path: "/v1/events", actor: nonEventReader},
+		{name: "event detail", path: "/v1/events/evt_1", actor: nonEventReader},
+		{name: "event timeline", path: "/v1/events/evt_1/timeline", actor: nonEventReader},
+		{name: "incidents", path: "/v1/incidents", actor: unsupportedReader},
+		{name: "incident detail", path: "/v1/incidents/inc_1", actor: unsupportedReader},
+		{name: "incident report", path: "/v1/incidents/inc_1/report", actor: unsupportedReader},
+		{name: "transformations", path: "/v1/transformations", actor: unsupportedReader},
+		{name: "transformation detail", path: "/v1/transformations/trn_1", actor: unsupportedReader},
+		{name: "transformation versions", path: "/v1/transformations/trn_1/versions", actor: unsupportedReader},
+		{name: "deliveries", path: "/v1/deliveries", actor: unsupportedReader},
+		{name: "delivery attempts", path: "/v1/deliveries/del_1/attempts", actor: unsupportedReader},
+		{name: "delivery attempt detail", path: "/v1/delivery-attempts/att_1", actor: unsupportedReader},
+		{name: "replay jobs", path: "/v1/replay-jobs", actor: unsupportedReader},
+		{name: "replay approval policies", path: "/v1/replay-approval-policies", actor: unsupportedReader},
+		{name: "reconciliation jobs", path: "/v1/reconciliation-jobs", actor: unsupportedReader},
+		{name: "reconciliation job detail", path: "/v1/reconciliation-jobs/rec_1", actor: unsupportedReader},
+		{name: "reconciliation items", path: "/v1/reconciliation-jobs/rec_1/items", actor: unsupportedReader},
+		{name: "dead letter", path: "/v1/dead-letter", actor: unsupportedReader},
+		{name: "quarantine", path: "/v1/quarantine", actor: unsupportedReader},
+		{name: "audit events", path: "/v1/audit-events", actor: unsupportedReader},
+		{name: "audit chain head", path: "/v1/audit-chain/head", actor: unsupportedReader},
+		{name: "audit chain anchors", path: "/v1/audit-chain/anchors", actor: unsupportedReader},
+		{name: "audit chain anchor detail", path: "/v1/audit-chain/anchors/anc_1", actor: unsupportedReader},
+		{name: "audit exports", path: "/v1/audit-exports", actor: unsupportedReader},
+		{name: "audit export detail", path: "/v1/audit-exports/exp_1", actor: unsupportedReader},
+		{name: "retention policies", path: "/v1/admin/retention-policies", actor: unsupportedReader},
+		{name: "endpoint health", path: "/v1/endpoint-health", actor: unsupportedReader},
+		{name: "ops metrics", path: "/v1/ops/metrics", actor: unsupportedReader},
+		{name: "ops metric rollups", path: "/v1/ops/metrics/rollups?metric_name=deliveries", actor: unsupportedReader},
+		{name: "ops storage", path: "/v1/ops/storage", actor: unsupportedReader},
+		{name: "ops config", path: "/v1/ops/config", actor: unsupportedReader},
+		{name: "workers", path: "/v1/ops/workers", actor: unsupportedReader},
+		{name: "worker detail", path: "/v1/ops/workers/wrk_1", actor: unsupportedReader},
+		{name: "queues", path: "/v1/ops/queues", actor: unsupportedReader},
+		{name: "alerts", path: "/v1/alerts", actor: unsupportedReader},
+		{name: "alert detail", path: "/v1/alerts/alr_1", actor: unsupportedReader},
+		{name: "alert firings", path: "/v1/alert-firings", actor: unsupportedReader},
+		{name: "alert firing detail", path: "/v1/alert-firings/afr_1", actor: unsupportedReader},
+		{name: "notification channels", path: "/v1/notification-channels", actor: unsupportedReader},
+		{name: "notification channel detail", path: "/v1/notification-channels/nch_1", actor: unsupportedReader},
+		{name: "notification deliveries", path: "/v1/notification-deliveries", actor: unsupportedReader},
+		{name: "notification delivery attempts", path: "/v1/notification-deliveries/ndel_1/attempts", actor: unsupportedReader},
+		{name: "siem sinks", path: "/v1/siem-sinks", actor: unsupportedReader},
+		{name: "siem sink detail", path: "/v1/siem-sinks/snk_1", actor: unsupportedReader},
+		{name: "siem deliveries", path: "/v1/siem-deliveries", actor: unsupportedReader},
+		{name: "siem delivery attempts", path: "/v1/siem-deliveries/sdel_1/attempts", actor: unsupportedReader},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := testServerWithActor(tt.actor)
+			rec := httptest.NewRecorder()
+			req := httptest.NewRequest(http.MethodGet, tt.path, nil)
+			req.Header.Set("Authorization", "Bearer token")
+			req.Header.Set("X-Request-ID", "req_forbidden_read")
+
+			server.Routes().ServeHTTP(rec, req)
+
+			if rec.Code != http.StatusForbidden {
+				t.Fatalf("expected 403, got %d body=%s", rec.Code, rec.Body.String())
+			}
+			if got := rec.Header().Get("Content-Type"); !strings.Contains(got, "application/json") {
+				t.Fatalf("expected JSON problem response, got content-type %q body=%s", got, rec.Body.String())
+			}
+			body := rec.Body.String()
+			for _, want := range []string{`"code":"authorization_error"`, `"stable_code":"WEBHOOKERY_TENANT_ACCESS_DENIED"`, `"request_id":"req_forbidden_read"`} {
+				if !strings.Contains(body, want) {
+					t.Fatalf("forbidden response missing %q: %s", want, body)
+				}
+			}
+			for _, forbidden := range []string{"usr_support", "usr_dev", "secret", "token"} {
+				if strings.Contains(body, forbidden) {
+					t.Fatalf("forbidden response leaked %q: %s", forbidden, body)
+				}
+			}
+		})
+	}
+}
+
 func TestAuthenticatedMutationRoutesPreserveContracts(t *testing.T) {
 	server := testServerWithActor(authz.Actor{ID: "usr_1", TenantID: "ten_1", Role: authz.RoleOwner, Scopes: []string{"*"}})
 	tests := []struct {
