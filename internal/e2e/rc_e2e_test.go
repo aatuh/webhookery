@@ -951,6 +951,9 @@ func clearPriorRCE2EWork(t *testing.T, ctx context.Context, databaseURL string) 
 	if _, err := pool.Exec(ctx, `UPDATE deliveries SET state='canceled', locked_by=NULL, lock_expires_at=NULL WHERE (tenant_id LIKE 'ten_rc_%' OR tenant_id LIKE 'ten_it_%') AND state IN ('scheduled','in_progress')`); err != nil {
 		t.Fatalf("clear prior RC delivery work: %v", err)
 	}
+	if _, err := pool.Exec(ctx, `UPDATE retention_policies SET state='disabled', updated_at=now() WHERE (tenant_id LIKE 'ten_rc_%' OR tenant_id LIKE 'ten_it_%') AND state='active'`); err != nil {
+		t.Fatalf("disable prior RC retention policies: %v", err)
+	}
 }
 
 func rcTestSecretBox(t *testing.T) crypto.Envelope {

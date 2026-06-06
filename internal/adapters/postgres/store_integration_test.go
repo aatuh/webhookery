@@ -328,6 +328,221 @@ func TestPostgresDuplicateRawPayloadEvidenceRemainsLinkedAndExported(t *testing.
 	}
 }
 
+func TestPostgresEventSearchDeliveryControlAndDeadLetterLifecycle(t *testing.T) {
+	ctx, store, actor := openPostgresIntegrationStore(t)
+	defer store.Close()
+
+	if _, err := store.pool.Exec(ctx, `UPDATE outbox SET state='completed', locked_by=NULL, lock_expires_at=NULL WHERE (tenant_id LIKE 'ten_it_%' OR tenant_id LIKE 'ten_rc_%') AND state <> 'completed'`); err != nil {
+		t.Fatalf("clear prior integration outbox work: %v", err)
+	}
+	if _, err := store.pool.Exec(ctx, `UPDATE deliveries SET state='succeeded', locked_by=NULL, lock_expires_at=NULL WHERE (tenant_id LIKE 'ten_it_%' OR tenant_id LIKE 'ten_rc_%') AND state IN ('scheduled','in_progress')`); err != nil {
+		t.Fatalf("clear prior integration delivery work: %v", err)
+	}
+
+	now := time.Now().UTC().Truncate(time.Second)
+	eventType := "invoice.delivery_controls"
+	providerID := "evt_it_delivery_controls_" + now.Format("150405.000000000")
+	control := app.NewControlService(store, ssrf.Validator{Resolver: ssrf.StaticResolver{"receiver.example.com": {netip.MustParseAddr("93.184.216.34")}}})
+	fanout := app.NewDeliveryFanoutService(store, app.SystemClock{})
+
+	source, err := control.CreateSource(ctx, actor, app.CreateSourceRequest{Name: "delivery source", Provider: "stripe", Adapter: "stripe", VerificationSecret: "whsec_it"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	endpoint, _, err := control.CreateEndpoint(ctx, actor, app.CreateEndpointRequest{Name: "delivery endpoint", URL: "https://receiver.example.com/webhook"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	retryPolicy, err := control.CreateRetryPolicy(ctx, actor, app.CreateRetryPolicyRequest{
+		Name:                "single attempt",
+		MaxAttempts:         1,
+		MaxDurationSeconds:  60,
+		InitialDelaySeconds: 1,
+		MaxDelaySeconds:     1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	route, err := control.CreateRoute(ctx, actor, app.CreateRouteRequest{
+		SourceID:      source.ID,
+		Name:          "delivery controls route",
+		Priority:      5,
+		EventTypes:    []string{eventType},
+		EndpointID:    endpoint.ID,
+		RetryPolicyID: retryPolicy.ID,
+		State:         domain.StateActive,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ingested := ingestPostgresIntegrationEvent(t, ctx, store, actor, source.ID, eventType, providerID, now)
+	event, err := control.GetEvent(ctx, actor, ingested.EventID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if event.ProviderID != providerID || !event.Verified || event.RawPayloadHash == "" {
+		t.Fatalf("event evidence did not round trip: %+v", event)
+	}
+	if _, err := store.GetEvent(ctx, "ten_it_wrong_delivery_controls", ingested.EventID); !errors.Is(err, app.ErrNotFound) {
+		t.Fatalf("wrong-tenant event lookup must be hidden, got %v", err)
+	}
+
+	raw, err := control.GetRawPayload(ctx, actor, ingested.EventID, "delivery control evidence")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if raw.EventID != ingested.EventID || raw.SHA256 != event.RawPayloadHash || !bytes.Contains(raw.Body, []byte(providerID)) {
+		t.Fatalf("raw payload did not preserve event evidence: %+v body=%q", raw, string(raw.Body))
+	}
+	normalized, err := control.GetNormalizedEvent(ctx, actor, ingested.EventID, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if normalized.EventID != ingested.EventID || normalized.Data != nil || normalized.EnvelopeSHA256 == "" {
+		t.Fatalf("normalized envelope metadata did not round trip without data: %+v", normalized)
+	}
+	normalizedWithData, err := control.GetNormalizedEvent(ctx, actor, ingested.EventID, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(normalizedWithData.Data) == 0 || normalizedWithData.DataSHA256 == "" {
+		t.Fatalf("normalized envelope data read omitted payload evidence: %+v", normalizedWithData)
+	}
+
+	searches := []app.EventSearchRequest{
+		{Provider: "stripe", Limit: 10},
+		{ExternalID: providerID, Limit: 10},
+		{Verification: "valid", Limit: 10},
+		{ReceivedAfter: now.Add(-time.Minute), Limit: 10},
+	}
+	for _, req := range searches {
+		events, err := store.ListEvents(ctx, actor.TenantID, req)
+		if err != nil {
+			t.Fatalf("search %+v: %v", req, err)
+		}
+		if !containsPostgresEvent(events, ingested.EventID) {
+			t.Fatalf("search %+v did not return event %s: %+v", req, ingested.EventID, events)
+		}
+	}
+	controlEvents, err := control.ListEvents(ctx, actor, 20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !containsPostgresEvent(controlEvents, ingested.EventID) {
+		t.Fatalf("control list did not return event %s: %+v", ingested.EventID, controlEvents)
+	}
+
+	dryRun, err := control.DryRunRoute(ctx, actor, route.ID, ingested.EventID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !dryRun.Matched || len(dryRun.WouldCreateDeliveries) != 1 {
+		t.Fatalf("expected route dry run to match one delivery, got %+v", dryRun)
+	}
+
+	outboxItems, err := store.ClaimOutbox(ctx, "it-delivery-controls-outbox", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(outboxItems) != 1 || outboxItems[0].ResourceID != ingested.EventID {
+		t.Fatalf("expected one outbox item for event, got %+v", outboxItems)
+	}
+	if err := fanout.ProcessOutbox(ctx, outboxItems[0]); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.CompleteOutbox(ctx, outboxItems[0].ID); err != nil {
+		t.Fatal(err)
+	}
+
+	claimed, err := store.ClaimDueDeliveries(ctx, "it-delivery-controls-worker", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(claimed) != 1 || claimed[0].EventID != ingested.EventID || claimed[0].EndpointID != endpoint.ID {
+		t.Fatalf("expected one due delivery for event, got %+v", claimed)
+	}
+	if len(claimed[0].Body) == 0 || len(claimed[0].SigningSecret) == 0 {
+		t.Fatalf("claimed delivery did not include signed payload material: %+v", claimed[0])
+	}
+	if err := store.RecordDeliveryAttempt(ctx, claimed[0], worker.DeliveryResult{StatusCode: 503, ResponseBody: []byte("receiver unavailable")}, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	deliveries, err := control.ListDeliveries(ctx, actor, 20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	delivery, ok := findPostgresDelivery(deliveries, claimed[0].ID)
+	if !ok {
+		t.Fatalf("delivery %s not listed: %+v", claimed[0].ID, deliveries)
+	}
+	if delivery.State != "dead_lettered" || delivery.AttemptCount != 1 || delivery.DeliveryPayloadID == "" || delivery.DeliveryPayloadSHA256 == "" {
+		t.Fatalf("delivery did not retain terminal evidence fields: %+v", delivery)
+	}
+	searchesAfterDLQ := []app.EventSearchRequest{
+		{DeliveryID: delivery.ID, Limit: 10},
+		{RouteID: route.ID, Limit: 10},
+		{Status: "dlq", Limit: 10},
+	}
+	for _, req := range searchesAfterDLQ {
+		events, err := store.ListEvents(ctx, actor.TenantID, req)
+		if err != nil {
+			t.Fatalf("search %+v: %v", req, err)
+		}
+		if !containsPostgresEvent(events, ingested.EventID) {
+			t.Fatalf("search %+v did not return dead-lettered event %s: %+v", req, ingested.EventID, events)
+		}
+	}
+
+	attempts, err := control.ListDeliveryAttempts(ctx, actor, delivery.ID, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(attempts) != 1 || attempts[0].State != "failed" || attempts[0].ResponseStatus != 503 || attempts[0].ResponseBodyTruncated != "receiver unavailable" {
+		t.Fatalf("unexpected delivery attempts: %+v", attempts)
+	}
+	gotAttempt, err := control.GetDeliveryAttempt(ctx, actor, attempts[0].ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotAttempt.ID != attempts[0].ID || gotAttempt.DeliveryID != delivery.ID {
+		t.Fatalf("delivery attempt did not round trip: %+v", gotAttempt)
+	}
+	if _, err := store.GetDeliveryAttempt(ctx, "ten_it_wrong_delivery_controls", attempts[0].ID); !errors.Is(err, app.ErrNotFound) {
+		t.Fatalf("wrong-tenant delivery attempt lookup must be hidden, got %v", err)
+	}
+
+	timeline, err := control.ListEventTimeline(ctx, actor, ingested.EventID, 50)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !containsPostgresTimelineKind(timeline, "delivery") || !containsPostgresTimelineKind(timeline, "attempt") || !containsPostgresTimelineKind(timeline, "normalized") {
+		t.Fatalf("timeline omitted delivery evidence: %+v", timeline)
+	}
+
+	deadLetters, err := control.ListDeadLetter(ctx, actor, 20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	entryID := findPostgresDeadLetterEntry(deadLetters, delivery.ID)
+	if entryID == "" {
+		t.Fatalf("dead-letter entry for delivery %s not listed: %+v", delivery.ID, deadLetters)
+	}
+	replayJob, err := control.ReleaseDeadLetter(ctx, actor, entryID, app.DeadLetterReleaseRequest{ReasonCode: app.ReplayReasonReceiverFixed, Reason: "receiver recovered"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if replayJob.State != "scheduled" || replayJob.TotalItems != 1 || replayJob.ReasonCode != app.ReplayReasonReceiverFixed {
+		t.Fatalf("dead-letter release did not create scheduled replay: %+v", replayJob)
+	}
+	if _, err := control.ReleaseDeadLetter(ctx, actor, entryID, app.DeadLetterReleaseRequest{ReasonCode: app.ReplayReasonReceiverFixed, Reason: "already released"}); !errors.Is(err, app.ErrNotFound) {
+		t.Fatalf("released dead-letter entry must not be reusable, got %v", err)
+	}
+	assertPostgresAuditEvent(t, ctx, store, actor.TenantID, "dead_letter.released", "dead_letter_entry", entryID)
+	assertPostgresAuditEvent(t, ctx, store, actor.TenantID, "replay.created", "replay_job", replayJob.ID)
+}
+
 func TestPostgresConcurrentDuplicateCapturePreservesEvidence(t *testing.T) {
 	ctx, store, actor := openPostgresIntegrationStore(t)
 	defer store.Close()
@@ -1974,6 +2189,45 @@ func containsPostgresIncident(incidents []domain.Incident, id, state string) boo
 		}
 	}
 	return false
+}
+
+func containsPostgresEvent(events []domain.Event, id string) bool {
+	for _, event := range events {
+		if event.ID == id {
+			return true
+		}
+	}
+	return false
+}
+
+func findPostgresDelivery(deliveries []domain.Delivery, id string) (domain.Delivery, bool) {
+	for _, delivery := range deliveries {
+		if delivery.ID == id {
+			return delivery, true
+		}
+	}
+	return domain.Delivery{}, false
+}
+
+func containsPostgresTimelineKind(timeline []app.EventTimelineEntry, kind string) bool {
+	for _, item := range timeline {
+		if item.Kind == kind {
+			return true
+		}
+	}
+	return false
+}
+
+func findPostgresDeadLetterEntry(entries []map[string]any, deliveryID string) string {
+	for _, entry := range entries {
+		id, _ := entry["id"].(string)
+		entryDeliveryID, _ := entry["delivery_id"].(string)
+		state, _ := entry["state"].(string)
+		if id != "" && entryDeliveryID == deliveryID && state == "open" {
+			return id
+		}
+	}
+	return ""
 }
 
 func containsPostgresProducerClient(clients []domain.ProducerClient, id, state string) bool {

@@ -5351,7 +5351,10 @@ func (s *Store) ReleaseDeadLetter(ctx context.Context, tenantID, entryID, actorI
 	if err != nil {
 		return app.ReplayJob{}, err
 	}
-	req := app.ReplayRequest{DeliveryID: deliveryID, EventID: eventID, ReasonCode: reasonCode, Reason: reason}
+	req := app.ReplayRequest{DeliveryID: deliveryID, ReasonCode: reasonCode, Reason: reason}
+	if req.DeliveryID == "" {
+		req.EventID = eventID
+	}
 	job, err := s.CreateReplay(ctx, tenantID, actorID, req)
 	if err != nil {
 		return app.ReplayJob{}, err
