@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/x509"
 	"errors"
+	"strings"
 	"testing"
 
 	"webhookery/internal/authz"
@@ -160,6 +161,61 @@ func TestCreateAPIKeyReturnsTokenOnlyOnce(t *testing.T) {
 	}
 	if store.apiKeyInput.Key.Hash == "" || store.apiKeyInput.Key.TenantID != "ten_a" {
 		t.Fatalf("store must receive tenant-scoped hashed key metadata: %+v", store.apiKeyInput)
+	}
+}
+
+func TestCreateAPIKeyValidatesAndDefaultsCredentialMetadata(t *testing.T) {
+	store := &fakeControlStore{}
+	svc := NewControlService(store, ssrf.Validator{Resolver: ssrf.StaticResolver{}})
+	reader := authz.Actor{ID: "usr_reader", TenantID: "ten_a", Role: authz.RoleAuditor, Scopes: []string{"api_keys:read"}}
+	owner := authz.Actor{ID: "usr_owner", TenantID: "ten_a", Role: authz.RoleAdmin, Scopes: []string{"api_keys:write"}}
+
+	_, err := svc.CreateAPIKey(context.Background(), reader, CreateAPIKeyRequest{Name: "ops", Scopes: []string{"events:read"}})
+	if err != ErrForbidden {
+		t.Fatalf("expected forbidden API key create, got %v", err)
+	}
+	if store.apiKeyInput.ActorID != "" {
+		t.Fatal("API key store must not be called before authorization")
+	}
+	for _, tc := range []struct {
+		name string
+		req  CreateAPIKeyRequest
+	}{
+		{name: "blank name", req: CreateAPIKeyRequest{Name: " ", Scopes: []string{"events:read"}}},
+		{name: "bad role", req: CreateAPIKeyRequest{Name: "ops", Role: authz.Role("root"), Scopes: []string{"events:read"}}},
+		{name: "empty scopes", req: CreateAPIKeyRequest{Name: "ops", Scopes: []string{" ", ""}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store.apiKeyInput = APIKeyCreateInput{}
+			if _, err := svc.CreateAPIKey(context.Background(), owner, tc.req); !errors.Is(err, ErrInvalidInput) {
+				t.Fatalf("expected invalid input, got %v", err)
+			}
+			if store.apiKeyInput.ActorID != "" {
+				t.Fatal("invalid API key create must not reach store")
+			}
+		})
+	}
+
+	created, err := svc.CreateAPIKey(context.Background(), owner, CreateAPIKeyRequest{
+		Name:   " ops key ",
+		Email:  " ops@example.com ",
+		Scopes: []string{" events:read ", "events:read", "deliveries:read"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if created.Token == "" || created.Key.Hash != "" {
+		t.Fatalf("created key should return one-time token but not stored hash: %+v", created)
+	}
+	input := store.apiKeyInput
+	if input.Role != authz.RoleAdmin || input.Email != "ops@example.com" || input.ActorID != "usr_owner" {
+		t.Fatalf("API key create metadata was not defaulted or trimmed: %+v", input)
+	}
+	if input.Key.Name != "ops key" || input.Key.TenantID != "ten_a" || !strings.HasPrefix(input.Key.UserID, "usr_") {
+		t.Fatalf("API key persisted identity metadata is wrong: %+v", input.Key)
+	}
+	if len(input.Key.Scopes) != 2 || input.Key.Scopes[0] != "events:read" || input.Key.Scopes[1] != "deliveries:read" {
+		t.Fatalf("API key scopes were not normalized: %+v", input.Key.Scopes)
 	}
 }
 

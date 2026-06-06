@@ -219,6 +219,51 @@ func TestEnterpriseIdentitySecurityHelpersNormalizeRedirectsAndDomains(t *testin
 	if wouldDenySecurityWrite("allow", "security:write", "security", "*") {
 		t.Fatal("allow rule should not be treated as a deny")
 	}
+
+	validConditions := json.RawMessage(`{"ip_allowlist":["203.0.113.10"]}`)
+	if err := validateAccessPolicy(" deny export ", "audit:export", PolicyEffectDeny, "audit_export", "prod", validConditions, "policy"); err != nil {
+		t.Fatalf("expected valid access policy, got %v", err)
+	}
+	invalidPolicyCases := []struct {
+		name       string
+		policyName string
+		action     string
+		effect     string
+		family     string
+		env        string
+		conditions json.RawMessage
+		reason     string
+	}{
+		{name: "missing fields", policyName: " ", action: "audit:read", effect: PolicyEffectAllow, family: "audit_event", env: "prod", reason: "policy"},
+		{name: "bad effect", policyName: "export", action: "audit:export", effect: "maybe", family: "audit_export", env: "prod", reason: "policy"},
+		{name: "missing reason", policyName: "export", action: "audit:export", effect: PolicyEffectDeny, family: "audit_export", env: "prod", reason: " "},
+		{name: "bad conditions", policyName: "export", action: "audit:export", effect: PolicyEffectDeny, family: "audit_export", env: "prod", conditions: json.RawMessage(`{"bad"`), reason: "policy"},
+	}
+	for _, tc := range invalidPolicyCases {
+		t.Run("access policy "+tc.name, func(t *testing.T) {
+			err := validateAccessPolicy(tc.policyName, tc.action, tc.effect, tc.family, tc.env, tc.conditions, tc.reason)
+			if !errors.Is(err, ErrInvalidInput) {
+				t.Fatalf("expected invalid access policy, got %v", err)
+			}
+		})
+	}
+
+	if provider, endpoint, err := oidcProviderEndpoint(context.Background(), domain.IdentityProvider{
+		IssuerURL:        "://bad",
+		AuthorizationURL: "https://idp.example/authorize",
+		TokenURL:         "https://idp.example/token",
+	}); err != nil || provider != nil || endpoint.AuthURL != "https://idp.example/authorize" || endpoint.TokenURL != "https://idp.example/token" {
+		t.Fatalf("expected static OIDC endpoint fallback, provider=%v endpoint=%+v err=%v", provider, endpoint, err)
+	}
+	if _, _, err := oidcProviderEndpoint(context.Background(), domain.IdentityProvider{IssuerURL: "://bad"}); !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("expected discovery failure without static fallback, got %v", err)
+	}
+	if verifier := oidcVerifier(context.Background(), nil, domain.IdentityProvider{IssuerURL: "https://idp.example", ClientID: "webhookery"}); verifier != nil {
+		t.Fatal("missing JWKS URL should not create a fallback verifier")
+	}
+	if verifier := oidcVerifier(context.Background(), nil, domain.IdentityProvider{IssuerURL: "https://idp.example", JWKSURL: "https://idp.example/keys", ClientID: "webhookery"}); verifier == nil {
+		t.Fatal("JWKS URL should create a lazy fallback verifier")
+	}
 }
 
 func TestEnterpriseSessionLifecycleHashesTokensAndScopesTenant(t *testing.T) {

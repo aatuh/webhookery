@@ -708,6 +708,27 @@ func TestControlServiceUpdateSourceRequiresReasonAndValidState(t *testing.T) {
 	if !errors.Is(err, ErrInvalidInput) {
 		t.Fatalf("expected missing reason error, got %v", err)
 	}
+	_, err = svc.UpdateSource(context.Background(), actor, " ", UpdateSourceRequest{State: &state, Reason: "retire"})
+	if !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("expected blank source id error, got %v", err)
+	}
+	_, err = svc.UpdateSource(context.Background(), actor, "src_123", UpdateSourceRequest{Reason: "noop"})
+	if !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("expected missing update field error, got %v", err)
+	}
+	_, err = svc.UpdateSource(context.Background(), actor, "src_123", UpdateSourceRequest{Name: ptrString(" "), Reason: "rename"})
+	if !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("expected empty source name error, got %v", err)
+	}
+
+	state = " disabled "
+	updated, err := svc.UpdateSource(context.Background(), actor, "src_123", UpdateSourceRequest{Name: ptrString(" Renamed Source "), State: &state, Reason: "rename"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.TenantID != "ten_a" || updated.Name != "Renamed Source" || updated.State != domain.StateDisabled || store.sourceReason != "rename" {
+		t.Fatalf("source update was not normalized and tenant scoped: source=%+v reason=%q", updated, store.sourceReason)
+	}
 }
 
 func TestControlServiceDeleteSourceDisablesWithReason(t *testing.T) {
@@ -1894,6 +1915,30 @@ func TestControlServiceProducerMTLSManagementScopesTenantAndRequiresReasons(t *t
 	}
 }
 
+func TestProducerMTLSUpdateNormalizationValidatesFields(t *testing.T) {
+	if err := normalizeUpdateProducerMTLSIdentity(&UpdateProducerMTLSIdentityRequest{}); !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("expected empty update to be invalid, got %v", err)
+	}
+	if err := normalizeUpdateProducerMTLSIdentity(&UpdateProducerMTLSIdentityRequest{Name: ptrString(" ")}); !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("expected empty name to be invalid, got %v", err)
+	}
+	if err := normalizeUpdateProducerMTLSIdentity(&UpdateProducerMTLSIdentityRequest{State: ptrString("revoked")}); !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("expected invalid state to be rejected, got %v", err)
+	}
+
+	req := UpdateProducerMTLSIdentityRequest{
+		Name:     ptrString(" Billing Client "),
+		SourceID: ptrString(" src_1 "),
+		State:    ptrString(" disabled "),
+	}
+	if err := normalizeUpdateProducerMTLSIdentity(&req); err != nil {
+		t.Fatal(err)
+	}
+	if *req.Name != "Billing Client" || *req.SourceID != "src_1" || *req.State != domain.StateDisabled {
+		t.Fatalf("producer mTLS update fields were not normalized: %+v", req)
+	}
+}
+
 func TestControlServiceRetryPolicyValidation(t *testing.T) {
 	store := &fakeControlStore{}
 	svc := NewControlService(store, ssrf.Validator{Resolver: ssrf.StaticResolver{}})
@@ -2225,6 +2270,68 @@ func TestControlServiceValidatesTransformationOperations(t *testing.T) {
 	}
 	if store.transformationTenantID != "ten_a" {
 		t.Fatalf("transformation create was not tenant scoped: %q", store.transformationTenantID)
+	}
+}
+
+func TestControlServiceTransformationVersionsValidateAndScopeStore(t *testing.T) {
+	store := &fakeControlStore{}
+	svc := NewControlService(store, ssrf.Validator{Resolver: ssrf.StaticResolver{}})
+	reader := authz.Actor{ID: "usr_read", TenantID: "ten_a", Role: authz.RoleDeveloper, Scopes: []string{"routes:read"}}
+	writer := authz.Actor{ID: "usr_write", TenantID: "ten_a", Role: authz.RoleDeveloper, Scopes: []string{"routes:write"}}
+	validOps := json.RawMessage(`[{"op":"redact","path":"/data/email"}]`)
+
+	_, err := svc.CreateTransformationVersion(context.Background(), reader, "trn_1", CreateTransformationVersionRequest{Operations: validOps})
+	if err != ErrForbidden {
+		t.Fatalf("expected forbidden transformation version create, got %v", err)
+	}
+	_, err = svc.ActivateTransformationVersion(context.Background(), reader, "trn_1", "trv_1", ActivateTransformationVersionRequest{Reason: "publish"})
+	if err != ErrForbidden {
+		t.Fatalf("expected forbidden transformation version activation, got %v", err)
+	}
+	if store.transformationID != "" {
+		t.Fatal("transformation version store must not be called before authorization")
+	}
+
+	for _, tc := range []struct {
+		name             string
+		transformationID string
+		req              CreateTransformationVersionRequest
+	}{
+		{name: "blank transformation id", transformationID: " ", req: CreateTransformationVersionRequest{Operations: validOps}},
+		{name: "missing operations", transformationID: "trn_1", req: CreateTransformationVersionRequest{}},
+		{name: "protected operation path", transformationID: "trn_1", req: CreateTransformationVersionRequest{Operations: json.RawMessage(`[{"op":"redact","path":"/raw_payload_hash"}]`)}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store.transformationID = ""
+			if _, err := svc.CreateTransformationVersion(context.Background(), writer, tc.transformationID, tc.req); !errors.Is(err, ErrInvalidInput) {
+				t.Fatalf("expected invalid input, got %v", err)
+			}
+			if store.transformationID != "" {
+				t.Fatal("invalid transformation version must not reach store")
+			}
+		})
+	}
+
+	version, err := svc.CreateTransformationVersion(context.Background(), writer, "trn_1", CreateTransformationVersionRequest{Operations: validOps})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if version.TenantID != "ten_a" || version.TransformationID != "trn_1" || version.CreatedBy != "usr_write" {
+		t.Fatalf("transformation version create was not scoped: %+v", version)
+	}
+	if store.transformationTenantID != "ten_a" || store.transformationID != "trn_1" || store.transformationActorID != "usr_write" {
+		t.Fatalf("transformation version store scope mismatch: tenant=%q transformation=%q actor=%q", store.transformationTenantID, store.transformationID, store.transformationActorID)
+	}
+
+	if _, err := svc.ActivateTransformationVersion(context.Background(), writer, "trn_1", "trv_1", ActivateTransformationVersionRequest{}); !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("expected activation reason validation, got %v", err)
+	}
+	activated, err := svc.ActivateTransformationVersion(context.Background(), writer, "trn_1", "trv_1", ActivateTransformationVersionRequest{Reason: "publish"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if activated.ID != "trv_1" || activated.State != domain.StateActive || store.transformationVersionID != "trv_1" || store.transformationReason != "publish" {
+		t.Fatalf("transformation version activation was not propagated: version=%+v store=%+v", activated, store)
 	}
 }
 
@@ -3060,6 +3167,10 @@ type fakeControlStore struct {
 	routeReason                  string
 	route                        domain.Route
 	transformationTenantID       string
+	transformationID             string
+	transformationVersionID      string
+	transformationActorID        string
+	transformationReason         string
 	providerConnectionTenantID   string
 	providerConnectionReq        CreateProviderConnectionRequest
 	adapterTenantID              string
@@ -4005,6 +4116,7 @@ func (f *fakeControlStore) DisableReplayApprovalPolicy(_ context.Context, tenant
 }
 func (f *fakeControlStore) CreateTransformation(_ context.Context, tenantID, actorID string, req CreateTransformationRequest) (domain.Transformation, error) {
 	f.transformationTenantID = tenantID
+	f.transformationActorID = actorID
 	return domain.Transformation{ID: "trn_1", TenantID: tenantID, Name: req.Name, CreatedBy: actorID}, nil
 }
 func (f *fakeControlStore) ListTransformations(context.Context, string, int) ([]domain.Transformation, error) {
@@ -4013,14 +4125,22 @@ func (f *fakeControlStore) ListTransformations(context.Context, string, int) ([]
 func (f *fakeControlStore) GetTransformation(context.Context, string, string) (domain.Transformation, error) {
 	return domain.Transformation{}, nil
 }
-func (f *fakeControlStore) CreateTransformationVersion(context.Context, string, string, string, CreateTransformationVersionRequest) (domain.TransformationVersion, error) {
-	return domain.TransformationVersion{}, nil
+func (f *fakeControlStore) CreateTransformationVersion(_ context.Context, tenantID, transformationID, actorID string, req CreateTransformationVersionRequest) (domain.TransformationVersion, error) {
+	f.transformationTenantID = tenantID
+	f.transformationID = transformationID
+	f.transformationActorID = actorID
+	return domain.TransformationVersion{ID: "trv_1", TenantID: tenantID, TransformationID: transformationID, Version: 1, State: domain.StateDraft, Operations: req.Operations, CreatedBy: actorID}, nil
 }
 func (f *fakeControlStore) ListTransformationVersions(context.Context, string, string, int) ([]domain.TransformationVersion, error) {
 	return nil, nil
 }
-func (f *fakeControlStore) ActivateTransformationVersion(context.Context, string, string, string, string, string) (domain.TransformationVersion, error) {
-	return domain.TransformationVersion{}, nil
+func (f *fakeControlStore) ActivateTransformationVersion(_ context.Context, tenantID, transformationID, versionID, actorID, reason string) (domain.TransformationVersion, error) {
+	f.transformationTenantID = tenantID
+	f.transformationID = transformationID
+	f.transformationVersionID = versionID
+	f.transformationActorID = actorID
+	f.transformationReason = reason
+	return domain.TransformationVersion{ID: versionID, TenantID: tenantID, TransformationID: transformationID, Version: 1, State: domain.StateActive, CreatedBy: actorID}, nil
 }
 
 func ptrString(v string) *string {

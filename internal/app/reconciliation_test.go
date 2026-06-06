@@ -11,6 +11,16 @@ import (
 	"webhookery/internal/reconcile"
 )
 
+func TestNewReconciliationServiceDefaultsRegistry(t *testing.T) {
+	service := NewReconciliationService(nil, nil)
+	if service.registry == nil {
+		t.Fatal("expected nil registry to be replaced with built-in registry")
+	}
+	if _, ok := service.registry.Adapter("stripe"); !ok {
+		t.Fatal("expected built-in registry to include provider adapters")
+	}
+}
+
 func TestReconciliationServiceCapturesMissingRecoverableObject(t *testing.T) {
 	store := newFakeReconciliationStore()
 	store.work.Job = domain.ReconciliationJob{
