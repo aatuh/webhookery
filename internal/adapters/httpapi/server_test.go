@@ -402,6 +402,79 @@ func TestAuthenticatedMutationRoutesPreserveContracts(t *testing.T) {
 	}
 }
 
+func TestMutationRoutesRejectMalformedJSONWithoutEchoingBody(t *testing.T) {
+	server := testServerWithActor(authz.Actor{ID: "usr_1", TenantID: "ten_1", Role: authz.RoleOwner, Scopes: []string{"*"}})
+	tests := []struct {
+		name   string
+		method string
+		path   string
+	}{
+		{name: "create api key", method: http.MethodPost, path: "/v1/api-keys"},
+		{name: "revoke api key", method: http.MethodPost, path: "/v1/api-keys/key_1:revoke"},
+		{name: "create source", method: http.MethodPost, path: "/v1/sources"},
+		{name: "update source", method: http.MethodPatch, path: "/v1/sources/src_1"},
+		{name: "delete source", method: http.MethodDelete, path: "/v1/sources/src_1"},
+		{name: "rotate source secret", method: http.MethodPost, path: "/v1/sources/src_1/secrets:rotate"},
+		{name: "create endpoint", method: http.MethodPost, path: "/v1/endpoints"},
+		{name: "update endpoint", method: http.MethodPatch, path: "/v1/endpoints/end_1"},
+		{name: "delete endpoint", method: http.MethodDelete, path: "/v1/endpoints/end_1"},
+		{name: "test endpoint", method: http.MethodPost, path: "/v1/endpoints/end_1:test"},
+		{name: "create retry policy", method: http.MethodPost, path: "/v1/retry-policies"},
+		{name: "update retry policy", method: http.MethodPatch, path: "/v1/retry-policies/rtp_1"},
+		{name: "delete retry policy", method: http.MethodDelete, path: "/v1/retry-policies/rtp_1"},
+		{name: "create route", method: http.MethodPost, path: "/v1/routes"},
+		{name: "update route", method: http.MethodPatch, path: "/v1/routes/rte_1"},
+		{name: "delete route", method: http.MethodDelete, path: "/v1/routes/rte_1"},
+		{name: "create replay", method: http.MethodPost, path: "/v1/replay-jobs"},
+		{name: "release dead letter", method: http.MethodPost, path: "/v1/dead-letter/dlq_1:release"},
+		{name: "create audit export", method: http.MethodPost, path: "/v1/audit-events:export"},
+		{name: "verify audit chain", method: http.MethodPost, path: "/v1/audit-chain:verify"},
+		{name: "anchor audit chain", method: http.MethodPost, path: "/v1/audit-chain:anchor"},
+		{name: "create retention", method: http.MethodPost, path: "/v1/admin/retention-policies"},
+		{name: "update retention", method: http.MethodPatch, path: "/v1/admin/retention-policies/ret_1"},
+		{name: "create alert", method: http.MethodPost, path: "/v1/alerts"},
+		{name: "update alert", method: http.MethodPatch, path: "/v1/alerts/alr_1"},
+		{name: "delete alert", method: http.MethodDelete, path: "/v1/alerts/alr_1"},
+		{name: "ack alert", method: http.MethodPost, path: "/v1/alert-firings/afr_1:acknowledge"},
+		{name: "create notification", method: http.MethodPost, path: "/v1/notification-channels"},
+		{name: "update notification", method: http.MethodPatch, path: "/v1/notification-channels/nch_1"},
+		{name: "delete notification", method: http.MethodDelete, path: "/v1/notification-channels/nch_1"},
+		{name: "test notification", method: http.MethodPost, path: "/v1/notification-channels/nch_1:test"},
+		{name: "retry notification", method: http.MethodPost, path: "/v1/notification-deliveries/ndel_1:retry"},
+		{name: "create siem", method: http.MethodPost, path: "/v1/siem-sinks"},
+		{name: "update siem", method: http.MethodPatch, path: "/v1/siem-sinks/snk_1"},
+		{name: "delete siem", method: http.MethodDelete, path: "/v1/siem-sinks/snk_1"},
+		{name: "test siem", method: http.MethodPost, path: "/v1/siem-sinks/snk_1:test"},
+		{name: "retry siem", method: http.MethodPost, path: "/v1/siem-deliveries/sdel_1:retry"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			req := httptest.NewRequest(tt.method, tt.path, bytes.NewBufferString(`{"reason":"secret-token","signing_secret":"0123456789abcdef"} {}`))
+			req.Header.Set("Authorization", "Bearer token")
+			req.Header.Set("Content-Type", "application/json")
+			req.Header.Set("X-Request-ID", "req_bad_json")
+
+			server.Routes().ServeHTTP(rec, req)
+
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("expected 400, got %d body=%s", rec.Code, rec.Body.String())
+			}
+			body := rec.Body.String()
+			for _, want := range []string{`"code":"validation_error"`, `"request_id":"req_bad_json"`} {
+				if !strings.Contains(body, want) {
+					t.Fatalf("malformed JSON problem missing %q: %s", want, body)
+				}
+			}
+			for _, forbidden := range []string{"secret-token", "0123456789abcdef", "signing_secret"} {
+				if strings.Contains(body, forbidden) {
+					t.Fatalf("malformed JSON problem leaked %q: %s", forbidden, body)
+				}
+			}
+		})
+	}
+}
+
 func TestProductEventSourceIDExtractionPreservesRawBodyPath(t *testing.T) {
 	sourceID := productSourceID([]byte(`{"source_id":"src_internal","id":"evt_1"}`))
 	if sourceID != "src_internal" {
