@@ -269,6 +269,222 @@ func TestPostgresScannerHelpersApplyDefaultsAndConversions(t *testing.T) {
 	}
 }
 
+func TestPostgresRowScannersMapTenantScopedDomainFields(t *testing.T) {
+	now := time.Date(2026, 6, 8, 12, 30, 0, 0, time.UTC)
+	epoch := time.Unix(0, 0).UTC()
+
+	retention, err := scanRetentionPolicy(fakeScanner{values: []any{"rtp_1", "ten_1", domain.RetentionResourceRawPayload, "src_1", 30, domain.StateActive, true, "legal hold", "usr_1", now, now}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if retention.TenantID != "ten_1" || !retention.LegalHold || retention.SourceID != "src_1" {
+		t.Fatalf("retention policy scan lost scoped fields: %+v", retention)
+	}
+
+	anchor, err := scanAuditChainAnchor(fakeScanner{values: []any{"anc_1", "ten_1", int64(1), int64(9), "chain", "manifest", domain.RawStorageS3, "bucket", "key", "usr_1", "scheduled", now}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if anchor.TenantID != "ten_1" || anchor.FromSequence != 1 || anchor.ToSequence != 9 {
+		t.Fatalf("audit chain anchor scan mismatch: %+v", anchor)
+	}
+	entry, err := scanAuditChainEntry(fakeScanner{values: []any{"ace_1", "ten_1", int64(3), "aud_1", "hash", "prev", "chain", "v1", domain.AuditChainEntrySourceLive, domain.AuditChainEntryStateRetained, epoch, "retained", now}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !entry.AuditEventDeletedAt.IsZero() || entry.TombstoneReason != "retained" {
+		t.Fatalf("audit chain entry sentinel not normalized: %+v", entry)
+	}
+
+	source, err := scanSource(fakeScanner{values: []any{"src_1", "ten_1", "Stripe", "stripe", "builtin:stripe:v1", domain.StateActive, now}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if source.TenantID != "ten_1" || source.Adapter != "builtin:stripe:v1" {
+		t.Fatalf("source scan mismatch: %+v", source)
+	}
+	client, err := scanProducerClient(fakeScanner{values: []any{"prc_1", "ten_1", "client", "src_1", []string{"events:write"}, 3600, domain.StateActive, "usr_1", now, now, epoch}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !client.DisabledAt.IsZero() || len(client.Scopes) != 1 {
+		t.Fatalf("producer client defaults not normalized: %+v", client)
+	}
+	mtls, err := scanProducerMTLSIdentity(fakeScanner{values: []any{"mtl_1", "ten_1", "cert", "src_1", "fp", "CN=client", []string{"client.example"}, []string{"spiffe://client"}, []string{"client@example.com"}, now, now.Add(time.Hour), domain.StateActive, "usr_1", now, now, epoch}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !mtls.DisabledAt.IsZero() || mtls.CertificateFingerprintSHA256 != "fp" {
+		t.Fatalf("producer mTLS scan mismatch: %+v", mtls)
+	}
+	endpoint, err := scanEndpoint(fakeScanner{values: []any{"end_1", "ten_1", "receiver", "https://receiver.example/webhooks", domain.StateActive, "rtp_1", true, "CN=receiver", "closed", 2, epoch, now}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if endpoint.TenantID != "ten_1" || !endpoint.MTLSEnabled || endpoint.FailureCount != 2 {
+		t.Fatalf("endpoint scan mismatch: %+v", endpoint)
+	}
+
+	event, err := scanEvent(fakeScanner{values: []any{"evt_1", "ten_1", "src_1", "stripe", "invoice.paid", "evt_provider", "raw_1", "sha256:raw", true, "ok", "dedupe", domain.DedupeUnique, now, "trace_1"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if event.TenantID != "ten_1" || !event.Verified || event.ProviderID != "evt_provider" {
+		t.Fatalf("event scan mismatch: %+v", event)
+	}
+	eventType, err := scanEventType(fakeScanner{values: []any{"ten_1", "invoice.paid", "description", domain.StateActive, now}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if eventType.TenantID != "ten_1" || eventType.Name != "invoice.paid" {
+		t.Fatalf("event type scan mismatch: %+v", eventType)
+	}
+	eventSchema, err := scanEventSchema(fakeScanner{values: []any{"sch_1", "ten_1", "invoice.paid", "2026-06-08", `{"type":"object"}`, domain.StateActive, now}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if eventSchema.TenantID != "ten_1" || eventSchema.Version != "2026-06-08" {
+		t.Fatalf("event schema scan mismatch: %+v", eventSchema)
+	}
+	worker, err := scanWorkerStatus(fakeScanner{values: []any{"worker_1", "active", now, now.Add(time.Minute)}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if worker.WorkerID != "worker_1" || worker.ExpiresAt.IsZero() {
+		t.Fatalf("worker scan mismatch: %+v", worker)
+	}
+
+	firing, err := scanAlertFiring(fakeScanner{values: []any{"alf_1", "ten_1", "arl_1", domain.AlertFiringOpen, 7.5, 5.0, "threshold", now, now, "", epoch, epoch, now}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if normalized := normalizeAlertFiring(firing); !normalized.AcknowledgedAt.IsZero() || !normalized.ResolvedAt.IsZero() {
+		t.Fatalf("alert firing epoch sentinels not normalized: %+v", normalized)
+	}
+	channel, err := scanNotificationChannel(fakeScanner{values: []any{"nch_1", "ten_1", "pager", domain.NotificationChannelWebhook, "https://ops.example/hook", domain.StateActive, "whsec_****", "usr_1", now, now}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if channel.TenantID != "ten_1" || channel.SecretHint == "" {
+		t.Fatalf("notification channel scan mismatch: %+v", channel)
+	}
+	notification, err := scanNotificationDelivery(fakeScanner{values: []any{"ndl_1", "ten_1", "nch_1", "alf_1", "opened", domain.SignalDeliveryScheduled, "sha256:body", 1, now, epoch, now, now}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if normalized := normalizeNotificationDelivery(notification); !normalized.LastAttemptAt.IsZero() {
+		t.Fatalf("notification delivery epoch sentinel not normalized: %+v", normalized)
+	}
+	siemSink, err := scanSIEMSink(fakeScanner{values: []any{"sim_1", "ten_1", "soc", domain.SIEMSinkWebhook, "https://siem.example/hook", domain.StateActive, "secret-hint", int64(42), "usr_1", now, now}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if siemSink.CursorSequence != 42 || siemSink.TenantID != "ten_1" {
+		t.Fatalf("SIEM sink scan mismatch: %+v", siemSink)
+	}
+	siemDelivery, err := scanSIEMDelivery(fakeScanner{values: []any{"sid_1", "ten_1", "sim_1", int64(1), int64(42), domain.SignalDeliveryScheduled, "sha256:body", 1, now, epoch, now, now}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if normalized := normalizeSIEMDelivery(siemDelivery); !normalized.LastAttemptAt.IsZero() || normalized.ToSequence != 42 {
+		t.Fatalf("SIEM delivery scan mismatch: %+v", normalized)
+	}
+
+	route, err := scanRoute(fakeScanner{values: []any{"rte_1", "ten_1", "src_1", "invoices", 10, []string{"invoice.paid"}, "end_1", domain.StateActive, 3, "rv_3", "rtp_1", "trn_1", "trv_1", now}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if route.TenantID != "ten_1" || route.Version != 3 || route.EventTypes[0] != "invoice.paid" {
+		t.Fatalf("route scan mismatch: %+v", route)
+	}
+	subscription, err := scanSubscription(fakeScanner{values: []any{"sub_1", "ten_1", "end_1", []string{"invoice.paid"}, "raw", "trn_1", "trv_1", domain.StateActive, 2, "sv_2", now}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if subscription.TenantID != "ten_1" || subscription.ActiveVersionID != "sv_2" {
+		t.Fatalf("subscription scan mismatch: %+v", subscription)
+	}
+	routeVersion, err := scanRouteVersion(fakeScanner{values: []any{"rv_3", "ten_1", "rte_1", 3, "sha256:cfg", "src_1", "invoices", 10, []string{"invoice.paid"}, "end_1", "rtp_1", "trn_1", "trv_1", domain.StateActive, "usr_1", now}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if routeVersion.ConfigHash != "sha256:cfg" || routeVersion.CreatedBy != "usr_1" {
+		t.Fatalf("route version scan mismatch: %+v", routeVersion)
+	}
+	retryPolicy, err := scanRetryPolicy(fakeScanner{values: []any{"rtp_1", "ten_1", "standard", 1, domain.StateActive, 5, 3600, 1, 300, 60, "usr_1", now}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if retryPolicy.MaxAttempts != 5 || retryPolicy.RateLimitPerMinute != 60 {
+		t.Fatalf("retry policy scan mismatch: %+v", retryPolicy)
+	}
+	transformation, err := scanTransformation(fakeScanner{values: []any{"trn_1", "ten_1", "redact", domain.StateActive, "trv_1", "usr_1", now, now}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if transformation.ActiveVersionID != "trv_1" {
+		t.Fatalf("transformation scan mismatch: %+v", transformation)
+	}
+	transformationVersion, err := scanTransformationVersion(fakeScanner{values: []any{"trv_1", "ten_1", "trn_1", 1, "sha256:cfg", json.RawMessage(`[{"op":"drop","path":"/secret"}]`), domain.StateActive, "usr_1", now}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if transformationVersion.Version != 1 || len(transformationVersion.Operations) == 0 {
+		t.Fatalf("transformation version scan mismatch: %+v", transformationVersion)
+	}
+	delivery, err := scanDelivery(fakeScanner{values: []any{"del_1", "ten_1", "evt_1", "end_1", "rte_1", "rv_3", "sub_1", "sv_2", "rtp_1", "", "adv_1", "nen_1", "trv_1", "dpl_1", "sha256:payload", "seed", domain.SignalDeliveryScheduled, 2, now}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if delivery.TenantID != "ten_1" || delivery.AttemptCount != 2 || delivery.DeliveryPayloadID != "dpl_1" {
+		t.Fatalf("delivery scan mismatch: %+v", delivery)
+	}
+
+	adapter, err := scanProviderAdapter(fakeScanner{values: []any{"pad_1", "ten_1", "stripe", domain.AdapterKindBuiltin, "desc", domain.AdapterRiskCore, domain.AdapterStateActive, "https://example.test/prov", "usr_1", now, now, epoch}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if normalized := normalizeProviderAdapter(adapter); !normalized.RetiredAt.IsZero() || normalized.TenantID != "ten_1" {
+		t.Fatalf("provider adapter scan mismatch: %+v", normalized)
+	}
+	version, err := scanAdapterVersion(fakeScanner{values: []any{"adv_1", "ten_1", "pad_1", "stripe", "v1", domain.AdapterKindBuiltin, "sha256:cfg", json.RawMessage(`{"provider":"stripe"}`), "sha256:def", "", "", "", "https://example.test/prov", domain.AdapterRiskCore, json.RawMessage(`{"passed":true}`), "reviewed", domain.AdapterStateActive, "usr_1", "rev_1", "act_1", now, epoch, epoch, epoch, epoch}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if normalized := normalizeAdapterVersion(version); !normalized.ReviewedAt.IsZero() || !normalized.ActivatedAt.IsZero() || normalized.ConfigHash != "sha256:cfg" {
+		t.Fatalf("adapter version scan mismatch: %+v", normalized)
+	}
+	vector, err := scanAdapterTestVector(fakeScanner{values: []any{"atv_1", "ten_1", "adv_1", "valid stripe", "positive", json.RawMessage(`{"headers":{}}`), json.RawMessage(`{"verified":true}`), "sha256:req", "sha256:expected", domain.StateActive, "usr_1", now, now}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if vector.TenantID != "ten_1" || vector.ExpectedSHA256 != "sha256:expected" {
+		t.Fatalf("adapter test vector scan mismatch: %+v", vector)
+	}
+	connection, err := scanProviderConnection(fakeScanner{values: []any{"pcn_1", "ten_1", "stripe prod", "stripe", domain.ProviderConnectionStateActive, "api_key", "sk_live_****", map[string]string{"source_id": "src_1"}, epoch, epoch, "usr_1", now, now}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if normalized := normalizeProviderConnection(connection); !normalized.VerifiedAt.IsZero() || normalized.Config["source_id"] != "src_1" {
+		t.Fatalf("provider connection scan mismatch: %+v", normalized)
+	}
+
+	job, err := scanReconciliationJob(fakeScanner{values: []any{"rcj_1", "ten_1", "pcn_1", "stripe", domain.ReconciliationJobStateRunning, true, true, false, true, "cus_1", epoch, epoch, "cursor", "operator request", 10, 2, 3, 1, 1, 1, 2, "partial", "usr_1", now, epoch, epoch, epoch}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if normalized := normalizeReconciliationJob(job); !normalized.WindowStart.IsZero() || normalized.TotalItems != 10 || normalized.FailedItems != 2 {
+		t.Fatalf("reconciliation job scan mismatch: %+v", normalized)
+	}
+	item, err := scanReconciliationItem(fakeScanner{values: []any{"rci_1", "ten_1", "rcj_1", "stripe", "evt_provider", "event", domain.ReconciliationOutcomeCaptured, "evt_local", "evt_recovered", "pae_1", true, "", json.RawMessage(`{"provider":"stripe"}`), now, now}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if item.TenantID != "ten_1" || !item.RedeliveryRequested || item.ProviderAPIEvidenceID != "pae_1" {
+		t.Fatalf("reconciliation item scan mismatch: %+v", item)
+	}
+}
+
 func TestAlertComparatorContract(t *testing.T) {
 	tests := []struct {
 		observed   float64

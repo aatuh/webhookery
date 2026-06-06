@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
@@ -11,6 +12,90 @@ import (
 	"strings"
 	"testing"
 )
+
+func TestRunCompletesEvidenceWorkflowAgainstWebhookeryAPI(t *testing.T) {
+	output := filepath.Join(t.TempDir(), "exports", "bundle.tar.gz")
+	var seen []string
+	var createdEventID string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seen = append(seen, r.Method+" "+r.URL.Path)
+		if r.Header.Get("Authorization") != "Bearer whkey_run" {
+			t.Fatalf("authorization header=%q", r.Header.Get("Authorization"))
+		}
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/v1/events":
+			if r.Header.Get("Idempotency-Key") == "" {
+				t.Fatal("event creation must set an idempotency key")
+			}
+			var event struct {
+				ID       string         `json:"id"`
+				Type     string         `json:"type"`
+				SourceID string         `json:"source_id"`
+				Data     map[string]any `json:"data"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&event); err != nil {
+				t.Fatal(err)
+			}
+			if event.Type != "sdk.evidence.demo" || event.SourceID != "src_run" || event.Data["sanitized"] != true {
+				t.Fatalf("unexpected event payload: %+v", event)
+			}
+			createdEventID = "evt_from_server"
+			_, _ = w.Write([]byte(`{"Accepted":true,"EventID":"evt_from_server"}`))
+		case r.Method == http.MethodPost && r.URL.Path == "/v1/incidents":
+			_, _ = w.Write([]byte(`{"id":"inc_1"}`))
+		case r.Method == http.MethodPost && r.URL.Path == "/v1/incidents/inc_1/events":
+			var body struct {
+				EventID string `json:"event_id"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Fatal(err)
+			}
+			if body.EventID != createdEventID {
+				t.Fatalf("incident event used %q, want %q", body.EventID, createdEventID)
+			}
+			w.WriteHeader(http.StatusNoContent)
+		case r.Method == http.MethodPost && r.URL.Path == "/v1/incidents/inc_1/generate-report":
+			w.WriteHeader(http.StatusNoContent)
+		case r.Method == http.MethodPost && r.URL.Path == "/v1/incidents/inc_1/evidence-export":
+			_, _ = w.Write([]byte(`{"id":"exp_1"}`))
+		case r.Method == http.MethodGet && r.URL.Path == "/v1/audit-exports/exp_1:download":
+			_, _ = w.Write([]byte("evidence bundle"))
+		case r.Method == http.MethodPost && r.URL.Path == "/v1/audit-chain:verify":
+			_, _ = w.Write([]byte(`{"tenant_id":"ten_1","valid":true,"from_sequence":1,"to_sequence":1,"failures":[]}`))
+		default:
+			t.Fatalf("unexpected request %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	t.Setenv("WEBHOOKERY_BASE_URL", server.URL)
+	t.Setenv("WEBHOOKERY_API_KEY", "whkey_run")
+	t.Setenv("WEBHOOKERY_SOURCE_ID", "src_run")
+	t.Setenv("WEBHOOKERY_EVIDENCE_OUTPUT", output)
+
+	if err := run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	body, err := os.ReadFile(output)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(body) != "evidence bundle" {
+		t.Fatalf("downloaded bundle=%q", string(body))
+	}
+	want := []string{
+		"POST /v1/events",
+		"POST /v1/incidents",
+		"POST /v1/incidents/inc_1/events",
+		"POST /v1/incidents/inc_1/generate-report",
+		"POST /v1/incidents/inc_1/evidence-export",
+		"GET /v1/audit-exports/exp_1:download",
+		"POST /v1/audit-chain:verify",
+	}
+	if strings.Join(seen, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("workflow requests:\n%s", strings.Join(seen, "\n"))
+	}
+}
 
 func TestRestClientDoJSONSendsBearerAndDecodesResponse(t *testing.T) {
 	var gotMethod, gotPath, gotAuth, gotAccept, gotContentType, gotBody string
