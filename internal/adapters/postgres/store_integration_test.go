@@ -1110,6 +1110,50 @@ func TestPostgresReplayCurrentDeliveryAndNoopEvidence(t *testing.T) {
 	assertPostgresAuditEvent(t, ctx, store, actor.TenantID, "replay.created", "replay_job", noopReplay.ID)
 }
 
+func TestPostgresDeliveryFanoutFallsBackToLegacyEnvelope(t *testing.T) {
+	ctx, store, actor := openPostgresIntegrationStore(t)
+	defer store.Close()
+
+	if _, err := store.pool.Exec(ctx, `UPDATE outbox SET state='completed', locked_by=NULL, lock_expires_at=NULL WHERE (tenant_id LIKE 'ten_it_%' OR tenant_id LIKE 'ten_rc_%') AND state <> 'completed'`); err != nil {
+		t.Fatalf("clear prior integration outbox work: %v", err)
+	}
+	now := time.Now().UTC().Truncate(time.Second)
+	eventType := "invoice.legacy_envelope"
+	control := app.NewControlService(store, ssrf.Validator{Resolver: ssrf.StaticResolver{"receiver.example.com": {netip.MustParseAddr("93.184.216.34")}}})
+	fanout := app.NewDeliveryFanoutService(store, fixedIntegrationClock{now: now})
+	source, endpoint := createPostgresIntegrationRoute(t, ctx, control, actor, eventType)
+	ingested := ingestPostgresIntegrationEvent(t, ctx, store, actor, source.ID, eventType, "evt_it_legacy_envelope_"+now.Format("150405.000000000"), now)
+
+	if _, err := store.pool.Exec(ctx, `DELETE FROM normalized_envelopes WHERE tenant_id=$1 AND event_id=$2`, actor.TenantID, ingested.EventID); err != nil {
+		t.Fatal(err)
+	}
+	outboxItems, err := store.ClaimOutbox(ctx, "it-legacy-envelope-route-outbox", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	routeOutbox := findPostgresOutboxItem(t, outboxItems, app.OutboxKindRouteEvent, ingested.EventID)
+	if err := fanout.ProcessOutbox(ctx, routeOutbox); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.CompleteOutbox(ctx, routeOutbox.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	var normalizedEnvelopeID, storageStatus string
+	var body []byte
+	if err := store.pool.QueryRow(ctx, `
+		SELECT normalized_envelope_id, storage_status, body
+		FROM delivery_payloads
+		WHERE tenant_id=$1 AND event_id=$2`,
+		actor.TenantID, ingested.EventID,
+	).Scan(&normalizedEnvelopeID, &storageStatus, &body); err != nil {
+		t.Fatal(err)
+	}
+	if normalizedEnvelopeID != "" || storageStatus != domain.StorageStatusStored || !bytes.Contains(body, []byte(`"raw_payload_hash"`)) {
+		t.Fatalf("expected legacy delivery envelope payload for endpoint %s, normalized=%q status=%s body=%s", endpoint.ID, normalizedEnvelopeID, storageStatus, string(body))
+	}
+}
+
 func TestPostgresSecretRotationAndOpsVisibility(t *testing.T) {
 	ctx, store, actor := openPostgresIntegrationStore(t)
 	defer store.Close()
@@ -1442,6 +1486,13 @@ func TestPostgresEvidenceExportIncludesBodyArtifactsAndProofs(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatal(err)
+	}
+	exports, err := control.ListAuditExports(ctx, actor, 20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !containsPostgresEvidenceExport(exports, export.ID, domain.EvidenceExportStateReady) {
+		t.Fatalf("expected audit export in tenant list, got %+v", exports)
 	}
 	download, err := control.DownloadAuditExport(ctx, actor, export.ID)
 	if err != nil {
@@ -2315,7 +2366,7 @@ func TestPostgresAuditChainAndRetentionEvidenceLifecycle(t *testing.T) {
 	ctx, store, actor := openPostgresIntegrationStore(t)
 	defer store.Close()
 
-	control := app.NewControlService(store, ssrf.Validator{})
+	control := app.NewControlService(store, ssrf.Validator{Resolver: ssrf.StaticResolver{"receiver.example.com": {netip.MustParseAddr("93.184.216.34")}}})
 	auditEvents, err := control.ListAuditEvents(ctx, actor, 20)
 	if err != nil {
 		t.Fatal(err)
@@ -2412,7 +2463,7 @@ func TestPostgresProviderAdapterRegistryLifecycle(t *testing.T) {
 	ctx, store, actor := openPostgresIntegrationStore(t)
 	defer store.Close()
 
-	control := app.NewControlService(store, ssrf.Validator{})
+	control := app.NewControlService(store, ssrf.Validator{Resolver: ssrf.StaticResolver{"receiver.example.com": {netip.MustParseAddr("93.184.216.34")}}})
 	suffix := strings.ReplaceAll(time.Now().UTC().Format("150405.000000000"), ".", "_")
 	adapter, err := control.CreateProviderAdapter(ctx, actor, app.CreateProviderAdapterRequest{
 		Name:          "integration_adapter_" + suffix,
@@ -3497,7 +3548,7 @@ func TestPostgresSchemaAndTransformationLifecycle(t *testing.T) {
 	ctx, store, actor := openPostgresIntegrationStore(t)
 	defer store.Close()
 
-	control := app.NewControlService(store, ssrf.Validator{})
+	control := app.NewControlService(store, ssrf.Validator{Resolver: ssrf.StaticResolver{"receiver.example.com": {netip.MustParseAddr("93.184.216.34")}}})
 	suffix := strings.ReplaceAll(time.Now().UTC().Format("150405.000000000"), ".", "_")
 	eventTypeName := "invoice.schema_" + suffix
 	eventType, err := control.CreateEventType(ctx, actor, app.CreateEventTypeRequest{
@@ -3606,6 +3657,29 @@ func TestPostgresSchemaAndTransformationLifecycle(t *testing.T) {
 	}
 	if activated.State != domain.StateActive {
 		t.Fatalf("expected activated transformation version, got %+v", activated)
+	}
+	source, err := control.CreateSource(ctx, actor, app.CreateSourceRequest{Name: "schema transformation source", Provider: "stripe", Adapter: "stripe", VerificationSecret: "whsec_schema"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	endpoint, _, err := control.CreateEndpoint(ctx, actor, app.CreateEndpointRequest{Name: "schema transformation endpoint", URL: "https://receiver.example.com/webhook"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	route, err := control.CreateRoute(ctx, actor, app.CreateRouteRequest{
+		SourceID:         source.ID,
+		Name:             "schema transformation route",
+		Priority:         5,
+		EventTypes:       []string{eventTypeName},
+		EndpointID:       endpoint.ID,
+		TransformationID: transformation.ID,
+		State:            domain.StateActive,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if route.TransformationVersionID != activated.ID {
+		t.Fatalf("route did not bind active transformation version: route=%+v activated=%+v", route, activated)
 	}
 	retiredSchema, err := control.DeleteEventSchema(ctx, actor, eventTypeName, "1", app.StateChangeRequest{Reason: "integration retire"})
 	if err != nil {
@@ -4015,6 +4089,15 @@ func containsPostgresAuditAction(events []domain.AuditEvent, action string) bool
 func containsPostgresAuditChainAnchor(anchors []domain.AuditChainAnchor, id string, toSequence int64) bool {
 	for _, anchor := range anchors {
 		if anchor.ID == id && anchor.ToSequence == toSequence {
+			return true
+		}
+	}
+	return false
+}
+
+func containsPostgresEvidenceExport(exports []domain.EvidenceExport, id, state string) bool {
+	for _, export := range exports {
+		if export.ID == id && export.State == state {
 			return true
 		}
 	}
