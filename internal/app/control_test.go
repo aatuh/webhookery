@@ -1216,6 +1216,13 @@ func TestControlServiceRetentionPolicyRequiresSecurityWrite(t *testing.T) {
 	if err != ErrForbidden {
 		t.Fatalf("expected forbidden retention write, got %v", err)
 	}
+	_, err = svc.UpdateRetentionPolicy(context.Background(), actor, "ret_1", UpdateRetentionPolicyRequest{RetentionDays: ptrInt(45)})
+	if err != ErrForbidden {
+		t.Fatalf("expected forbidden retention update, got %v", err)
+	}
+	if store.retentionPolicyID != "" {
+		t.Fatal("retention policy store must not be called before authorization")
+	}
 }
 
 func TestControlServiceRetentionLegalHoldRequiresReason(t *testing.T) {
@@ -1231,6 +1238,106 @@ func TestControlServiceRetentionLegalHoldRequiresReason(t *testing.T) {
 	_, err = svc.UpdateRetentionPolicy(context.Background(), actor, "ret_1", UpdateRetentionPolicyRequest{LegalHold: &hold})
 	if !errors.Is(err, ErrInvalidInput) {
 		t.Fatalf("expected invalid input for legal hold update without reason, got %v", err)
+	}
+}
+
+func TestControlServiceRetentionPolicyValidatesInputs(t *testing.T) {
+	store := &fakeControlStore{}
+	svc := NewControlService(store, ssrf.Validator{Resolver: ssrf.StaticResolver{}})
+	actor := authz.Actor{ID: "usr_1", TenantID: "ten_a", Role: authz.RoleOwner, Scopes: []string{"security:write"}}
+
+	for _, tc := range []struct {
+		name string
+		req  CreateRetentionPolicyRequest
+	}{
+		{
+			name: "unsupported resource type",
+			req:  CreateRetentionPolicyRequest{ResourceType: "session_tokens", RetentionDays: 30},
+		},
+		{
+			name: "retention days too low",
+			req:  CreateRetentionPolicyRequest{ResourceType: domain.RetentionResourceRawPayload, RetentionDays: 0},
+		},
+		{
+			name: "retention days too high",
+			req:  CreateRetentionPolicyRequest{ResourceType: domain.RetentionResourceAuditEvent, RetentionDays: 3651},
+		},
+		{
+			name: "invalid state",
+			req:  CreateRetentionPolicyRequest{ResourceType: domain.RetentionResourceNormalized, RetentionDays: 90, State: "paused"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := svc.CreateRetentionPolicy(context.Background(), actor, tc.req); !errors.Is(err, ErrInvalidInput) {
+				t.Fatalf("expected invalid input, got %v", err)
+			}
+			if store.retentionPolicyID != "" {
+				t.Fatal("retention policy store must not be called for invalid input")
+			}
+		})
+	}
+}
+
+func TestControlServiceUpdateRetentionPolicyValidatesAndScopesStore(t *testing.T) {
+	store := &fakeControlStore{}
+	svc := NewControlService(store, ssrf.Validator{Resolver: ssrf.StaticResolver{}})
+	actor := authz.Actor{ID: "usr_sec", TenantID: "ten_a", Role: authz.RoleOwner, Scopes: []string{"security:write"}}
+
+	for _, tc := range []struct {
+		name     string
+		policyID string
+		req      UpdateRetentionPolicyRequest
+	}{
+		{
+			name:     "blank policy id",
+			policyID: " ",
+			req:      UpdateRetentionPolicyRequest{RetentionDays: ptrInt(45)},
+		},
+		{
+			name:     "retention days too low",
+			policyID: "ret_1",
+			req:      UpdateRetentionPolicyRequest{RetentionDays: ptrInt(0)},
+		},
+		{
+			name:     "retention days too high",
+			policyID: "ret_1",
+			req:      UpdateRetentionPolicyRequest{RetentionDays: ptrInt(3651)},
+		},
+		{
+			name:     "invalid state",
+			policyID: "ret_1",
+			req:      UpdateRetentionPolicyRequest{State: "paused"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store.retentionPolicyID = ""
+			if _, err := svc.UpdateRetentionPolicy(context.Background(), actor, tc.policyID, tc.req); !errors.Is(err, ErrInvalidInput) {
+				t.Fatalf("expected invalid input, got %v", err)
+			}
+			if store.retentionPolicyID != "" {
+				t.Fatal("retention policy store must not be called for invalid input")
+			}
+		})
+	}
+
+	updated, err := svc.UpdateRetentionPolicy(context.Background(), actor, "ret_1", UpdateRetentionPolicyRequest{
+		RetentionDays: ptrInt(60),
+		State:         " disabled ",
+		SourceID:      ptrString(" src_123 "),
+		LegalHold:     ptrBool(true),
+		HoldReason:    ptrString(" litigation hold "),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.TenantID != "ten_a" || updated.ID != "ret_1" || updated.CreatedBy != "usr_sec" {
+		t.Fatalf("retention policy update was not tenant and actor scoped: %+v", updated)
+	}
+	if store.retentionPolicyTenantID != "ten_a" || store.retentionPolicyID != "ret_1" || store.retentionPolicyActorID != "usr_sec" {
+		t.Fatalf("retention policy store scope mismatch: tenant=%q policy=%q actor=%q", store.retentionPolicyTenantID, store.retentionPolicyID, store.retentionPolicyActorID)
+	}
+	if store.retentionPolicyReq.State != domain.StateDisabled || *store.retentionPolicyReq.SourceID != "src_123" || *store.retentionPolicyReq.HoldReason != "litigation hold" {
+		t.Fatalf("retention update fields were not normalized: %+v", store.retentionPolicyReq)
 	}
 }
 
@@ -1984,6 +2091,103 @@ func TestControlServiceUpdateRetryPolicyValidatesFields(t *testing.T) {
 	}
 }
 
+func TestControlServiceUpdateRetryPolicyRejectsInvalidBranches(t *testing.T) {
+	svc := NewControlService(&fakeControlStore{}, ssrf.Validator{Resolver: ssrf.StaticResolver{}})
+	actor := authz.Actor{ID: "usr_1", TenantID: "ten_a", Role: authz.RoleAdmin, Scopes: []string{"routes:write"}}
+
+	for _, tc := range []struct {
+		name     string
+		policyID string
+		req      UpdateRetryPolicyRequest
+	}{
+		{
+			name:     "blank policy id",
+			policyID: " ",
+			req:      UpdateRetryPolicyRequest{MaxAttempts: ptrInt(3), Reason: "tune retry"},
+		},
+		{
+			name:     "blank reason",
+			policyID: "rtp_123",
+			req:      UpdateRetryPolicyRequest{MaxAttempts: ptrInt(3), Reason: " "},
+		},
+		{
+			name:     "empty name",
+			policyID: "rtp_123",
+			req:      UpdateRetryPolicyRequest{Name: ptrString(" "), Reason: "rename"},
+		},
+		{
+			name:     "max duration too high",
+			policyID: "rtp_123",
+			req:      UpdateRetryPolicyRequest{MaxDurationSeconds: ptrInt(2592001), Reason: "tune retry"},
+		},
+		{
+			name:     "initial delay nonpositive",
+			policyID: "rtp_123",
+			req:      UpdateRetryPolicyRequest{InitialDelaySeconds: ptrInt(0), Reason: "tune retry"},
+		},
+		{
+			name:     "max delay too high",
+			policyID: "rtp_123",
+			req:      UpdateRetryPolicyRequest{MaxDelaySeconds: ptrInt(86401), Reason: "tune retry"},
+		},
+		{
+			name:     "initial delay greater than max delay",
+			policyID: "rtp_123",
+			req:      UpdateRetryPolicyRequest{InitialDelaySeconds: ptrInt(30), MaxDelaySeconds: ptrInt(10), Reason: "tune retry"},
+		},
+		{
+			name:     "negative rate limit",
+			policyID: "rtp_123",
+			req:      UpdateRetryPolicyRequest{RateLimitPerMinute: ptrInt(-1), Reason: "tune retry"},
+		},
+		{
+			name:     "invalid state",
+			policyID: "rtp_123",
+			req:      UpdateRetryPolicyRequest{State: ptrString("paused"), Reason: "tune retry"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store := &fakeControlStore{}
+			svc.store = store
+			if _, err := svc.UpdateRetryPolicy(context.Background(), actor, tc.policyID, tc.req); !errors.Is(err, ErrInvalidInput) {
+				t.Fatalf("expected invalid input, got %v", err)
+			}
+			if store.retryPolicyID != "" {
+				t.Fatal("retry policy store must not be called for invalid input")
+			}
+		})
+	}
+}
+
+func TestControlServiceUpdateRetryPolicyNormalizesMutableFields(t *testing.T) {
+	store := &fakeControlStore{}
+	svc := NewControlService(store, ssrf.Validator{Resolver: ssrf.StaticResolver{}})
+	actor := authz.Actor{ID: "usr_ops", TenantID: "ten_a", Role: authz.RoleAdmin, Scopes: []string{"routes:write"}}
+
+	updated, err := svc.UpdateRetryPolicy(context.Background(), actor, "rtp_123", UpdateRetryPolicyRequest{
+		Name:                ptrString(" standard retry "),
+		MaxAttempts:         ptrInt(8),
+		MaxDurationSeconds:  ptrInt(7200),
+		InitialDelaySeconds: ptrInt(5),
+		MaxDelaySeconds:     ptrInt(120),
+		RateLimitPerMinute:  ptrInt(0),
+		State:               ptrString(" disabled "),
+		Reason:              "capacity tune",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.TenantID != "ten_a" || updated.CreatedBy != "usr_ops" {
+		t.Fatalf("retry policy update was not tenant and actor scoped: %+v", updated)
+	}
+	if store.retryPolicyTenantID != "ten_a" || store.retryPolicyID != "rtp_123" {
+		t.Fatalf("retry policy store scope mismatch: tenant=%q policy=%q", store.retryPolicyTenantID, store.retryPolicyID)
+	}
+	if *store.retryPolicyReq.Name != "standard retry" || *store.retryPolicyReq.State != domain.StateDisabled {
+		t.Fatalf("retry policy update fields were not normalized: %+v", store.retryPolicyReq)
+	}
+}
+
 func TestControlServiceDeleteRetryPolicyRequiresReason(t *testing.T) {
 	store := &fakeControlStore{}
 	svc := NewControlService(store, ssrf.Validator{Resolver: ssrf.StaticResolver{}})
@@ -2353,6 +2557,98 @@ func TestControlServiceAlertRulesRequireOpsWriteAndReason(t *testing.T) {
 	}
 }
 
+func TestControlServiceAlertRuleUpdatesValidateAndScopeStore(t *testing.T) {
+	store := &fakeControlStore{}
+	svc := NewControlService(store, ssrf.Validator{Resolver: ssrf.StaticResolver{}})
+	reader := authz.Actor{ID: "usr_reader", TenantID: "ten_a", Role: authz.RoleOperator, Scopes: []string{"ops:read"}}
+	operator := authz.Actor{ID: "usr_ops", TenantID: "ten_a", Role: authz.RoleOperator, Scopes: []string{"ops:write", "ops:read"}}
+
+	_, err := svc.UpdateAlertRule(context.Background(), reader, "alr_1", UpdateAlertRuleRequest{Name: ptrString("DLQ"), Reason: "rename"})
+	if err != ErrForbidden {
+		t.Fatalf("expected forbidden alert update, got %v", err)
+	}
+	if store.alertID != "" {
+		t.Fatal("alert rule store must not be called before authorization")
+	}
+
+	channelIDsWithBlank := []string{"nch_1", " "}
+	for _, tc := range []struct {
+		name    string
+		alertID string
+		req     UpdateAlertRuleRequest
+	}{
+		{
+			name:    "blank alert id",
+			alertID: " ",
+			req:     UpdateAlertRuleRequest{Threshold: ptrFloat64(2), Reason: "tune"},
+		},
+		{
+			name:    "blank reason",
+			alertID: "alr_1",
+			req:     UpdateAlertRuleRequest{Threshold: ptrFloat64(2), Reason: " "},
+		},
+		{
+			name:    "empty name",
+			alertID: "alr_1",
+			req:     UpdateAlertRuleRequest{Name: ptrString(" "), Reason: "rename"},
+		},
+		{
+			name:    "bad comparator",
+			alertID: "alr_1",
+			req:     UpdateAlertRuleRequest{Comparator: ptrString("!="), Reason: "tune"},
+		},
+		{
+			name:    "window too low",
+			alertID: "alr_1",
+			req:     UpdateAlertRuleRequest{WindowSeconds: ptrInt(59), Reason: "tune"},
+		},
+		{
+			name:    "bad dimensions",
+			alertID: "alr_1",
+			req:     UpdateAlertRuleRequest{Dimensions: map[string]string{"bad key": "value"}, Reason: "tune"},
+		},
+		{
+			name:    "blank channel id",
+			alertID: "alr_1",
+			req:     UpdateAlertRuleRequest{ChannelIDs: &channelIDsWithBlank, Reason: "tune"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store.alertID = ""
+			if _, err := svc.UpdateAlertRule(context.Background(), operator, tc.alertID, tc.req); !errors.Is(err, ErrInvalidInput) {
+				t.Fatalf("expected invalid input, got %v", err)
+			}
+			if store.alertID != "" {
+				t.Fatal("alert rule store must not be called for invalid input")
+			}
+		})
+	}
+
+	channelIDs := []string{" nch_1 ", "nch_1", "nch_2"}
+	rule, err := svc.UpdateAlertRule(context.Background(), operator, "alr_1", UpdateAlertRuleRequest{
+		Name:          ptrString(" DLQ backlog "),
+		Threshold:     ptrFloat64(5.5),
+		Comparator:    ptrString(" >= "),
+		WindowSeconds: ptrInt(900),
+		Dimensions:    map[string]string{"queue": "outbox"},
+		State:         ptrString(" disabled "),
+		ChannelIDs:    &channelIDs,
+		Reason:        "reduce noise",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rule.TenantID != "ten_a" || rule.ID != "alr_1" || rule.CreatedBy != "usr_ops" {
+		t.Fatalf("alert update was not tenant and actor scoped: %+v", rule)
+	}
+	if store.alertTenantID != "ten_a" || store.alertID != "alr_1" || store.alertActorID != "usr_ops" {
+		t.Fatalf("alert store scope mismatch: tenant=%q alert=%q actor=%q", store.alertTenantID, store.alertID, store.alertActorID)
+	}
+	if *store.alertReq.Name != "DLQ backlog" || *store.alertReq.Comparator != ">=" || *store.alertReq.State != domain.StateDisabled || len(*store.alertReq.ChannelIDs) != 2 {
+		t.Fatalf("alert update fields were not normalized: %+v", store.alertReq)
+	}
+}
+
 func TestControlServiceAlertFiringAckRequiresOpsWriteAndReason(t *testing.T) {
 	store := &fakeControlStore{}
 	svc := NewControlService(store, ssrf.Validator{Resolver: ssrf.StaticResolver{}})
@@ -2405,6 +2701,99 @@ func TestControlServiceNotificationChannelsRequireOpsWriteSSRFAndRedactSecrets(t
 	}
 	if strings.Contains(string(raw), "0123456789abcdef") {
 		t.Fatalf("notification channel response exposed signing secret: %s", raw)
+	}
+}
+
+func TestControlServiceNotificationChannelUpdatesValidateSSRFAndScopeStore(t *testing.T) {
+	store := &fakeControlStore{}
+	svc := NewControlService(store, ssrf.Validator{Resolver: ssrf.StaticResolver{
+		"signals.example": {netip.MustParseAddr("93.184.216.34")},
+	}})
+	operator := authz.Actor{ID: "usr_ops", TenantID: "ten_a", Role: authz.RoleOperator, Scopes: []string{"ops:write", "ops:read"}}
+
+	for _, tc := range []struct {
+		name      string
+		channelID string
+		req       UpdateNotificationChannelRequest
+	}{
+		{
+			name:      "blank channel id",
+			channelID: " ",
+			req:       UpdateNotificationChannelRequest{Name: ptrString("pager"), Reason: "rename"},
+		},
+		{
+			name:      "blank reason",
+			channelID: "nch_1",
+			req:       UpdateNotificationChannelRequest{Name: ptrString("pager"), Reason: " "},
+		},
+		{
+			name:      "empty update",
+			channelID: "nch_1",
+			req:       UpdateNotificationChannelRequest{Reason: "noop"},
+		},
+		{
+			name:      "empty url",
+			channelID: "nch_1",
+			req:       UpdateNotificationChannelRequest{URL: ptrString(" "), Reason: "retarget"},
+		},
+		{
+			name:      "short signing secret",
+			channelID: "nch_1",
+			req:       UpdateNotificationChannelRequest{SigningSecret: ptrString("short"), Reason: "rotate"},
+		},
+		{
+			name:      "invalid state",
+			channelID: "nch_1",
+			req:       UpdateNotificationChannelRequest{State: ptrString("paused"), Reason: "pause"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store.notificationID = ""
+			if _, _, err := svc.UpdateNotificationChannel(context.Background(), operator, tc.channelID, tc.req); !errors.Is(err, ErrInvalidInput) {
+				t.Fatalf("expected invalid input, got %v", err)
+			}
+			if store.notificationID != "" {
+				t.Fatal("notification channel store must not be called for invalid input")
+			}
+		})
+	}
+
+	_, blocked, err := svc.UpdateNotificationChannel(context.Background(), operator, "nch_1", UpdateNotificationChannelRequest{URL: ptrString("http://169.254.169.254/latest"), Reason: "retarget"})
+	if !errors.Is(err, ErrInvalidInput) || blocked.Allowed {
+		t.Fatalf("expected SSRF rejection, result=%+v err=%v", blocked, err)
+	}
+	if store.notificationID != "" {
+		t.Fatal("notification channel store must not be called for blocked URL")
+	}
+
+	channel, result, err := svc.UpdateNotificationChannel(context.Background(), operator, "nch_1", UpdateNotificationChannelRequest{
+		Name:          ptrString(" Pager "),
+		URL:           ptrString(" https://signals.example/new "),
+		SigningSecret: ptrString(" 0123456789abcdef "),
+		State:         ptrString(" disabled "),
+		Reason:        "retarget",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.Allowed || result.NormalizedURL != "https://signals.example/new" {
+		t.Fatalf("expected allowed normalized URL, got %+v", result)
+	}
+	raw, err := json.Marshal(channel)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), "0123456789abcdef") {
+		t.Fatalf("notification update response exposed signing secret: %s", raw)
+	}
+	if channel.TenantID != "ten_a" || channel.ID != "nch_1" || channel.CreatedBy != "usr_ops" {
+		t.Fatalf("notification update was not tenant and actor scoped: %+v", channel)
+	}
+	if store.notificationTenantID != "ten_a" || store.notificationID != "nch_1" || store.notificationActorID != "usr_ops" {
+		t.Fatalf("notification store scope mismatch: tenant=%q channel=%q actor=%q", store.notificationTenantID, store.notificationID, store.notificationActorID)
+	}
+	if *store.notificationReq.Name != "Pager" || *store.notificationReq.URL != "https://signals.example/new" || *store.notificationReq.SigningSecret != "0123456789abcdef" || *store.notificationReq.State != domain.StateDisabled {
+		t.Fatalf("notification update fields were not normalized: %+v", store.notificationReq)
 	}
 }
 
@@ -2466,6 +2855,99 @@ func TestControlServiceSIEMSinksRequireSecurityWriteAndAuditRead(t *testing.T) {
 	_, err = svc.ListSIEMSinks(context.Background(), auditor, 10)
 	if err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestControlServiceSIEMSinkUpdatesValidateSSRFAndScopeStore(t *testing.T) {
+	store := &fakeControlStore{}
+	svc := NewControlService(store, ssrf.Validator{Resolver: ssrf.StaticResolver{
+		"siem.example": {netip.MustParseAddr("93.184.216.34")},
+	}})
+	security := authz.Actor{ID: "usr_sec", TenantID: "ten_a", Role: authz.RoleSecurity, Scopes: []string{"security:write", "audit:read"}}
+
+	for _, tc := range []struct {
+		name   string
+		sinkID string
+		req    UpdateSIEMSinkRequest
+	}{
+		{
+			name:   "blank sink id",
+			sinkID: " ",
+			req:    UpdateSIEMSinkRequest{Name: ptrString("soc"), Reason: "rename"},
+		},
+		{
+			name:   "blank reason",
+			sinkID: "snk_1",
+			req:    UpdateSIEMSinkRequest{Name: ptrString("soc"), Reason: " "},
+		},
+		{
+			name:   "empty update",
+			sinkID: "snk_1",
+			req:    UpdateSIEMSinkRequest{Reason: "noop"},
+		},
+		{
+			name:   "empty url",
+			sinkID: "snk_1",
+			req:    UpdateSIEMSinkRequest{URL: ptrString(" "), Reason: "retarget"},
+		},
+		{
+			name:   "short signing secret",
+			sinkID: "snk_1",
+			req:    UpdateSIEMSinkRequest{SigningSecret: ptrString("short"), Reason: "rotate"},
+		},
+		{
+			name:   "invalid state",
+			sinkID: "snk_1",
+			req:    UpdateSIEMSinkRequest{State: ptrString("paused"), Reason: "pause"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store.siemID = ""
+			if _, _, err := svc.UpdateSIEMSink(context.Background(), security, tc.sinkID, tc.req); !errors.Is(err, ErrInvalidInput) {
+				t.Fatalf("expected invalid input, got %v", err)
+			}
+			if store.siemID != "" {
+				t.Fatal("SIEM sink store must not be called for invalid input")
+			}
+		})
+	}
+
+	_, blocked, err := svc.UpdateSIEMSink(context.Background(), security, "snk_1", UpdateSIEMSinkRequest{URL: ptrString("http://169.254.169.254/latest"), Reason: "retarget"})
+	if !errors.Is(err, ErrInvalidInput) || blocked.Allowed {
+		t.Fatalf("expected SIEM SSRF rejection, result=%+v err=%v", blocked, err)
+	}
+	if store.siemID != "" {
+		t.Fatal("SIEM sink store must not be called for blocked URL")
+	}
+
+	sink, result, err := svc.UpdateSIEMSink(context.Background(), security, "snk_1", UpdateSIEMSinkRequest{
+		Name:          ptrString(" SOC "),
+		URL:           ptrString(" https://siem.example/new "),
+		SigningSecret: ptrString(" 0123456789abcdef "),
+		State:         ptrString(" disabled "),
+		Reason:        "retarget",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.Allowed || result.NormalizedURL != "https://siem.example/new" {
+		t.Fatalf("expected allowed normalized SIEM URL, got %+v", result)
+	}
+	raw, err := json.Marshal(sink)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), "0123456789abcdef") {
+		t.Fatalf("SIEM update response exposed signing secret: %s", raw)
+	}
+	if sink.TenantID != "ten_a" || sink.ID != "snk_1" || sink.CreatedBy != "usr_sec" {
+		t.Fatalf("SIEM update was not tenant and actor scoped: %+v", sink)
+	}
+	if store.siemTenantID != "ten_a" || store.siemID != "snk_1" || store.siemActorID != "usr_sec" {
+		t.Fatalf("SIEM store scope mismatch: tenant=%q sink=%q actor=%q", store.siemTenantID, store.siemID, store.siemActorID)
+	}
+	if *store.siemReq.Name != "SOC" || *store.siemReq.URL != "https://siem.example/new" || *store.siemReq.SigningSecret != "0123456789abcdef" || *store.siemReq.State != domain.StateDisabled {
+		t.Fatalf("SIEM update fields were not normalized: %+v", store.siemReq)
 	}
 }
 
@@ -2553,6 +3035,10 @@ type fakeControlStore struct {
 	retryPolicyTenantID          string
 	retryPolicyID                string
 	retryPolicyReq               UpdateRetryPolicyRequest
+	retentionPolicyTenantID      string
+	retentionPolicyID            string
+	retentionPolicyActorID       string
+	retentionPolicyReq           UpdateRetentionPolicyRequest
 	normalizedTenantID           string
 	normalizedMetadataOnly       bool
 	rawPayloadTenantID           string
@@ -2583,11 +3069,17 @@ type fakeControlStore struct {
 	opsTenantID                  string
 	metricName                   string
 	alertTenantID                string
+	alertID                      string
 	alertActorID                 string
+	alertReq                     UpdateAlertRuleRequest
 	notificationTenantID         string
+	notificationID               string
 	notificationActorID          string
+	notificationReq              UpdateNotificationChannelRequest
 	siemTenantID                 string
+	siemID                       string
 	siemActorID                  string
+	siemReq                      UpdateSIEMSinkRequest
 	replayReq                    ReplayRequest
 	approveReplayTenantID        string
 	approveReplayActorID         string
@@ -3167,11 +3659,35 @@ func (f *fakeControlStore) ListAlertRules(context.Context, string, int) ([]domai
 func (f *fakeControlStore) GetAlertRule(context.Context, string, string) (domain.AlertRule, error) {
 	return domain.AlertRule{}, nil
 }
-func (f *fakeControlStore) UpdateAlertRule(context.Context, string, string, string, UpdateAlertRuleRequest) (domain.AlertRule, error) {
-	return domain.AlertRule{}, nil
+func (f *fakeControlStore) UpdateAlertRule(_ context.Context, tenantID, alertID, actorID string, req UpdateAlertRuleRequest) (domain.AlertRule, error) {
+	f.alertTenantID = tenantID
+	f.alertID = alertID
+	f.alertActorID = actorID
+	f.alertReq = req
+	rule := domain.AlertRule{ID: alertID, TenantID: tenantID, Name: "DLQ", RuleType: domain.AlertRuleDeadLetterOpen, MetricName: "dead_letter.open", Threshold: 1, Comparator: ">=", WindowSeconds: 300, State: domain.StateActive, CreatedBy: actorID}
+	if req.Name != nil {
+		rule.Name = *req.Name
+	}
+	if req.Threshold != nil {
+		rule.Threshold = *req.Threshold
+	}
+	if req.Comparator != nil {
+		rule.Comparator = *req.Comparator
+	}
+	if req.WindowSeconds != nil {
+		rule.WindowSeconds = *req.WindowSeconds
+	}
+	if req.State != nil {
+		rule.State = *req.State
+	}
+	if req.ChannelIDs != nil {
+		rule.ChannelIDs = *req.ChannelIDs
+	}
+	return rule, nil
 }
 func (f *fakeControlStore) DeleteAlertRule(_ context.Context, tenantID, alertID, actorID, reason string) (domain.AlertRule, error) {
 	f.alertTenantID = tenantID
+	f.alertID = alertID
 	f.alertActorID = actorID
 	return domain.AlertRule{ID: alertID, TenantID: tenantID, State: domain.StateDisabled}, nil
 }
@@ -3201,11 +3717,24 @@ func (f *fakeControlStore) GetNotificationChannel(_ context.Context, tenantID, c
 }
 func (f *fakeControlStore) UpdateNotificationChannel(_ context.Context, tenantID, channelID, actorID string, req UpdateNotificationChannelRequest) (domain.NotificationChannel, error) {
 	f.notificationTenantID = tenantID
+	f.notificationID = channelID
 	f.notificationActorID = actorID
-	return domain.NotificationChannel{ID: channelID, TenantID: tenantID, State: domain.StateActive, SecretHint: "configured"}, nil
+	f.notificationReq = req
+	item := domain.NotificationChannel{ID: channelID, TenantID: tenantID, Name: "pager", ChannelType: domain.NotificationChannelWebhook, URL: "https://signals.example/hook", State: domain.StateActive, SecretHint: "configured", CreatedBy: actorID}
+	if req.Name != nil {
+		item.Name = *req.Name
+	}
+	if req.URL != nil {
+		item.URL = *req.URL
+	}
+	if req.State != nil {
+		item.State = *req.State
+	}
+	return item, nil
 }
 func (f *fakeControlStore) DeleteNotificationChannel(_ context.Context, tenantID, channelID, actorID, reason string) (domain.NotificationChannel, error) {
 	f.notificationTenantID = tenantID
+	f.notificationID = channelID
 	f.notificationActorID = actorID
 	return domain.NotificationChannel{ID: channelID, TenantID: tenantID, State: domain.StateDisabled, SecretHint: "configured"}, nil
 }
@@ -3242,11 +3771,24 @@ func (f *fakeControlStore) GetSIEMSink(_ context.Context, tenantID, sinkID strin
 }
 func (f *fakeControlStore) UpdateSIEMSink(_ context.Context, tenantID, sinkID, actorID string, req UpdateSIEMSinkRequest) (domain.SIEMSink, error) {
 	f.siemTenantID = tenantID
+	f.siemID = sinkID
 	f.siemActorID = actorID
-	return domain.SIEMSink{ID: sinkID, TenantID: tenantID, State: domain.StateActive, SecretHint: "configured"}, nil
+	f.siemReq = req
+	item := domain.SIEMSink{ID: sinkID, TenantID: tenantID, Name: "siem", SinkType: domain.SIEMSinkWebhook, URL: "https://siem.example/ingest", State: domain.StateActive, SecretHint: "configured", CreatedBy: actorID}
+	if req.Name != nil {
+		item.Name = *req.Name
+	}
+	if req.URL != nil {
+		item.URL = *req.URL
+	}
+	if req.State != nil {
+		item.State = *req.State
+	}
+	return item, nil
 }
 func (f *fakeControlStore) DeleteSIEMSink(_ context.Context, tenantID, sinkID, actorID, reason string) (domain.SIEMSink, error) {
 	f.siemTenantID = tenantID
+	f.siemID = sinkID
 	f.siemActorID = actorID
 	return domain.SIEMSink{ID: sinkID, TenantID: tenantID, State: domain.StateDisabled, SecretHint: "configured"}, nil
 }
@@ -3290,9 +3832,16 @@ func (f *fakeControlStore) ListRetentionPolicies(context.Context, string, int) (
 	return nil, nil
 }
 func (f *fakeControlStore) CreateRetentionPolicy(_ context.Context, tenantID, actorID string, req CreateRetentionPolicyRequest) (domain.RetentionPolicy, error) {
+	f.retentionPolicyTenantID = tenantID
+	f.retentionPolicyID = "ret_1"
+	f.retentionPolicyActorID = actorID
 	return domain.RetentionPolicy{ID: "ret_1", TenantID: tenantID, ResourceType: req.ResourceType, RetentionDays: req.RetentionDays, LegalHold: req.LegalHold, HoldReason: req.HoldReason, CreatedBy: actorID}, nil
 }
 func (f *fakeControlStore) UpdateRetentionPolicy(_ context.Context, tenantID, policyID, actorID string, req UpdateRetentionPolicyRequest) (domain.RetentionPolicy, error) {
+	f.retentionPolicyTenantID = tenantID
+	f.retentionPolicyID = policyID
+	f.retentionPolicyActorID = actorID
+	f.retentionPolicyReq = req
 	days := 30
 	if req.RetentionDays != nil {
 		days = *req.RetentionDays
@@ -3479,5 +4028,13 @@ func ptrString(v string) *string {
 }
 
 func ptrInt(v int) *int {
+	return &v
+}
+
+func ptrFloat64(v float64) *float64 {
+	return &v
+}
+
+func ptrBool(v bool) *bool {
 	return &v
 }
