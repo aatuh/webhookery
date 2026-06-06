@@ -1363,6 +1363,190 @@ func TestPostgresEvidenceExportIncludesBodyArtifactsAndProofs(t *testing.T) {
 	}
 }
 
+func TestPostgresRetentionDeletesBodyArtifactsAndTombstonesAuditEvents(t *testing.T) {
+	ctx, store, actor := openPostgresIntegrationStore(t)
+	defer store.Close()
+
+	now := time.Now().UTC().Truncate(time.Second)
+	control := app.NewControlService(store, ssrf.Validator{Resolver: ssrf.StaticResolver{"receiver.example.com": {netip.MustParseAddr("93.184.216.34")}}})
+	source, _ := createPostgresIntegrationRoute(t, ctx, control, actor, "invoice.retention")
+	providerID := "evt_it_retention_" + now.Format("150405.000000000")
+	event := ingestPostgresIntegrationEvent(t, ctx, store, actor, source.ID, "invoice.retention", providerID, now)
+	if created, err := app.NewDeliveryFanoutService(store, app.SystemClock{}).CreateDeliveriesForEvent(ctx, actor.TenantID, event.EventID, app.DeliveryFanoutOptions{}); err != nil {
+		t.Fatal(err)
+	} else if created == 0 {
+		t.Fatal("expected fanout delivery payload fixture")
+	}
+
+	var normalizedID, deliveryPayloadID string
+	if err := store.pool.QueryRow(ctx, `SELECT id FROM normalized_envelopes WHERE tenant_id=$1 AND event_id=$2`, actor.TenantID, event.EventID).Scan(&normalizedID); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.pool.QueryRow(ctx, `SELECT id FROM delivery_payloads WHERE tenant_id=$1 AND event_id=$2`, actor.TenantID, event.EventID).Scan(&deliveryPayloadID); err != nil {
+		t.Fatal(err)
+	}
+	connection, err := store.CreateProviderConnection(ctx, actor.TenantID, actor.ID, app.CreateProviderConnectionRequest{
+		Name:           "retention evidence connection",
+		Provider:       "stripe",
+		CredentialType: "api_key",
+		Credential:     "sk_test_retention_placeholder",
+		Config:         map[string]string{"source_id": source.ID},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	reconciliationJob, err := store.CreateReconciliationJob(ctx, actor.TenantID, actor.ID, app.ReconciliationJobRequest{
+		ConnectionID: connection.ID,
+		DryRun:       true,
+		WindowStart:  now.Add(-time.Hour),
+		WindowEnd:    now.Add(time.Hour),
+		Reason:       "retention body evidence fixture",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	providerEvidenceID, err := store.insertProviderAPIEvidence(ctx, actor.TenantID, reconciliationJob.ID, "", connection.ID, connection.Provider, reconcile.Evidence{
+		Method:     "GET",
+		URL:        "https://api.stripe.com/v1/events/" + providerID,
+		StatusCode: 200,
+		Body:       []byte(`{"id":"` + providerID + `","object":"event","secret":"redacted-fixture"}`),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	tx, err := store.pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	auditEvent, err := recordAuditEventTx(ctx, tx, auditEventInput{
+		TenantID:   actor.TenantID,
+		ActorID:    actor.ID,
+		Action:     "retention.fixture",
+		Resource:   "event",
+		ResourceID: event.EventID,
+		Reason:     "aged audit event retention fixture",
+		OccurredAt: now.Add(-48 * time.Hour),
+	})
+	if err != nil {
+		_ = tx.Rollback(ctx)
+		t.Fatal(err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := store.pool.Exec(ctx, `UPDATE normalized_envelopes SET created_at=now() - interval '48 hours' WHERE tenant_id=$1 AND id=$2`, actor.TenantID, normalizedID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.pool.Exec(ctx, `UPDATE delivery_payloads SET created_at=now() - interval '48 hours' WHERE tenant_id=$1 AND id=$2`, actor.TenantID, deliveryPayloadID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.pool.Exec(ctx, `UPDATE provider_api_evidence SET created_at=now() - interval '48 hours' WHERE tenant_id=$1 AND id=$2`, actor.TenantID, providerEvidenceID); err != nil {
+		t.Fatal(err)
+	}
+
+	normalizedPolicy, err := store.CreateRetentionPolicy(ctx, actor.TenantID, actor.ID, app.CreateRetentionPolicyRequest{
+		ResourceType:  domain.RetentionResourceNormalized,
+		SourceID:      source.ID,
+		RetentionDays: 1,
+		State:         domain.StateActive,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	deliveryPolicy, err := store.CreateRetentionPolicy(ctx, actor.TenantID, actor.ID, app.CreateRetentionPolicyRequest{
+		ResourceType:  domain.RetentionResourceDeliveryPayload,
+		SourceID:      source.ID,
+		RetentionDays: 1,
+		State:         domain.StateActive,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	providerPolicy, err := store.CreateRetentionPolicy(ctx, actor.TenantID, actor.ID, app.CreateRetentionPolicyRequest{
+		ResourceType:  domain.RetentionResourceProviderAPI,
+		RetentionDays: 1,
+		State:         domain.StateActive,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	auditPolicy, err := store.CreateRetentionPolicy(ctx, actor.TenantID, actor.ID, app.CreateRetentionPolicyRequest{
+		ResourceType:  domain.RetentionResourceAuditEvent,
+		RetentionDays: 1,
+		State:         domain.StateActive,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, policy := range []domain.RetentionPolicy{normalizedPolicy, deliveryPolicy, providerPolicy, auditPolicy} {
+		if err := store.applyRetentionPolicy(ctx, "it-retention-body-worker", policy); err != nil {
+			t.Fatalf("apply %s retention: %v", policy.ResourceType, err)
+		}
+	}
+
+	var normalizedStatus string
+	var normalizedDeleted, normalizedEnvelopeCleared, normalizedDataCleared bool
+	if err := store.pool.QueryRow(ctx, `
+		SELECT storage_status, storage_deleted_at IS NOT NULL, envelope_json='{}'::jsonb, data_json='{}'::jsonb
+		FROM normalized_envelopes
+		WHERE tenant_id=$1 AND id=$2`, actor.TenantID, normalizedID).Scan(&normalizedStatus, &normalizedDeleted, &normalizedEnvelopeCleared, &normalizedDataCleared); err != nil {
+		t.Fatal(err)
+	}
+	if normalizedStatus != domain.StorageStatusDeleted || !normalizedDeleted || !normalizedEnvelopeCleared || !normalizedDataCleared {
+		t.Fatalf("normalized envelope retention did not delete body data: status=%s deleted=%v envelope=%v data=%v", normalizedStatus, normalizedDeleted, normalizedEnvelopeCleared, normalizedDataCleared)
+	}
+	var deliveryStatus string
+	var deliveryDeleted bool
+	var deliveryBodyBytes int
+	if err := store.pool.QueryRow(ctx, `
+		SELECT storage_status, storage_deleted_at IS NOT NULL, octet_length(body)
+		FROM delivery_payloads
+		WHERE tenant_id=$1 AND id=$2`, actor.TenantID, deliveryPayloadID).Scan(&deliveryStatus, &deliveryDeleted, &deliveryBodyBytes); err != nil {
+		t.Fatal(err)
+	}
+	if deliveryStatus != domain.StorageStatusDeleted || !deliveryDeleted || deliveryBodyBytes != 0 {
+		t.Fatalf("delivery payload retention did not delete body: status=%s deleted=%v bytes=%d", deliveryStatus, deliveryDeleted, deliveryBodyBytes)
+	}
+	var providerStatus string
+	var providerDeleted bool
+	var providerBodyBytes int
+	if err := store.pool.QueryRow(ctx, `
+		SELECT storage_status, storage_deleted_at IS NOT NULL, octet_length(response_body)
+		FROM provider_api_evidence
+		WHERE tenant_id=$1 AND id=$2`, actor.TenantID, providerEvidenceID).Scan(&providerStatus, &providerDeleted, &providerBodyBytes); err != nil {
+		t.Fatal(err)
+	}
+	if providerStatus != domain.ProviderAPIEvidenceStorageStatusDeleted || !providerDeleted || providerBodyBytes != 0 {
+		t.Fatalf("provider API evidence retention did not delete response body: status=%s deleted=%v bytes=%d", providerStatus, providerDeleted, providerBodyBytes)
+	}
+	var retainedAuditRows int
+	if err := store.pool.QueryRow(ctx, `SELECT count(*) FROM audit_events WHERE tenant_id=$1 AND id=$2`, actor.TenantID, auditEvent.ID).Scan(&retainedAuditRows); err != nil {
+		t.Fatal(err)
+	}
+	if retainedAuditRows != 0 {
+		t.Fatalf("audit retention left %d audit event rows", retainedAuditRows)
+	}
+	var chainState, tombstoneReason string
+	var auditDeleted bool
+	if err := store.pool.QueryRow(ctx, `
+		SELECT state, audit_event_deleted_at IS NOT NULL, tombstone_reason
+		FROM audit_chain_entries
+		WHERE tenant_id=$1 AND audit_event_id=$2`, actor.TenantID, auditEvent.ID).Scan(&chainState, &auditDeleted, &tombstoneReason); err != nil {
+		t.Fatal(err)
+	}
+	if chainState != domain.AuditChainEntryStateRetained || !auditDeleted || tombstoneReason != "retention_policy:"+auditPolicy.ID {
+		t.Fatalf("audit retention did not tombstone chain entry: state=%s deleted=%v reason=%s", chainState, auditDeleted, tombstoneReason)
+	}
+
+	assertPostgresRetentionRunItem(t, ctx, store, actor.TenantID, normalizedPolicy.ID, domain.RetentionResourceNormalized, "delete_body", normalizedID)
+	assertPostgresRetentionRunItem(t, ctx, store, actor.TenantID, deliveryPolicy.ID, domain.RetentionResourceDeliveryPayload, "delete_body", deliveryPayloadID)
+	assertPostgresRetentionRunItem(t, ctx, store, actor.TenantID, providerPolicy.ID, domain.RetentionResourceProviderAPI, "delete_body", providerEvidenceID)
+	assertPostgresRetentionRunItem(t, ctx, store, actor.TenantID, auditPolicy.ID, domain.RetentionResourceAuditEvent, "delete_row", auditEvent.ID)
+}
+
 func TestPostgresAuditChainBackfillIsBoundedAndIdempotent(t *testing.T) {
 	ctx, store, _ := openPostgresIntegrationStore(t)
 	defer store.Close()
@@ -3525,6 +3709,31 @@ func assertPostgresNoAuditEvent(t *testing.T, ctx context.Context, store *Store,
 	}
 }
 
+func assertPostgresRetentionRunItem(t *testing.T, ctx context.Context, store *Store, tenantID, policyID, resourceType, action, resourceID string) {
+	t.Helper()
+	var runState string
+	var matchedItems, processedItems, itemCount int
+	if err := store.pool.QueryRow(ctx, `
+		SELECT r.state, r.matched_items, r.processed_items, count(i.id)
+		FROM retention_runs r
+		JOIN retention_run_items i ON i.tenant_id=r.tenant_id AND i.retention_run_id=r.id
+		WHERE r.tenant_id=$1
+		  AND r.policy_id=$2
+		  AND r.resource_type=$3
+		  AND i.resource_type=$3
+		  AND i.resource_id=$4
+		  AND i.action=$5
+		  AND i.state='completed'
+		GROUP BY r.id, r.state, r.matched_items, r.processed_items`,
+		tenantID, policyID, resourceType, resourceID, action,
+	).Scan(&runState, &matchedItems, &processedItems, &itemCount); err != nil {
+		t.Fatal(err)
+	}
+	if runState != domain.RetentionRunStateCompleted || matchedItems != 1 || processedItems != 1 || itemCount != 1 {
+		t.Fatalf("retention run evidence mismatch for %s/%s: state=%s matched=%d processed=%d items=%d", resourceType, resourceID, runState, matchedItems, processedItems, itemCount)
+	}
+}
+
 func containsPostgresAuthSession(sessions []domain.AuthSession, id, state string) bool {
 	for _, session := range sessions {
 		if session.ID == id && session.State == state {
@@ -4121,7 +4330,7 @@ func openPostgresIntegrationStore(t *testing.T) (context.Context, *Store, authz.
 	if databaseURL == "" {
 		t.Skip("WEBHOOKERY_TEST_DATABASE_URL is required to prove live Postgres tenant predicates, transactions, locks, outbox, replay, export, and migration behavior")
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	t.Cleanup(cancel)
 	migrationsDir := filepath.Join("..", "..", "..", "migrations")
 	if err := MigrateUp(ctx, databaseURL, migrationsDir); err != nil {
