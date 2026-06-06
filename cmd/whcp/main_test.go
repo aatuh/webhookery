@@ -377,6 +377,101 @@ func TestJSONRequestHelpersUseExpectedMethodsAndPaths(t *testing.T) {
 	}
 }
 
+func TestGetJSONDecodeSendsBearerAndDecodesResponse(t *testing.T) {
+	var gotAuth string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			t.Fatalf("method=%s want GET", r.Method)
+		}
+		if r.URL.Path != "/v1/events/evt_1" {
+			t.Fatalf("path=%s want /v1/events/evt_1", r.URL.Path)
+		}
+		gotAuth = r.Header.Get("Authorization")
+		_ = json.NewEncoder(w).Encode(map[string]string{"id": "evt_1"})
+	}))
+	defer server.Close()
+
+	var decoded struct {
+		ID string `json:"id"`
+	}
+	if err := getJSONDecode(server.URL, "whkey_decode", "/v1/events/evt_1", &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if gotAuth != "Bearer whkey_decode" {
+		t.Fatalf("authorization header %q did not use the provided API key", gotAuth)
+	}
+	if decoded.ID != "evt_1" {
+		t.Fatalf("decoded id=%q want evt_1", decoded.ID)
+	}
+}
+
+func TestGetJSONDecodeProblemErrorRedactsBodyDetails(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = w.Write([]byte(`{"stable_code":"WEBHOOKERY_TENANT_ACCESS_DENIED","request_id":"req_get","detail":"tenant secret detail"}`))
+	}))
+	defer server.Close()
+
+	var decoded map[string]any
+	err := getJSONDecode(server.URL, "whkey_should_not_leak", "/v1/events/evt_1", &decoded)
+	if err == nil {
+		t.Fatal("expected problem response")
+	}
+	got := err.Error()
+	for _, want := range []string{"request failed", "403", "WEBHOOKERY_TENANT_ACCESS_DENIED", "req_get"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("error %q did not contain %q", got, want)
+		}
+	}
+	for _, forbidden := range []string{"whkey_should_not_leak", "tenant secret detail"} {
+		if strings.Contains(got, forbidden) {
+			t.Fatalf("error %q leaked %q", got, forbidden)
+		}
+	}
+}
+
+func TestPostJSONDecodeSendsJSONAndDecodesResponse(t *testing.T) {
+	var gotAuth, gotContentType, gotBody string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			t.Fatalf("method=%s want POST", r.Method)
+		}
+		if r.URL.Path != "/v1/incidents/inc_1/evidence-export" {
+			t.Fatalf("path=%s want evidence-export path", r.URL.Path)
+		}
+		gotAuth = r.Header.Get("Authorization")
+		gotContentType = r.Header.Get("Content-Type")
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		gotBody = string(body)
+		w.WriteHeader(http.StatusCreated)
+		_, _ = w.Write([]byte(`{"id":"exp_1"}`))
+	}))
+	defer server.Close()
+
+	var decoded struct {
+		ID string `json:"id"`
+	}
+	err := postJSONDecode(server.URL, "whkey_post_decode", "/v1/incidents/inc_1/evidence-export", map[string]string{"reason": "customer handoff"}, &decoded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotAuth != "Bearer whkey_post_decode" {
+		t.Fatalf("authorization header %q did not use the provided API key", gotAuth)
+	}
+	if gotContentType != "application/json" {
+		t.Fatalf("content-type=%q want application/json", gotContentType)
+	}
+	if gotBody != `{"reason":"customer handoff"}` {
+		t.Fatalf("body=%s", gotBody)
+	}
+	if decoded.ID != "exp_1" {
+		t.Fatalf("decoded export id=%q want exp_1", decoded.ID)
+	}
+}
+
 func TestCLIResourceCommandsSendExpectedRequests(t *testing.T) {
 	type request struct {
 		method string
@@ -641,6 +736,97 @@ func TestCLIResourceCommandsSendExpectedRequests(t *testing.T) {
 	}
 }
 
+func TestDownloadIncidentReportRequiresValidInputsBeforeRequest(t *testing.T) {
+	called := false
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		called = true
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	if err := downloadIncidentReport(server.URL, "whkey_test", " ", "markdown", "-"); err == nil || !strings.Contains(err.Error(), "incident-id is required") {
+		t.Fatalf("expected missing incident id error, got %v", err)
+	}
+	if err := downloadIncidentReport(server.URL, "whkey_test", "inc_1", "html", "-"); err == nil || !strings.Contains(err.Error(), "format must be markdown or json") {
+		t.Fatalf("expected invalid format error, got %v", err)
+	}
+	if called {
+		t.Fatal("download request should not be sent when local validation fails")
+	}
+}
+
+func TestDownloadIncidentReportWritesPrivateFileAndEscapesQuery(t *testing.T) {
+	var gotAuth, gotQuery string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			t.Fatalf("method=%s want GET", r.Method)
+		}
+		if r.URL.Path != "/v1/incidents/inc_1/report" {
+			t.Fatalf("path=%s want incident report path", r.URL.Path)
+		}
+		gotAuth = r.Header.Get("Authorization")
+		gotQuery = r.URL.RawQuery
+		_, _ = w.Write([]byte("# Incident Report\n"))
+	}))
+	defer server.Close()
+
+	output := filepath.Join(t.TempDir(), "incident.md")
+	if err := downloadIncidentReport(server.URL, "whkey_report", "inc_1", "MARKDOWN", output); err != nil {
+		t.Fatal(err)
+	}
+	if gotAuth != "Bearer whkey_report" {
+		t.Fatalf("authorization header %q did not use the provided API key", gotAuth)
+	}
+	if gotQuery != "format=markdown" {
+		t.Fatalf("query=%q want format=markdown", gotQuery)
+	}
+	body, err := os.ReadFile(output)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(body) != "# Incident Report\n" {
+		t.Fatalf("unexpected report body %q", string(body))
+	}
+	info, err := os.Stat(output)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := info.Mode().Perm(); got != 0o600 {
+		t.Fatalf("permissions=%o want 0600", got)
+	}
+}
+
+func TestDownloadIncidentReportCanWriteToStdout(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("format") != "json" {
+			t.Fatalf("format=%q want json", r.URL.Query().Get("format"))
+		}
+		_, _ = w.Write([]byte(`{"incident_id":"inc_1"}`))
+	}))
+	defer server.Close()
+
+	oldStdout := os.Stdout
+	reader, writer, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Stdout = writer
+	defer func() { os.Stdout = oldStdout }()
+
+	err = downloadIncidentReport(server.URL, "whkey_report", "inc_1", "json", "-")
+	_ = writer.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := io.ReadAll(reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(body) != `{"incident_id":"inc_1"}` {
+		t.Fatalf("unexpected stdout body %q", string(body))
+	}
+}
+
 func TestDownloadAuditExportWritesPrivateFile(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/v1/audit-exports/exp_1:download" {
@@ -670,6 +856,72 @@ func TestDownloadAuditExportWritesPrivateFile(t *testing.T) {
 	}
 	if got := info.Mode().Perm(); got != 0o600 {
 		t.Fatalf("permissions=%o want 0600", got)
+	}
+}
+
+func TestCreateAndDownloadIncidentExportCreatesThenDownloadsPrivateFile(t *testing.T) {
+	var seen []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		seen = append(seen, r.Method+" "+r.URL.Path+" "+r.Header.Get("Authorization")+" "+string(body))
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/v1/incidents/inc_1/evidence-export":
+			w.WriteHeader(http.StatusCreated)
+			_, _ = w.Write([]byte(`{"id":"exp_created"}`))
+		case r.Method == http.MethodGet && r.URL.Path == "/v1/audit-exports/exp_created:download":
+			_, _ = w.Write([]byte("evidence bundle"))
+		default:
+			t.Fatalf("unexpected request %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	output := filepath.Join(t.TempDir(), "incident-export.tar.gz")
+	if err := createAndDownloadIncidentExport(server.URL, "whkey_incident_export", "inc_1", "customer evidence", output); err != nil {
+		t.Fatal(err)
+	}
+	wantSeen := []string{
+		`POST /v1/incidents/inc_1/evidence-export Bearer whkey_incident_export {"reason":"customer evidence"}`,
+		`GET /v1/audit-exports/exp_created:download Bearer whkey_incident_export `,
+	}
+	if strings.Join(seen, "\n") != strings.Join(wantSeen, "\n") {
+		t.Fatalf("unexpected request sequence:\ngot:\n%s\nwant:\n%s", strings.Join(seen, "\n"), strings.Join(wantSeen, "\n"))
+	}
+	body, err := os.ReadFile(output)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(body) != "evidence bundle" {
+		t.Fatalf("unexpected export body %q", string(body))
+	}
+	info, err := os.Stat(output)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := info.Mode().Perm(); got != 0o600 {
+		t.Fatalf("permissions=%o want 0600", got)
+	}
+}
+
+func TestCreateAndDownloadIncidentExportRequiresReturnedID(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/v1/incidents/inc_1/evidence-export" {
+			t.Fatalf("unexpected request %s %s", r.Method, r.URL.Path)
+		}
+		_, _ = w.Write([]byte(`{"id":" "}`))
+	}))
+	defer server.Close()
+
+	output := filepath.Join(t.TempDir(), "incident-export.tar.gz")
+	err := createAndDownloadIncidentExport(server.URL, "whkey_incident_export", "inc_1", "customer evidence", output)
+	if err == nil || !strings.Contains(err.Error(), "did not include id") {
+		t.Fatalf("expected missing export id error, got %v", err)
+	}
+	if _, statErr := os.Stat(output); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("output should not exist when export id is missing, stat err=%v", statErr)
 	}
 }
 
