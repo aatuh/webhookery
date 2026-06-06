@@ -3,6 +3,7 @@ package reconcile
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -14,6 +15,113 @@ func TestRedactCredentialDoesNotExposeToken(t *testing.T) {
 	got := RedactCredential("sk_test_1234567890")
 	if got == "sk_test_1234567890" || !strings.Contains(got, "...") {
 		t.Fatalf("credential was not redacted: %q", got)
+	}
+	if RedactCredential("") != "" {
+		t.Fatal("empty credential should remain empty")
+	}
+	if RedactCredential("short") != "****" {
+		t.Fatal("short credential should be fully redacted")
+	}
+}
+
+func TestProviderErrorClassifiesAndRedactsProviderFailures(t *testing.T) {
+	if got := (ProviderError{Class: ErrorRetryable}).Error(); got != ErrorRetryable {
+		t.Fatalf("expected class fallback, got %q", got)
+	}
+	if got := (ProviderError{Class: ErrorForbidden, Message: "forbidden"}).Error(); got != "forbidden" {
+		t.Fatalf("expected message error, got %q", got)
+	}
+
+	tests := []struct {
+		status int
+		body   []byte
+		want   string
+	}{
+		{status: http.StatusTooManyRequests, body: []byte("slow down"), want: ErrorRateLimited},
+		{status: http.StatusUnauthorized, body: []byte("nope"), want: ErrorForbidden},
+		{status: http.StatusForbidden, body: []byte("nope"), want: ErrorForbidden},
+		{status: http.StatusNotFound, body: []byte("missing"), want: ErrorNotFound},
+		{status: http.StatusBadRequest, body: []byte("bad input"), want: ErrorInvalidInput},
+		{status: http.StatusInternalServerError, body: []byte("server down"), want: ErrorRetryable},
+	}
+	for _, tt := range tests {
+		err := ClassifyHTTPError(tt.status, tt.body)
+		if err.Class != tt.want || err.StatusCode != tt.status {
+			t.Fatalf("status %d classified as %+v, want %s", tt.status, err, tt.want)
+		}
+	}
+	for _, secretBody := range [][]byte{
+		[]byte("sk_test_secret leaked"),
+		[]byte("ghp_secret leaked"),
+		[]byte("github_pat_secret leaked"),
+		[]byte("xoxb-secret leaked"),
+		[]byte("shpat_secret leaked"),
+	} {
+		err := ClassifyHTTPError(http.StatusBadRequest, secretBody)
+		if strings.Contains(err.Message, "secret") || err.Message != "provider request failed" {
+			t.Fatalf("provider error leaked credential body: %+v", err)
+		}
+	}
+}
+
+func TestProviderBaseURLValidation(t *testing.T) {
+	official, err := providerBaseURL(nil, "https://api.stripe.com", map[string]bool{"api.stripe.com": true})
+	if err != nil || official != "https://api.stripe.com" {
+		t.Fatalf("unexpected official base URL result %q err=%v", official, err)
+	}
+	testBase, err := providerBaseURL(map[string]string{"base_url": "http://127.0.0.1:8080/", "allow_test_base_url": "true"}, "https://api.stripe.com", map[string]bool{"api.stripe.com": true})
+	if err != nil || testBase != "http://127.0.0.1:8080" {
+		t.Fatalf("unexpected localhost test base URL %q err=%v", testBase, err)
+	}
+
+	rejected := []map[string]string{
+		{"base_url": "http://api.stripe.com"},
+		{"base_url": "https://evil.example.com"},
+		{"base_url": "https://user:pass@api.stripe.com"},
+		{"base_url": "https://evil.example.com", "allow_test_base_url": "true"},
+	}
+	for _, config := range rejected {
+		if _, err := providerBaseURL(config, "https://api.stripe.com", map[string]bool{"api.stripe.com": true}); err == nil {
+			t.Fatalf("expected base URL rejection for %+v", config)
+		}
+	}
+	if err := requiredConfig(map[string]string{"owner": "o"}, "owner", "repo", "hook_id"); err == nil {
+		t.Fatal("expected missing provider config rejection")
+	}
+}
+
+func TestBuiltInAdaptersExposeCapabilitiesAndUnsupportedBehavior(t *testing.T) {
+	registry := BuiltInRegistry(nil)
+	stripe, ok := registry.Adapter(" STRIPE ")
+	if !ok || stripe.Name() != ProviderStripe {
+		t.Fatalf("missing stripe adapter: ok=%t adapter=%T", ok, stripe)
+	}
+	if caps := stripe.Capabilities(map[string]string{}); !caps.CanScanEvents || caps.Provider != ProviderStripe || len(caps.RequiredConfig) == 0 {
+		t.Fatalf("unexpected stripe capabilities: %+v", caps)
+	}
+	github, ok := registry.Adapter("github")
+	if !ok || github.Name() != ProviderGitHub {
+		t.Fatalf("missing github adapter: ok=%t adapter=%T", ok, github)
+	}
+	if caps := github.Capabilities(map[string]string{}); !caps.CanRequestRedelivery || caps.Provider != ProviderGitHub {
+		t.Fatalf("unexpected github capabilities: %+v", caps)
+	}
+	if _, ok := registry.Adapter("unknown"); ok {
+		t.Fatal("unknown provider should not resolve")
+	}
+
+	unsupported := UnsupportedAdapter{Provider: ProviderSlack, Cap: SlackCapabilities()}
+	if err := unsupported.ValidateConnection(context.Background(), Connection{}); err != nil || unsupported.Name() != ProviderSlack {
+		t.Fatalf("unexpected unsupported adapter identity")
+	}
+	if caps := unsupported.Capabilities(nil); caps.Provider != ProviderSlack || len(caps.Limitations) == 0 {
+		t.Fatalf("unexpected unsupported capabilities: %+v", caps)
+	}
+	if _, _, err := unsupported.Lookup(context.Background(), Connection{}, "evt_1"); !errors.Is(err, ErrUnsupported) {
+		t.Fatalf("expected unsupported lookup error, got %v", err)
+	}
+	if _, err := unsupported.RequestRedelivery(context.Background(), Connection{}, "evt_1"); !errors.Is(err, ErrUnsupported) {
+		t.Fatalf("expected unsupported redelivery error, got %v", err)
 	}
 }
 
@@ -55,6 +163,16 @@ func TestStripeRejectsTooOldWindow(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("expected 30-day window rejection")
+	}
+	_, err = adapter.Scan(context.Background(), ScanRequest{
+		Connection: Connection{Credential: "sk_test_secret"},
+		WindowEnd:  time.Now().AddDate(0, 0, -31),
+	})
+	if err == nil {
+		t.Fatal("expected old end-window rejection")
+	}
+	if _, err := adapter.RequestRedelivery(context.Background(), Connection{}, "evt_1"); !errors.Is(err, ErrUnsupported) {
+		t.Fatalf("expected unsupported stripe redelivery, got %v", err)
 	}
 }
 
@@ -132,6 +250,40 @@ func TestGitHubScanAndRedeliveryUseRepositoryWebhookAPI(t *testing.T) {
 	}
 	if !redelivered {
 		t.Fatal("expected redelivery request")
+	}
+}
+
+func TestGitHubRequiresRepositoryWebhookConfig(t *testing.T) {
+	adapter := GitHubAdapter{Client: http.DefaultClient}
+	conn := Connection{Credential: "ghp_secret", Config: map[string]string{"owner": "o"}}
+	if err := adapter.ValidateConnection(context.Background(), conn); err == nil {
+		t.Fatal("expected missing GitHub config rejection")
+	}
+	if _, err := adapter.RequestRedelivery(context.Background(), conn, "100"); err == nil {
+		t.Fatal("expected redelivery missing config rejection")
+	}
+}
+
+func TestProviderValueHelpersHandleCommonTypes(t *testing.T) {
+	if bearerHeader(Connection{}) != "" || bearerHeader(Connection{Credential: " token "}) != "Bearer token" {
+		t.Fatal("unexpected bearer header behavior")
+	}
+	if got := configValue(nil, "missing", "fallback"); got != "fallback" {
+		t.Fatalf("unexpected fallback value %q", got)
+	}
+	if got := configValue(map[string]string{"key": " value "}, "key", "fallback"); got != "value" {
+		t.Fatalf("unexpected config value %q", got)
+	}
+
+	now := time.Unix(1_700_000_000, 0).UTC()
+	if !unixTime(json.Number("1700000000")).Equal(now) || !unixTime(float64(1_700_000_000)).Equal(now) || !unixTime(int64(1_700_000_000)).Equal(now) {
+		t.Fatal("unixTime failed supported numeric inputs")
+	}
+	if !unixTime("not-time").IsZero() {
+		t.Fatal("unsupported unixTime input should be zero")
+	}
+	if intFromAny(json.Number("42")) != 42 || intFromAny(float64(42)) != 42 || intFromAny(42) != 42 || intFromAny("42") != 42 || intFromAny("bad") != 0 {
+		t.Fatal("intFromAny failed supported inputs")
 	}
 }
 
