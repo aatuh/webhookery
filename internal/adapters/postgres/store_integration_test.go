@@ -1218,6 +1218,84 @@ func TestPostgresDeliverySnapshotPayloadFailurePaths(t *testing.T) {
 	}
 }
 
+func TestPostgresPopulateDeliveryItemEvidenceAndFailurePaths(t *testing.T) {
+	ctx, store, actor := openPostgresIntegrationStore(t)
+	defer store.Close()
+
+	now := time.Now().UTC().Truncate(time.Second)
+	control := app.NewControlService(store, ssrf.Validator{Resolver: ssrf.StaticResolver{"receiver.example.com": {netip.MustParseAddr("93.184.216.34")}}})
+	source, endpoint := createPostgresIntegrationRoute(t, ctx, control, actor, "invoice.populate_delivery")
+	event := ingestPostgresIntegrationEvent(t, ctx, store, actor, source.ID, "invoice.populate_delivery", "evt_it_populate_delivery_"+now.Format("150405.000000000"), now)
+
+	snapshot, err := store.CreateDeliverySnapshot(ctx, app.DeliverySnapshotRequest{
+		TenantID:      actor.TenantID,
+		EventID:       event.EventID,
+		EndpointID:    endpoint.ID,
+		NextAttemptAt: now,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	item, err := populatePostgresDeliveryItemForTest(t, ctx, store, actor.TenantID, snapshot.DeliveryID, event.EventID, endpoint.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if item.EndpointURL != "https://receiver.example.com/webhook" || len(item.SigningSecret) == 0 || len(item.Body) == 0 || item.SigningKeyID == "" {
+		t.Fatalf("materialized delivery item lost worker evidence: %+v", item)
+	}
+
+	legacyDelivery, err := control.TestEndpoint(ctx, actor, endpoint.ID, app.TestEndpointRequest{Reason: "legacy populate fallback"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacyItem, err := populatePostgresDeliveryItemForTest(t, ctx, store, actor.TenantID, legacyDelivery.ID, legacyDelivery.EventID, endpoint.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(legacyItem.Body) == 0 || !bytes.Contains(legacyItem.Body, []byte("webhookery.endpoint.test")) {
+		t.Fatalf("legacy delivery item did not materialize fallback envelope: body=%q item=%+v", string(legacyItem.Body), legacyItem)
+	}
+
+	if _, err := store.pool.Exec(ctx, `UPDATE delivery_payloads SET storage_status='deleted' WHERE tenant_id=$1 AND id=$2`, actor.TenantID, snapshot.DeliveryPayloadID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := populatePostgresDeliveryItemForTest(t, ctx, store, actor.TenantID, snapshot.DeliveryID, event.EventID, endpoint.ID); !errors.Is(err, app.ErrGone) {
+		t.Fatalf("deleted delivery payload should be gone, got %v", err)
+	}
+
+	mtlsEvent := ingestPostgresIntegrationEvent(t, ctx, store, actor, source.ID, "invoice.populate_delivery", "evt_it_populate_mtls_"+now.Add(time.Second).Format("150405.000000000"), now.Add(time.Second))
+	mtlsSnapshot, err := store.CreateDeliverySnapshot(ctx, app.DeliverySnapshotRequest{
+		TenantID:      actor.TenantID,
+		EventID:       mtlsEvent.EventID,
+		EndpointID:    endpoint.ID,
+		NextAttemptAt: now,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.pool.Exec(ctx, `
+		UPDATE endpoints
+		SET mtls_enabled=true, encrypted_mtls_client_cert=''::bytea, encrypted_mtls_client_key=''::bytea
+		WHERE tenant_id=$1 AND id=$2`, actor.TenantID, endpoint.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := populatePostgresDeliveryItemForTest(t, ctx, store, actor.TenantID, mtlsSnapshot.DeliveryID, mtlsEvent.EventID, endpoint.ID); err == nil || !strings.Contains(err.Error(), "mTLS is enabled without encrypted client material") {
+		t.Fatalf("mTLS without material should fail before worker delivery, got %v", err)
+	}
+}
+
+func populatePostgresDeliveryItemForTest(t *testing.T, ctx context.Context, store *Store, tenantID, deliveryID, eventID, endpointID string) (worker.DeliveryItem, error) {
+	t.Helper()
+	tx, err := store.pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rollback(ctx, tx)
+	item := worker.DeliveryItem{ID: deliveryID, TenantID: tenantID, EventID: eventID, EndpointID: endpointID}
+	err = store.populateDeliveryItem(ctx, tx, &item)
+	return item, err
+}
+
 func TestPostgresReplayCurrentDeliveryAndNoopEvidence(t *testing.T) {
 	ctx, store, actor := openPostgresIntegrationStore(t)
 	defer store.Close()
