@@ -1133,6 +1133,91 @@ func TestPostgresCurrentDeliveryFanoutTargetResolvesScopedConfig(t *testing.T) {
 	}
 }
 
+func TestPostgresDeliverySnapshotPayloadFailurePaths(t *testing.T) {
+	ctx, store, actor := openPostgresIntegrationStore(t)
+	defer store.Close()
+
+	now := time.Now().UTC().Truncate(time.Second)
+	control := app.NewControlService(store, ssrf.Validator{Resolver: ssrf.StaticResolver{"receiver.example.com": {netip.MustParseAddr("93.184.216.34")}}})
+	source, endpoint := createPostgresIntegrationRoute(t, ctx, control, actor, "invoice.payload_paths")
+	event := ingestPostgresIntegrationEvent(t, ctx, store, actor, source.ID, "invoice.payload_paths", "evt_it_payload_paths_"+now.Format("150405.000000000"), now)
+
+	good, err := store.CreateDeliverySnapshot(ctx, app.DeliverySnapshotRequest{
+		TenantID:      actor.TenantID,
+		EventID:       event.EventID,
+		EndpointID:    endpoint.ID,
+		NextAttemptAt: now,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if good.DeliveryPayloadID == "" || good.DeliveryPayloadSHA256 == "" {
+		t.Fatalf("expected materialized payload evidence: %+v", good)
+	}
+
+	if _, err := store.CreateDeliverySnapshot(ctx, app.DeliverySnapshotRequest{
+		TenantID:                actor.TenantID,
+		EventID:                 event.EventID,
+		EndpointID:              endpoint.ID,
+		TransformationVersionID: "trv_missing",
+		NextAttemptAt:           now,
+	}); !errors.Is(err, app.ErrNotFound) {
+		t.Fatalf("missing transformation version should fail before delivery commit, got %v", err)
+	}
+
+	if _, err := store.CreateDeliverySnapshot(ctx, app.DeliverySnapshotRequest{
+		TenantID:                actor.TenantID,
+		EventID:                 event.EventID,
+		EndpointID:              endpoint.ID,
+		DeliveryPayloadMode:     app.DeliveryPayloadClone,
+		SourceDeliveryPayloadID: "dpl_missing",
+		NextAttemptAt:           now,
+	}); !errors.Is(err, app.ErrNotFound) {
+		t.Fatalf("missing source payload clone should fail before delivery commit, got %v", err)
+	}
+
+	if _, err := store.pool.Exec(ctx, `UPDATE delivery_payloads SET storage_status='deleted' WHERE tenant_id=$1 AND id=$2`, actor.TenantID, good.DeliveryPayloadID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.CreateDeliverySnapshot(ctx, app.DeliverySnapshotRequest{
+		TenantID:                actor.TenantID,
+		EventID:                 event.EventID,
+		EndpointID:              endpoint.ID,
+		DeliveryPayloadMode:     app.DeliveryPayloadClone,
+		SourceDeliveryPayloadID: good.DeliveryPayloadID,
+		NextAttemptAt:           now,
+	}); !errors.Is(err, app.ErrGone) {
+		t.Fatalf("deleted source payload clone should be gone, got %v", err)
+	}
+
+	fallbackEvent := ingestPostgresIntegrationEvent(t, ctx, store, actor, source.ID, "invoice.payload_paths", "evt_it_payload_fallback_"+now.Add(time.Second).Format("150405.000000000"), now.Add(time.Second))
+	fallback, err := store.CreateDeliverySnapshot(ctx, app.DeliverySnapshotRequest{
+		TenantID:            actor.TenantID,
+		EventID:             fallbackEvent.EventID,
+		EndpointID:          endpoint.ID,
+		DeliveryPayloadMode: app.DeliveryPayloadClone,
+		NextAttemptAt:       now,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fallback.DeliveryPayloadID == "" || fallback.NormalizedEnvelopeID == "" {
+		t.Fatalf("clone without source should materialize current payload evidence: %+v", fallback)
+	}
+
+	if _, err := store.pool.Exec(ctx, `UPDATE normalized_envelopes SET storage_status='deleted' WHERE tenant_id=$1 AND event_id=$2`, actor.TenantID, fallbackEvent.EventID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.CreateDeliverySnapshot(ctx, app.DeliverySnapshotRequest{
+		TenantID:      actor.TenantID,
+		EventID:       fallbackEvent.EventID,
+		EndpointID:    endpoint.ID,
+		NextAttemptAt: now,
+	}); !errors.Is(err, app.ErrGone) {
+		t.Fatalf("deleted normalized payload should be gone, got %v", err)
+	}
+}
+
 func TestPostgresReplayCurrentDeliveryAndNoopEvidence(t *testing.T) {
 	ctx, store, actor := openPostgresIntegrationStore(t)
 	defer store.Close()
