@@ -10,8 +10,8 @@
 [![License: AGPL-3.0-only](https://img.shields.io/badge/license-AGPL--3.0--only-blue.svg)](LICENSE)
 ![Go Version](https://img.shields.io/badge/go-1.25.11+-00ADD8.svg)
 ![OpenAPI](https://img.shields.io/badge/OpenAPI-214%20operations-brightgreen.svg)
-![Coverage Gate](https://img.shields.io/badge/local%20coverage-41%25+-yellow.svg)
-![DB Coverage Gate](https://img.shields.io/badge/db%20coverage-56%25+-yellowgreen.svg)
+![Coverage Gate](https://img.shields.io/badge/local%20coverage-42%25+-yellow.svg)
+![DB Coverage Gate](https://img.shields.io/badge/db%20coverage-57%25+-yellowgreen.svg)
 
 Audit-grade webhook capture, replay, and evidence -- self-hosted.
 

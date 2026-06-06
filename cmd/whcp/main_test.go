@@ -537,6 +537,16 @@ func TestCLIResourceCommandsSendExpectedRequests(t *testing.T) {
 	}))
 	defer server.Close()
 
+	tempDir := t.TempDir()
+	certFile := filepath.Join(tempDir, "client.pem")
+	if err := os.WriteFile(certFile, []byte("test-cert"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	operationsFile := filepath.Join(tempDir, "operations.json")
+	if err := os.WriteFile(operationsFile, []byte(`[{"op":"redact","path":"/data/email"}]`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
 	common := []string{"--base-url", server.URL, "--api-key", "whkey_cli"}
 	cases := []struct {
 		name         string
@@ -566,11 +576,32 @@ func TestCLIResourceCommandsSendExpectedRequests(t *testing.T) {
 			bodyContains: []string{`"url":"https://receiver.example.com/hook"`},
 		},
 		{
+			name:         "endpoints update",
+			args:         append([]string{"endpoints", "update", "--endpoint-id", "end_1", "--name", "receiver", "--url", "https://receiver.example.com/next", "--state", "active", "--retry-policy-id", "rtp_1", "--reason", "move"}, common...),
+			wantMethod:   http.MethodPatch,
+			wantPath:     "/v1/endpoints/end_1",
+			bodyContains: []string{`"name":"receiver"`, `"url":"https://receiver.example.com/next"`, `"state":"active"`, `"retry_policy_id":"rtp_1"`, `"reason":"move"`},
+		},
+		{
+			name:         "endpoints rotate secret",
+			args:         append([]string{"endpoints", "rotate-secret", "--endpoint-id", "end_1", "--grace-hours", "24", "--reason", "rotate"}, common...),
+			wantMethod:   http.MethodPost,
+			wantPath:     "/v1/endpoints/end_1/secrets:rotate",
+			bodyContains: []string{`"grace_period_hours":24`, `"reason":"rotate"`},
+		},
+		{
 			name:         "subscriptions create",
 			args:         append([]string{"subscriptions", "create", "--endpoint-id", "end_1", "--event-types", "invoice.created,customer.created", "--payload-format", "canonical_json"}, common...),
 			wantMethod:   http.MethodPost,
 			wantPath:     "/v1/subscriptions",
 			bodyContains: []string{`"endpoint_id":"end_1"`, `"event_types":["invoice.created","customer.created"]`, `"payload_format":"canonical_json"`},
+		},
+		{
+			name:         "subscriptions update",
+			args:         append([]string{"subscriptions", "update", "--subscription-id", "sub_1", "--endpoint-id", "end_2", "--event-types", "invoice.paid", "--payload-format", "raw", "--transformation-id", "trn_1", "--state", "disabled", "--reason", "pause"}, common...),
+			wantMethod:   http.MethodPatch,
+			wantPath:     "/v1/subscriptions/sub_1",
+			bodyContains: []string{`"endpoint_id":"end_2"`, `"event_types":["invoice.paid"]`, `"payload_format":"raw"`, `"transformation_id":"trn_1"`, `"state":"disabled"`, `"reason":"pause"`},
 		},
 		{
 			name:         "retry policy create",
@@ -580,11 +611,38 @@ func TestCLIResourceCommandsSendExpectedRequests(t *testing.T) {
 			bodyContains: []string{`"name":"standard"`, `"max_attempts":4`, `"initial_delay_seconds":2`, `"max_delay_seconds":30`},
 		},
 		{
+			name:         "retry policy update",
+			args:         append([]string{"retry-policies", "update", "--retry-policy-id", "rtp_1", "--name", "fast", "--max-attempts", "2", "--max-duration-seconds", "600", "--initial-delay-seconds", "1", "--max-delay-seconds", "60", "--rate-limit-per-minute", "20", "--state", "active", "--reason", "tune"}, common...),
+			wantMethod:   http.MethodPatch,
+			wantPath:     "/v1/retry-policies/rtp_1",
+			bodyContains: []string{`"name":"fast"`, `"max_attempts":2`, `"max_duration_seconds":600`, `"initial_delay_seconds":1`, `"max_delay_seconds":60`, `"rate_limit_per_minute":20`, `"state":"active"`, `"reason":"tune"`},
+		},
+		{
 			name:         "routes activate",
 			args:         append([]string{"routes", "activate", "--route-id", "rte_1", "--reason", "ship"}, common...),
 			wantMethod:   http.MethodPost,
 			wantPath:     "/v1/routes/rte_1:activate",
 			bodyContains: []string{`"reason":"ship"`},
+		},
+		{
+			name:         "routes create",
+			args:         append([]string{"routes", "create", "--name", "paid", "--source-id", "src_1", "--endpoint-id", "end_1", "--event-types", "invoice.paid", "--priority", "10", "--retry-policy-id", "rtp_1", "--transformation-id", "trn_1", "--state", "draft"}, common...),
+			wantMethod:   http.MethodPost,
+			wantPath:     "/v1/routes",
+			bodyContains: []string{`"name":"paid"`, `"source_id":"src_1"`, `"endpoint_id":"end_1"`, `"event_types":["invoice.paid"]`, `"priority":10`, `"retry_policy_id":"rtp_1"`, `"transformation_id":"trn_1"`, `"state":"draft"`},
+		},
+		{
+			name:         "routes dry run",
+			args:         append([]string{"routes", "dry-run", "--route-id", "rte_1", "--event-id", "evt_1"}, common...),
+			wantMethod:   http.MethodPost,
+			wantPath:     "/v1/routes/rte_1:dry-run",
+			bodyContains: []string{`"event_id":"evt_1"`},
+		},
+		{
+			name:       "routes versions",
+			args:       append([]string{"routes", "versions", "--route-id", "rte_1"}, common...),
+			wantMethod: http.MethodGet,
+			wantPath:   "/v1/routes/rte_1/versions",
 		},
 		{
 			name:         "replay create",
@@ -621,6 +679,30 @@ func TestCLIResourceCommandsSendExpectedRequests(t *testing.T) {
 			wantPath:   "/v1/alert-firings?state=open",
 		},
 		{
+			name:       "ops storage",
+			args:       append([]string{"ops", "storage"}, common...),
+			wantMethod: http.MethodGet,
+			wantPath:   "/v1/ops/storage",
+		},
+		{
+			name:       "ops worker",
+			args:       append([]string{"ops", "worker", "--worker-id", "wrk_1"}, common...),
+			wantMethod: http.MethodGet,
+			wantPath:   "/v1/ops/workers/wrk_1",
+		},
+		{
+			name:       "ops queues",
+			args:       append([]string{"ops", "queues"}, common...),
+			wantMethod: http.MethodGet,
+			wantPath:   "/v1/ops/queues",
+		},
+		{
+			name:       "ops config",
+			args:       append([]string{"ops", "config"}, common...),
+			wantMethod: http.MethodGet,
+			wantPath:   "/v1/ops/config",
+		},
+		{
 			name:         "notification channel test",
 			args:         append([]string{"notification-channels", "test", "--channel-id", "nch_1", "--reason", "probe"}, common...),
 			wantMethod:   http.MethodPost,
@@ -642,6 +724,33 @@ func TestCLIResourceCommandsSendExpectedRequests(t *testing.T) {
 			bodyContains: []string{`"action":"approve"`, `"reason":"reviewed"`},
 		},
 		{
+			name:         "transformation create",
+			args:         append([]string{"transformations", "create", "--name", "redact-email", "--operations-file", operationsFile}, common...),
+			wantMethod:   http.MethodPost,
+			wantPath:     "/v1/transformations",
+			bodyContains: []string{`"name":"redact-email"`, `"operations":[{"op":"redact","path":"/data/email"}]`},
+		},
+		{
+			name:         "transformation version",
+			args:         append([]string{"transformations", "version", "--transformation-id", "trn_1", "--operations-file", operationsFile}, common...),
+			wantMethod:   http.MethodPost,
+			wantPath:     "/v1/transformations/trn_1/versions",
+			bodyContains: []string{`"operations":[{"op":"redact","path":"/data/email"}]`},
+		},
+		{
+			name:         "transformation activate",
+			args:         append([]string{"transformations", "activate", "--transformation-id", "trn_1", "--version-id", "trv_1", "--reason", "publish"}, common...),
+			wantMethod:   http.MethodPost,
+			wantPath:     "/v1/transformations/trn_1/versions/trv_1:activate",
+			bodyContains: []string{`"reason":"publish"`},
+		},
+		{
+			name:       "transformation list",
+			args:       append([]string{"transformations", "list"}, common...),
+			wantMethod: http.MethodGet,
+			wantPath:   "/v1/transformations",
+		},
+		{
 			name:         "api key create",
 			args:         append([]string{"api-keys", "create", "--name", "operator", "--user-id", "usr_1", "--email", "ops@example.com", "--role", "operator", "--scopes", "events:read,deliveries:read"}, common...),
 			wantMethod:   http.MethodPost,
@@ -654,6 +763,34 @@ func TestCLIResourceCommandsSendExpectedRequests(t *testing.T) {
 			wantMethod:   http.MethodPatch,
 			wantPath:     "/v1/producer-clients/pcl_1",
 			bodyContains: []string{`"name":"producer"`, `"source_id":"src_1"`, `"token_ttl_seconds":120`, `"reason":"rotate"`},
+		},
+		{
+			name:         "producer mtls verify",
+			args:         append([]string{"producer-mtls-identities", "verify", "--identity-id", "pmi_1", "--cert-file", certFile}, common...),
+			wantMethod:   http.MethodPost,
+			wantPath:     "/v1/producer-mtls-identities/pmi_1:verify",
+			bodyContains: []string{`"certificate_pem":"test-cert"`},
+		},
+		{
+			name:         "provider connection create",
+			args:         append([]string{"provider-connections", "create", "--name", "Stripe prod", "--provider", "stripe", "--credential", "sk_test_secret", "--credential-type", "api_key", "--config", "source_id=src_1,region=eu"}, common...),
+			wantMethod:   http.MethodPost,
+			wantPath:     "/v1/provider-connections",
+			bodyContains: []string{`"name":"Stripe prod"`, `"provider":"stripe"`, `"credential":"sk_test_secret"`, `"credential_type":"api_key"`, `"source_id":"src_1"`, `"region":"eu"`},
+		},
+		{
+			name:         "provider connection verify",
+			args:         append([]string{"provider-connections", "verify", "--connection-id", "pcn_1", "--reason", "validated"}, common...),
+			wantMethod:   http.MethodPost,
+			wantPath:     "/v1/provider-connections/pcn_1:verify",
+			bodyContains: []string{`"reason":"validated"`},
+		},
+		{
+			name:         "provider connection revoke",
+			args:         append([]string{"provider-connections", "revoke", "--connection-id", "pcn_1", "--reason", "offboard"}, common...),
+			wantMethod:   http.MethodPost,
+			wantPath:     "/v1/provider-connections/pcn_1:revoke",
+			bodyContains: []string{`"reason":"offboard"`},
 		},
 		{
 			name:         "identity provider create",
@@ -717,6 +854,41 @@ func TestCLIResourceCommandsSendExpectedRequests(t *testing.T) {
 			wantMethod:   http.MethodPost,
 			wantPath:     "/v1/dead-letter:bulk-release",
 			bodyContains: []string{`"entry_ids":["dlq_1","dlq_2"]`, `"reason_code":"incident_recovery"`, `"reason":"recovered"`},
+		},
+		{
+			name:         "delivery retry",
+			args:         append([]string{"deliveries", "retry", "--delivery-id", "del_1", "--reason", "receiver fixed"}, common...),
+			wantMethod:   http.MethodPost,
+			wantPath:     "/v1/deliveries/del_1:retry",
+			bodyContains: []string{`"reason":"receiver fixed"`},
+		},
+		{
+			name:         "delivery cancel",
+			args:         append([]string{"deliveries", "cancel", "--delivery-id", "del_1", "--reason", "stop"}, common...),
+			wantMethod:   http.MethodPost,
+			wantPath:     "/v1/deliveries/del_1:cancel",
+			bodyContains: []string{`"reason":"stop"`},
+		},
+		{
+			name:         "reconciliation dry run",
+			args:         append([]string{"reconciliation-jobs", "dry-run", "--connection-id", "pcn_1", "--scope-object-id", "evt_external", "--from", "2026-05-28T09:00:00Z", "--to", "2026-05-28T10:00:00Z", "--redeliver-failed", "--reason", "compare provider"}, common...),
+			wantMethod:   http.MethodPost,
+			wantPath:     "/v1/reconciliation-jobs:dry-run",
+			bodyContains: []string{`"connection_id":"pcn_1"`, `"scope_object_id":"evt_external"`, `"window_start":"2026-05-28T09:00:00Z"`, `"window_end":"2026-05-28T10:00:00Z"`, `"redeliver_failed":true`, `"reason":"compare provider"`},
+		},
+		{
+			name:         "reconciliation create",
+			args:         append([]string{"reconciliation-jobs", "create", "--connection-id", "pcn_1", "--capture-missing", "--route-recovered", "--reason", "recover missing"}, common...),
+			wantMethod:   http.MethodPost,
+			wantPath:     "/v1/reconciliation-jobs",
+			bodyContains: []string{`"connection_id":"pcn_1"`, `"capture_missing":true`, `"route_recovered":true`, `"reason":"recover missing"`},
+		},
+		{
+			name:         "reconciliation cancel",
+			args:         append([]string{"reconciliation-jobs", "cancel", "--job-id", "rec_1", "--reason", "stop"}, common...),
+			wantMethod:   http.MethodPost,
+			wantPath:     "/v1/reconciliation-jobs/rec_1:cancel",
+			bodyContains: []string{`"reason":"stop"`},
 		},
 		{
 			name:         "quarantine approve",
