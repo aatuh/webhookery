@@ -464,6 +464,9 @@ func runDeadLetter(args []string) error {
 	case "list":
 		return getJSON(*baseURL, *apiKey, "/v1/dead-letter")
 	case "release":
+		if strings.TrimSpace(*entryID) == "" {
+			return fmt.Errorf("entry-id is required")
+		}
 		if strings.TrimSpace(*reasonCode) == "" {
 			return fmt.Errorf("reason-code is required")
 		}
@@ -472,6 +475,9 @@ func runDeadLetter(args []string) error {
 		}
 		return postJSON(*baseURL, *apiKey, "/v1/dead-letter/"+url.PathEscape(*entryID)+":release", map[string]string{"reason_code": *reasonCode, "reason": *reason})
 	case "bulk-release":
+		if len(splitCSV(*entryIDs)) == 0 {
+			return fmt.Errorf("entry-ids is required")
+		}
 		if strings.TrimSpace(*reasonCode) == "" {
 			return fmt.Errorf("reason-code is required")
 		}

@@ -35,8 +35,8 @@ func runIncidents(args []string) error {
 	case "create":
 		return postJSON(*baseURL, *apiKey, "/v1/incidents", map[string]string{"title": *title, "reason": *reason})
 	case "add-event":
-		if strings.TrimSpace(*incidentID) == "" {
-			return fmt.Errorf("incident-id is required")
+		if strings.TrimSpace(*incidentID) == "" || strings.TrimSpace(*eventID) == "" {
+			return fmt.Errorf("incident-id and event-id are required")
 		}
 		return postJSON(*baseURL, *apiKey, "/v1/incidents/"+url.PathEscape(*incidentID)+"/events", map[string]string{"event_id": *eventID, "reason": *reason})
 	case "remove-event":

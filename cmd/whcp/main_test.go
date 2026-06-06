@@ -489,6 +489,80 @@ func TestReplayCreateApprovalExpiryRequiresApproval(t *testing.T) {
 	}
 }
 
+func TestCLICommandValidationRejectsMissingRequiredArgsBeforeRequest(t *testing.T) {
+	called := false
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		called = true
+		w.WriteHeader(http.StatusTeapot)
+	}))
+	defer server.Close()
+	common := []string{"--base-url", server.URL, "--api-key", "whkey_validation"}
+	tests := []struct {
+		name    string
+		run     func() error
+		wantErr string
+	}{
+		{
+			name:    "incident get missing id",
+			run:     func() error { return runIncidents(append([]string{"get"}, common...)) },
+			wantErr: "incident-id is required",
+		},
+		{
+			name:    "incident add-event missing event id",
+			run:     func() error { return runIncidents(append([]string{"add-event", "--incident-id", "inc_1", "--reason", "attach"}, common...)) },
+			wantErr: "incident-id and event-id are required",
+		},
+		{
+			name:    "incident remove-event missing event id",
+			run:     func() error { return runIncidents(append([]string{"remove-event", "--incident-id", "inc_1", "--reason", "detach"}, common...)) },
+			wantErr: "incident-id and event-id are required",
+		},
+		{
+			name:    "dead-letter release missing entry id",
+			run:     func() error { return runDeadLetter(append([]string{"release", "--reason-code", "incident_recovery", "--reason", "receiver fixed"}, common...)) },
+			wantErr: "entry-id is required",
+		},
+		{
+			name:    "dead-letter release missing reason code",
+			run:     func() error { return runDeadLetter(append([]string{"release", "--entry-id", "dlq_1", "--reason", "receiver fixed"}, common...)) },
+			wantErr: "reason-code is required",
+		},
+		{
+			name:    "dead-letter bulk missing entry ids",
+			run:     func() error { return runDeadLetter(append([]string{"bulk-release", "--reason-code", "incident_recovery", "--reason", "receiver fixed"}, common...)) },
+			wantErr: "entry-ids is required",
+		},
+		{
+			name:    "transformation version missing id",
+			run:     func() error { return runTransformations(append([]string{"version", "--operations-file", "ops.json"}, common...)) },
+			wantErr: "transformation-id is required",
+		},
+		{
+			name:    "transformation activate missing version",
+			run:     func() error { return runTransformations(append([]string{"activate", "--transformation-id", "trn_1", "--reason", "publish"}, common...)) },
+			wantErr: "transformation-id and version-id are required",
+		},
+		{
+			name:    "transformation dry run missing payload file",
+			run:     func() error { return runTransformations(append([]string{"dry-run", "--operations-file", "ops.json"}, common...)) },
+			wantErr: "payload-file is required",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			called = false
+			err := tt.run()
+			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("expected %q error, got %v", tt.wantErr, err)
+			}
+			if called {
+				t.Fatal("request should not be sent when local validation fails")
+			}
+		})
+	}
+}
+
 func TestPostJSONSendsBearerAndJSONBody(t *testing.T) {
 	var gotAuth, gotContentType, gotBody string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

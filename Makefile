@@ -7,8 +7,8 @@ GOLANGCI_LINT_VERSION ?= v2.11.4
 GOSEC_VERSION ?= v2.25.0
 GOVULNCHECK_VERSION ?= v1.2.0
 FUZZTIME ?= 5s
-COVERAGE_MIN ?= 53.0
-COVERAGE_NON_DB_MIN ?= 81.5
+COVERAGE_MIN ?= 53.3
+COVERAGE_NON_DB_MIN ?= 81.6
 COVERAGE_NON_DB_EXCLUDE ?= webhookery/internal/adapters/postgres
 COVERAGE_DB_MIN ?= 77.8
 
@@ -403,8 +403,8 @@ meta-files-check: ## Check governance, licensing, and release-evidence metadata
 	@grep -q "actions/workflows/fuzz.yml/badge.svg" README.md
 	@grep -q "actions/workflows/codeql.yml/badge.svg" README.md
 	@grep -q "actions/workflows/scorecard.yml/badge.svg" README.md
-	@grep -q "local%20coverage-53.0%25+" README.md
-	@grep -q "non--DB%20coverage-81.5%25+" README.md
+	@grep -q "local%20coverage-53.3%25+" README.md
+	@grep -q "non--DB%20coverage-81.6%25+" README.md
 	@grep -q "db%20coverage-77.8%25+" README.md
 	@op_count="$$(grep -c '^[[:space:]]*operationId:' openapi.yaml)"; grep -q "OpenAPI-$${op_count}%20operations" README.md
 	@grep -q "make live-postgres-check" docs/operations.md
