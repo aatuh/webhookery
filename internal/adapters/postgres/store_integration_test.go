@@ -1484,6 +1484,270 @@ func TestPostgresAuditChainAndRetentionEvidenceLifecycle(t *testing.T) {
 	assertPostgresAuditEvent(t, ctx, store, actor.TenantID, "retention_policy.updated", "retention_policy", policy.ID)
 }
 
+func TestPostgresProviderAdapterRegistryLifecycle(t *testing.T) {
+	ctx, store, actor := openPostgresIntegrationStore(t)
+	defer store.Close()
+
+	control := app.NewControlService(store, ssrf.Validator{})
+	suffix := strings.ReplaceAll(time.Now().UTC().Format("150405.000000000"), ".", "_")
+	adapter, err := control.CreateProviderAdapter(ctx, actor, app.CreateProviderAdapterRequest{
+		Name:          "integration_adapter_" + suffix,
+		Kind:          domain.AdapterKindDeclarative,
+		Description:   "integration adapter registry lifecycle",
+		RiskLevel:     domain.AdapterRiskMedium,
+		ProvenanceURL: "https://docs.example.com/integration-adapter",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if adapter.TenantID != actor.TenantID || adapter.CreatedBy != actor.ID || adapter.State != domain.AdapterStateDraft {
+		t.Fatalf("provider adapter did not preserve tenant and creator evidence: %+v", adapter)
+	}
+	if _, err := store.GetProviderAdapter(ctx, actor.TenantID+"_wrong", adapter.ID); !errors.Is(err, app.ErrNotFound) {
+		t.Fatalf("wrong-tenant provider adapter lookup must be hidden, got %v", err)
+	}
+	adapters, err := control.ListProviderAdapters(ctx, actor, 50)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !containsPostgresProviderAdapter(adapters, adapter.ID, domain.AdapterStateDraft) {
+		t.Fatalf("expected created adapter in tenant list, got %+v", adapters)
+	}
+	fetchedAdapter, err := control.GetProviderAdapter(ctx, actor, adapter.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fetchedAdapter.ID != adapter.ID || fetchedAdapter.Name != adapter.Name {
+		t.Fatalf("provider adapter lookup mismatch: got %+v want %+v", fetchedAdapter, adapter)
+	}
+
+	definition := json.RawMessage(`{"provider":"custom","verification":{"algorithm":"hmac-sha256","header":"X-Webhookery-Signature"},"normalization":{"event_id":"$.id","event_type":"$.type"}}`)
+	version, err := control.CreateAdapterVersion(ctx, actor, adapter.ID, app.CreateAdapterVersionRequest{
+		Version:       "v1",
+		Definition:    definition,
+		ProvenanceURL: "https://docs.example.com/integration-adapter/v1",
+		RiskLevel:     domain.AdapterRiskMedium,
+		Reason:        "integration adapter version creation",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if version.AdapterID != adapter.ID || version.Name != adapter.Name || version.State != domain.AdapterStateDraft || version.DefinitionSHA256 == "" {
+		t.Fatalf("adapter version did not preserve draft metadata: %+v", version)
+	}
+	versions, err := control.ListAdapterVersions(ctx, actor, adapter.ID, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !containsPostgresAdapterVersion(versions, version.ID, domain.AdapterStateDraft) {
+		t.Fatalf("expected draft adapter version in tenant list, got %+v", versions)
+	}
+	vector, err := control.CreateAdapterTestVector(ctx, actor, adapter.ID, version.ID, app.CreateAdapterTestVectorRequest{
+		Name:     "valid hmac envelope",
+		Purpose:  "integration governance evidence",
+		Request:  json.RawMessage(`{"headers":{"X-Webhookery-Signature":"valid-test-vector"},"body":{"id":"evt_test","type":"invoice.created"}}`),
+		Expected: json.RawMessage(`{"verified":true,"provider_event_id":"evt_test","type":"invoice.created"}`),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if vector.AdapterVersionID != version.ID || vector.RequestSHA256 == "" || vector.ExpectedSHA256 == "" {
+		t.Fatalf("adapter test vector did not preserve hash evidence: %+v", vector)
+	}
+
+	version, err = control.TransitionAdapterVersion(ctx, actor, adapter.ID, version.ID, app.AdapterVersionTransitionRequest{
+		Action:      "submit_tests",
+		Reason:      "integration automated test pass",
+		TestResults: json.RawMessage(`{"passed":true,"vectors":1}`),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if version.State != domain.AdapterStateAutomatedTests || !bytes.Contains(version.TestResults, []byte(`"passed": true`)) && !bytes.Contains(version.TestResults, []byte(`"passed":true`)) {
+		t.Fatalf("adapter version did not record automated test evidence: %+v", version)
+	}
+	version, err = control.TransitionAdapterVersion(ctx, actor, adapter.ID, version.ID, app.AdapterVersionTransitionRequest{Action: "request_review", Reason: "integration security review requested"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if version.State != domain.AdapterStateSecurityReview {
+		t.Fatalf("expected security review state, got %+v", version)
+	}
+	version, err = control.TransitionAdapterVersion(ctx, actor, adapter.ID, version.ID, app.AdapterVersionTransitionRequest{
+		Action:      "approve_staging",
+		Reason:      "integration staging approval",
+		ReviewNotes: "definition is deterministic and secret-free",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if version.State != domain.AdapterStateStagingApproved || version.ReviewedBy != actor.ID || version.ReviewedAt.IsZero() {
+		t.Fatalf("adapter version did not record review evidence: %+v", version)
+	}
+	version, err = control.TransitionAdapterVersion(ctx, actor, adapter.ID, version.ID, app.AdapterVersionTransitionRequest{Action: "activate", Reason: "integration activation"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if version.State != domain.AdapterStateActive || version.ActivatedBy != actor.ID || version.ActivatedAt.IsZero() {
+		t.Fatalf("adapter version did not record activation evidence: %+v", version)
+	}
+	active, err := store.ActiveDeclarativeAdapterVersion(ctx, actor.TenantID, adapter.Name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if active.ID != version.ID || active.State != domain.AdapterStateActive {
+		t.Fatalf("active declarative adapter lookup mismatch: got %+v want %+v", active, version)
+	}
+	var reviews int
+	if err := store.pool.QueryRow(ctx, `SELECT count(*) FROM adapter_version_reviews WHERE tenant_id=$1 AND adapter_version_id=$2`, actor.TenantID, version.ID).Scan(&reviews); err != nil {
+		t.Fatal(err)
+	}
+	if reviews != 4 {
+		t.Fatalf("expected four adapter version review records, got %d", reviews)
+	}
+	assertPostgresAuditEvent(t, ctx, store, actor.TenantID, "adapter.created", "provider_adapter", adapter.ID)
+	assertPostgresAuditEvent(t, ctx, store, actor.TenantID, "adapter_version.created", "adapter_version", version.ID)
+	assertPostgresAuditEvent(t, ctx, store, actor.TenantID, "adapter_test_vector.created", "adapter_version", version.ID)
+	assertPostgresAuditEvent(t, ctx, store, actor.TenantID, "adapter_version.activate", "adapter_version", version.ID)
+}
+
+func TestPostgresProviderConnectionAndReconciliationLifecycle(t *testing.T) {
+	ctx, store, actor := openPostgresIntegrationStore(t)
+	defer store.Close()
+
+	control := app.NewControlService(store, ssrf.Validator{})
+	suffix := strings.ReplaceAll(time.Now().UTC().Format("150405.000000000"), ".", "_")
+	credential := "shpat_integration_credential_" + suffix
+	connection, err := control.CreateProviderConnection(ctx, actor, app.CreateProviderConnectionRequest{
+		Name:           " integration shopify connection ",
+		Provider:       " Shopify ",
+		CredentialType: "api_key",
+		Credential:     credential,
+		Config:         map[string]string{" shop ": "integration-store.myshopify.com"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if connection.TenantID != actor.TenantID || connection.Provider != "shopify" || connection.State != domain.ProviderConnectionStateActive || connection.Config["shop"] != "integration-store.myshopify.com" {
+		t.Fatalf("provider connection was not normalized and tenant scoped: %+v", connection)
+	}
+	if connection.CredentialHint == "" || strings.Contains(connection.CredentialHint, credential) {
+		t.Fatalf("provider connection public credential hint leaked full credential: %q", connection.CredentialHint)
+	}
+	var encryptedCredential []byte
+	if err := store.pool.QueryRow(ctx, `SELECT encrypted_credential FROM provider_connections WHERE tenant_id=$1 AND id=$2`, actor.TenantID, connection.ID).Scan(&encryptedCredential); err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(encryptedCredential, []byte(credential)) {
+		t.Fatal("encrypted provider credential contains plaintext credential bytes")
+	}
+	if _, err := store.GetProviderConnection(ctx, actor.TenantID+"_wrong", connection.ID); !errors.Is(err, app.ErrNotFound) {
+		t.Fatalf("wrong-tenant provider connection lookup must be hidden, got %v", err)
+	}
+	connections, err := control.ListProviderConnections(ctx, actor, 20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !containsPostgresProviderConnection(connections, connection.ID, domain.ProviderConnectionStateActive) {
+		t.Fatalf("expected active provider connection in tenant list, got %+v", connections)
+	}
+	fetched, err := control.GetProviderConnection(ctx, actor, connection.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fetched.ID != connection.ID || fetched.CredentialHint != connection.CredentialHint {
+		t.Fatalf("provider connection lookup mismatch: got %+v want %+v", fetched, connection)
+	}
+
+	reconciliationConnection, decryptedCredential, err := store.GetReconciliationConnection(ctx, actor.TenantID, connection.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reconciliationConnection.ID != connection.ID || decryptedCredential != credential {
+		t.Fatal("reconciliation credential lookup did not decrypt the expected provider credential")
+	}
+	verified, err := control.VerifyProviderConnection(ctx, actor, connection.ID, app.ProviderConnectionStateRequest{Reason: "integration verification"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if verified.VerifiedAt.IsZero() || verified.State != domain.ProviderConnectionStateActive {
+		t.Fatalf("provider connection verification did not persist evidence: %+v", verified)
+	}
+
+	windowStart := time.Now().UTC().Add(-time.Hour).Truncate(time.Second)
+	windowEnd := time.Now().UTC().Truncate(time.Second)
+	job, err := control.CreateReconciliationJob(ctx, actor, app.ReconciliationJobRequest{
+		ConnectionID:    connection.ID,
+		CaptureMissing:  true,
+		RouteRecovered:  true,
+		RedeliverFailed: true,
+		ScopeObjectID:   "gid://shopify/WebhookSubscription/integration",
+		WindowStart:     windowStart,
+		WindowEnd:       windowEnd,
+		Reason:          "integration reconciliation",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if job.TenantID != actor.TenantID || job.Provider != "shopify" || job.State != domain.ReconciliationJobStateScheduled || !job.CaptureMissing || !job.RouteRecovered || !job.RedeliverFailed {
+		t.Fatalf("reconciliation job did not preserve requested provider recovery controls: %+v", job)
+	}
+	if job.WindowStart.IsZero() || job.WindowEnd.IsZero() || job.CreatedBy != actor.ID {
+		t.Fatalf("reconciliation job did not preserve time window and actor evidence: %+v", job)
+	}
+	jobs, err := control.ListReconciliationJobs(ctx, actor, 20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !containsPostgresReconciliationJob(jobs, job.ID, domain.ReconciliationJobStateScheduled) {
+		t.Fatalf("expected scheduled reconciliation job in tenant list, got %+v", jobs)
+	}
+	fetchedJob, err := control.GetReconciliationJob(ctx, actor, job.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fetchedJob.ID != job.ID || fetchedJob.ConnectionID != connection.ID {
+		t.Fatalf("reconciliation job lookup mismatch: got %+v want %+v", fetchedJob, job)
+	}
+	items, err := control.ListReconciliationItems(ctx, actor, job.ID, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 0 {
+		t.Fatalf("new reconciliation job should not have item evidence before worker processing, got %+v", items)
+	}
+	var outboxRows int
+	if err := store.pool.QueryRow(ctx, `SELECT count(*) FROM outbox WHERE tenant_id=$1 AND kind=$2 AND resource_id=$3`, actor.TenantID, app.OutboxKindReconciliationJob, job.ID).Scan(&outboxRows); err != nil {
+		t.Fatal(err)
+	}
+	if outboxRows != 1 {
+		t.Fatalf("expected reconciliation job outbox work, got %d rows", outboxRows)
+	}
+	canceled, err := control.CancelReconciliationJob(ctx, actor, job.ID, app.ProviderConnectionStateRequest{Reason: "integration cancellation"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if canceled.State != domain.ReconciliationJobStateCanceled || canceled.CanceledAt.IsZero() || canceled.CompletedAt.IsZero() {
+		t.Fatalf("reconciliation cancellation did not persist terminal evidence: %+v", canceled)
+	}
+
+	revoked, err := control.RevokeProviderConnection(ctx, actor, connection.ID, app.ProviderConnectionStateRequest{Reason: "integration revocation"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if revoked.State != domain.ProviderConnectionStateRevoked || revoked.RevokedAt.IsZero() {
+		t.Fatalf("provider connection revocation did not persist evidence: %+v", revoked)
+	}
+	if _, _, err := store.GetReconciliationConnection(ctx, actor.TenantID, connection.ID); !errors.Is(err, app.ErrNotFound) {
+		t.Fatalf("revoked provider credential must not be available to reconciliation workers, got %v", err)
+	}
+	assertPostgresAuditEvent(t, ctx, store, actor.TenantID, "provider_connection.created", "provider_connection", connection.ID)
+	assertPostgresAuditEvent(t, ctx, store, actor.TenantID, "provider_connection.verified", "provider_connection", connection.ID)
+	assertPostgresAuditEvent(t, ctx, store, actor.TenantID, "reconciliation.created", "reconciliation_job", job.ID)
+	assertPostgresAuditEvent(t, ctx, store, actor.TenantID, "reconciliation.canceled", "reconciliation_job", job.ID)
+	assertPostgresAuditEvent(t, ctx, store, actor.TenantID, "provider_connection.revoked", "provider_connection", connection.ID)
+}
+
 func TestPostgresIncidentLifecycleReportAndEvidenceExport(t *testing.T) {
 	ctx, store, actor := openPostgresIntegrationStore(t)
 	defer store.Close()
@@ -2592,6 +2856,42 @@ func containsPostgresAuditChainAnchor(anchors []domain.AuditChainAnchor, id stri
 func containsPostgresRetentionPolicy(policies []domain.RetentionPolicy, id, resourceType, state string) bool {
 	for _, policy := range policies {
 		if policy.ID == id && policy.ResourceType == resourceType && policy.State == state {
+			return true
+		}
+	}
+	return false
+}
+
+func containsPostgresProviderAdapter(adapters []domain.ProviderAdapter, id, state string) bool {
+	for _, adapter := range adapters {
+		if adapter.ID == id && adapter.State == state {
+			return true
+		}
+	}
+	return false
+}
+
+func containsPostgresAdapterVersion(versions []domain.AdapterVersion, id, state string) bool {
+	for _, version := range versions {
+		if version.ID == id && version.State == state {
+			return true
+		}
+	}
+	return false
+}
+
+func containsPostgresProviderConnection(connections []domain.ProviderConnection, id, state string) bool {
+	for _, connection := range connections {
+		if connection.ID == id && connection.State == state {
+			return true
+		}
+	}
+	return false
+}
+
+func containsPostgresReconciliationJob(jobs []domain.ReconciliationJob, id, state string) bool {
+	for _, job := range jobs {
+		if job.ID == id && job.State == state {
 			return true
 		}
 	}
