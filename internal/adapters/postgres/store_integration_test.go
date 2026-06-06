@@ -2261,15 +2261,22 @@ func TestPostgresMetricsRollupsAndAlertFiringLifecycle(t *testing.T) {
 	control := app.NewControlService(store, ssrf.Validator{Resolver: ssrf.StaticResolver{
 		"signals.example.com": {netip.MustParseAddr("93.184.216.34")},
 	}})
-	if err := store.RefreshMetricsRollups(ctx, "it-metrics-worker", 1000); err != nil {
+	source, err := control.CreateSource(ctx, actor, app.CreateSourceRequest{Name: "metrics source", Provider: "stripe", Adapter: "stripe", VerificationSecret: "whsec_it"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC().Truncate(time.Second)
+	metricsEvent := ingestPostgresIntegrationEvent(t, ctx, store, actor, source.ID, "invoice.metrics_rollup", "evt_it_metrics_"+now.Format("150405.000000000"), now)
+
+	if err := store.refreshTenantMetricsRollups(ctx, actor.TenantID, "it-metrics-worker", time.Now().UTC().Truncate(time.Minute)); err != nil {
 		t.Fatal(err)
 	}
 	eventRollups, err := control.ListMetricRollups(ctx, actor, "events.total", 10)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !containsPostgresMetricRollup(eventRollups, actor.TenantID, "events.total") {
-		t.Fatalf("expected refreshed events.total rollup for tenant, got %+v", eventRollups)
+	if !containsPostgresMetricRollupValue(eventRollups, actor.TenantID, "events.total", 1) {
+		t.Fatalf("expected refreshed events.total rollup for tenant event %s, got %+v", metricsEvent.EventID, eventRollups)
 	}
 
 	channel, _, err := control.CreateNotificationChannel(ctx, actor, app.CreateNotificationChannelRequest{Name: "metrics alert notification", URL: "https://signals.example.com/notify", SigningSecret: "notify-secret-value"})
@@ -2359,6 +2366,36 @@ func TestPostgresMetricsRollupsAndAlertFiringLifecycle(t *testing.T) {
 		if !containsPostgresNotificationTransition(notificationDeliveries, firing.ID, transition) {
 			t.Fatalf("expected %s notification delivery for firing %s, got %+v", transition, firing.ID, notificationDeliveries)
 		}
+	}
+}
+
+func TestPostgresRefreshMetricsRollupsDiscoversActiveTenants(t *testing.T) {
+	ctx, store, _ := openPostgresIntegrationStore(t)
+	defer store.Close()
+
+	tenantID := "0000000000_it_metrics_rollups"
+	if _, err := store.pool.Exec(ctx, `
+		INSERT INTO tenants(id, name, state)
+		VALUES($1, 'metrics rollup discovery', 'active')
+		ON CONFLICT (id) DO UPDATE SET state='active'`, tenantID); err != nil {
+		t.Fatalf("prepare metrics tenant: %v", err)
+	}
+	if _, err := store.pool.Exec(ctx, `DELETE FROM metrics_rollups WHERE tenant_id=$1`, tenantID); err != nil {
+		t.Fatalf("clear prior metrics rollups: %v", err)
+	}
+
+	if err := store.RefreshMetricsRollups(ctx, "it-refresh-worker", 1); err != nil {
+		t.Fatal(err)
+	}
+	rollups, err := store.ListMetricRollups(ctx, tenantID, "events.total", 5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !containsPostgresMetricRollupValue(rollups, tenantID, "events.total", 0) {
+		t.Fatalf("expected zero-value events.total rollup for discovered tenant, got %+v", rollups)
+	}
+	if rollups[0].Source != "scheduler:it-refresh-worker" {
+		t.Fatalf("rollup source did not preserve worker evidence: %+v", rollups[0])
 	}
 }
 
