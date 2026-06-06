@@ -2336,6 +2336,165 @@ func TestPostgresProviderConnectionAndReconciliationLifecycle(t *testing.T) {
 	assertPostgresAuditEvent(t, ctx, store, actor.TenantID, "provider_connection.revoked", "provider_connection", connection.ID)
 }
 
+func TestPostgresReconciliationWorkerEvidenceLifecycle(t *testing.T) {
+	ctx, store, actor := openPostgresIntegrationStore(t)
+	defer store.Close()
+
+	if _, err := store.pool.Exec(ctx, `UPDATE outbox SET state='completed', locked_by=NULL, lock_expires_at=NULL WHERE (tenant_id LIKE 'ten_it_%' OR tenant_id LIKE 'ten_rc_%') AND state <> 'completed'`); err != nil {
+		t.Fatalf("clear prior integration outbox work: %v", err)
+	}
+	now := time.Now().UTC().Truncate(time.Second)
+	control := app.NewControlService(store, ssrf.Validator{})
+	source, err := control.CreateSource(ctx, actor, app.CreateSourceRequest{Name: "reconciliation worker source", Provider: "stripe", Adapter: "stripe", VerificationSecret: "whsec_it"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	localMatched := ingestPostgresIntegrationEvent(t, ctx, store, actor, source.ID, "invoice.reconcile_matched", "evt_it_reconcile_matched_"+now.Format("150405.000000000"), now)
+	localFailed := ingestPostgresIntegrationEvent(t, ctx, store, actor, source.ID, "invoice.reconcile_failed", "evt_it_reconcile_failed_"+now.Format("150405.000000000"), now.Add(time.Second))
+
+	connection, err := control.CreateProviderConnection(ctx, actor, app.CreateProviderConnectionRequest{
+		Name:           "reconciliation worker connection",
+		Provider:       "stripe",
+		CredentialType: "api_key",
+		Credential:     "sk_test_reconciliation_secret",
+		Config:         map[string]string{"source_id": source.ID},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	job, err := control.CreateReconciliationJob(ctx, actor, app.ReconciliationJobRequest{
+		ConnectionID:    connection.ID,
+		CaptureMissing:  true,
+		RouteRecovered:  true,
+		RedeliverFailed: true,
+		WindowStart:     now.Add(-time.Hour),
+		WindowEnd:       now.Add(time.Hour),
+		Reason:          "integration reconciliation worker",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	adapter := &postgresFakeReconciliationAdapter{
+		capabilities: reconcile.Capabilities{Provider: "stripe", CanScanEvents: true, CanLookupObject: true, CanCaptureMissing: true, CanRequestRedelivery: true},
+		scanResult: reconcile.ScanResult{
+			Objects: []reconcile.ProviderObject{
+				{ID: "evt_it_reconcile_matched_" + now.Format("150405.000000000"), ObjectType: "event", Metadata: map[string]any{"case": "matched"}},
+				{ID: "evt_it_reconcile_missing_" + now.Format("150405.000000000"), ObjectType: "event", Recoverable: false, Metadata: map[string]any{"case": "missing"}},
+				{ID: "evt_it_reconcile_failed_" + now.Format("150405.000000000"), ObjectType: "delivery", Failed: true, Redeliverable: true, Metadata: map[string]any{"delivery_id": "dlv_reconcile_failed"}},
+			},
+			Evidence:   []reconcile.Evidence{{Method: "GET", URL: "https://api.stripe.com/v1/events", StatusCode: 200, Body: []byte(`{"object":"list"}`)}},
+			NextCursor: "cursor_reconcile_next",
+		},
+		lookupObject: reconcile.ProviderObject{
+			ID:          "evt_it_reconcile_missing_" + now.Format("150405.000000000"),
+			ObjectType:  "event",
+			EventType:   "invoice.recovered",
+			Recoverable: true,
+			RawBody:     []byte(`{"id":"evt_it_reconcile_missing_` + now.Format("150405.000000000") + `","type":"invoice.recovered","account":"acct_it"}`),
+			RequestHeaders: map[string]string{
+				"Stripe-Signature": "provider-api-redacted",
+			},
+		},
+		lookupEvidence:     []reconcile.Evidence{{Method: "GET", URL: "https://api.stripe.com/v1/events/evt_missing", StatusCode: 200, Body: []byte(`{"id":"evt_missing"}`)}},
+		redeliveryEvidence: []reconcile.Evidence{{Method: "POST", URL: "https://api.stripe.com/v1/events/dlv_reconcile_failed/redeliver", StatusCode: 202, Body: []byte(`{"redelivered":true}`)}},
+	}
+	service := app.NewReconciliationService(store, postgresFakeReconciliationRegistry{"stripe": adapter})
+	if err := service.RunReconciliationJob(ctx, actor.TenantID, job.ID); err != nil {
+		t.Fatal(err)
+	}
+	if adapter.lookupID == "" {
+		t.Fatal("expected missing provider object lookup")
+	}
+	if adapter.redeliveryID != "dlv_reconcile_failed" {
+		t.Fatalf("expected redelivery request to use provider delivery metadata, got %q", adapter.redeliveryID)
+	}
+	completed, err := control.GetReconciliationJob(ctx, actor, job.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if completed.State != domain.ReconciliationJobStateCompleted || completed.Cursor != "cursor_reconcile_next" || completed.CompletedAt.IsZero() {
+		t.Fatalf("reconciliation job did not complete with cursor evidence: %+v", completed)
+	}
+	items, err := control.ListReconciliationItems(ctx, actor, job.ID, 20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, expected := range []string{domain.ReconciliationOutcomeMatched, domain.ReconciliationOutcomeCaptured, domain.ReconciliationOutcomeRedeliveryRequested} {
+		if !containsPostgresReconciliationOutcome(items, expected) {
+			t.Fatalf("expected reconciliation outcome %s, got %+v", expected, items)
+		}
+	}
+	captured := findPostgresReconciliationItemByOutcome(t, items, domain.ReconciliationOutcomeCaptured)
+	if captured.RecoveredEventID == "" || captured.ProviderAPIEvidenceID == "" {
+		t.Fatalf("captured reconciliation item did not link recovered event and provider evidence: %+v", captured)
+	}
+	redelivered := findPostgresReconciliationItemByOutcome(t, items, domain.ReconciliationOutcomeRedeliveryRequested)
+	if !redelivered.RedeliveryRequested || redelivered.ProviderAPIEvidenceID == "" {
+		t.Fatalf("redelivery reconciliation item did not link provider evidence: %+v", redelivered)
+	}
+	var recoveredReason string
+	if err := store.pool.QueryRow(ctx, `SELECT verification_reason FROM events WHERE tenant_id=$1 AND id=$2`, actor.TenantID, captured.RecoveredEventID).Scan(&recoveredReason); err != nil {
+		t.Fatal(err)
+	}
+	if recoveredReason != domain.VerificationReasonProviderAPIReconcile {
+		t.Fatalf("recovered event must be marked as provider API reconciliation evidence, got %q", recoveredReason)
+	}
+	var evidenceRows, linkedEvidenceRows int
+	if err := store.pool.QueryRow(ctx, `SELECT count(*), count(*) FILTER (WHERE item_id <> '') FROM provider_api_evidence WHERE tenant_id=$1 AND job_id=$2`, actor.TenantID, job.ID).Scan(&evidenceRows, &linkedEvidenceRows); err != nil {
+		t.Fatal(err)
+	}
+	if evidenceRows < 3 || linkedEvidenceRows < 2 {
+		t.Fatalf("provider API evidence was not fully persisted and linked: total=%d linked=%d", evidenceRows, linkedEvidenceRows)
+	}
+	var routeRecoveredOutbox int
+	if err := store.pool.QueryRow(ctx, `SELECT count(*) FROM outbox WHERE tenant_id=$1 AND kind=$2 AND resource_id=$3`, actor.TenantID, app.OutboxKindRouteRecoveredEvent, captured.RecoveredEventID).Scan(&routeRecoveredOutbox); err != nil {
+		t.Fatal(err)
+	}
+	if routeRecoveredOutbox != 1 {
+		t.Fatalf("captured recovered event should enqueue recovered-route work, got %d rows", routeRecoveredOutbox)
+	}
+	if localMatched.EventID == "" || localFailed.EventID == "" {
+		t.Fatalf("local reconciliation fixtures were not captured: matched=%+v failed=%+v", localMatched, localFailed)
+	}
+	assertPostgresAuditEvent(t, ctx, store, actor.TenantID, "reconciliation.event_captured", "event", captured.RecoveredEventID)
+
+	failingConnection, err := control.CreateProviderConnection(ctx, actor, app.CreateProviderConnectionRequest{
+		Name:           "reconciliation failing connection",
+		Provider:       "stripe",
+		CredentialType: "api_key",
+		Credential:     "sk_test_reconciliation_failure_secret",
+		Config:         map[string]string{"source_id": source.ID},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	failingJob, err := control.CreateReconciliationJob(ctx, actor, app.ReconciliationJobRequest{
+		ConnectionID: failingConnection.ID,
+		Reason:       "integration reconciliation failure",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	failingAdapter := &postgresFakeReconciliationAdapter{
+		capabilities: reconcile.Capabilities{Provider: "stripe", CanScanEvents: true},
+		scanErr:      reconcile.ProviderError{Class: reconcile.ErrorRateLimited, Message: "rate limited for sk_test_reconciliation_failure_secret"},
+	}
+	failingService := app.NewReconciliationService(store, postgresFakeReconciliationRegistry{"stripe": failingAdapter})
+	if err := failingService.RunReconciliationJob(ctx, actor.TenantID, failingJob.ID); err != nil {
+		t.Fatal(err)
+	}
+	failed, err := control.GetReconciliationJob(ctx, actor, failingJob.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if failed.State != domain.ReconciliationJobStateFailed || failed.Error != reconcile.ErrorRateLimited || strings.Contains(failed.Error, "sk_test") {
+		t.Fatalf("failed reconciliation job did not persist redacted provider error: %+v", failed)
+	}
+	if _, err := store.pool.Exec(ctx, `UPDATE outbox SET state='completed', locked_by=NULL, lock_expires_at=NULL WHERE tenant_id=$1 AND state <> 'completed'`, actor.TenantID); err != nil {
+		t.Fatalf("clear reconciliation worker outbox work: %v", err)
+	}
+}
+
 func TestPostgresIncidentLifecycleReportAndEvidenceExport(t *testing.T) {
 	ctx, store, actor := openPostgresIntegrationStore(t)
 	defer store.Close()
@@ -3562,6 +3721,72 @@ func containsPostgresReconciliationJob(jobs []domain.ReconciliationJob, id, stat
 		}
 	}
 	return false
+}
+
+func containsPostgresReconciliationOutcome(items []domain.ReconciliationItem, outcome string) bool {
+	for _, item := range items {
+		if item.Outcome == outcome {
+			return true
+		}
+	}
+	return false
+}
+
+func findPostgresReconciliationItemByOutcome(t *testing.T, items []domain.ReconciliationItem, outcome string) domain.ReconciliationItem {
+	t.Helper()
+	for _, item := range items {
+		if item.Outcome == outcome {
+			return item
+		}
+	}
+	t.Fatalf("expected reconciliation item outcome %s, got %+v", outcome, items)
+	return domain.ReconciliationItem{}
+}
+
+type postgresFakeReconciliationRegistry map[string]reconcile.Adapter
+
+func (r postgresFakeReconciliationRegistry) Adapter(provider string) (reconcile.Adapter, bool) {
+	adapter, ok := r[provider]
+	return adapter, ok
+}
+
+type postgresFakeReconciliationAdapter struct {
+	capabilities       reconcile.Capabilities
+	scanResult         reconcile.ScanResult
+	scanErr            error
+	lookupObject       reconcile.ProviderObject
+	lookupEvidence     []reconcile.Evidence
+	lookupErr          error
+	lookupID           string
+	redeliveryEvidence []reconcile.Evidence
+	redeliveryErr      error
+	redeliveryID       string
+}
+
+func (f *postgresFakeReconciliationAdapter) Name() string {
+	return "fake"
+}
+
+func (f *postgresFakeReconciliationAdapter) Capabilities(map[string]string) reconcile.Capabilities {
+	return f.capabilities
+}
+
+func (f *postgresFakeReconciliationAdapter) ValidateConnection(context.Context, reconcile.Connection) error {
+	return nil
+}
+
+func (f *postgresFakeReconciliationAdapter) Scan(context.Context, reconcile.ScanRequest) (reconcile.ScanResult, error) {
+	return f.scanResult, f.scanErr
+}
+
+func (f *postgresFakeReconciliationAdapter) Lookup(_ context.Context, _ reconcile.Connection, objectID string) (reconcile.ProviderObject, []reconcile.Evidence, error) {
+	f.lookupID = objectID
+	return f.lookupObject, f.lookupEvidence, f.lookupErr
+}
+
+func (f *postgresFakeReconciliationAdapter) RequestRedelivery(_ context.Context, _ reconcile.Connection, objectID string) ([]reconcile.Evidence, error) {
+	f.redeliveryID = objectID
+	return f.redeliveryEvidence, f.redeliveryErr
 }
 
 func containsPostgresWorker(workers []domain.WorkerStatus, id, state string) bool {
