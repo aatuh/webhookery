@@ -543,6 +543,255 @@ func TestPostgresEventSearchDeliveryControlAndDeadLetterLifecycle(t *testing.T) 
 	assertPostgresAuditEvent(t, ctx, store, actor.TenantID, "replay.created", "replay_job", replayJob.ID)
 }
 
+func TestPostgresReplayApprovalAndFanoutControls(t *testing.T) {
+	ctx, store, actor := openPostgresIntegrationStore(t)
+	defer store.Close()
+
+	if _, err := store.pool.Exec(ctx, `UPDATE outbox SET state='completed', locked_by=NULL, lock_expires_at=NULL WHERE (tenant_id LIKE 'ten_it_%' OR tenant_id LIKE 'ten_rc_%') AND state <> 'completed'`); err != nil {
+		t.Fatalf("clear prior integration outbox work: %v", err)
+	}
+	if _, err := store.pool.Exec(ctx, `UPDATE deliveries SET state='succeeded', locked_by=NULL, lock_expires_at=NULL WHERE (tenant_id LIKE 'ten_it_%' OR tenant_id LIKE 'ten_rc_%') AND state IN ('scheduled','in_progress')`); err != nil {
+		t.Fatalf("clear prior integration delivery work: %v", err)
+	}
+
+	now := time.Now().UTC().Truncate(time.Second)
+	eventType := "invoice.replay_controls"
+	control := app.NewControlService(store, ssrf.Validator{Resolver: ssrf.StaticResolver{"receiver.example.com": {netip.MustParseAddr("93.184.216.34")}}})
+	fanout := app.NewDeliveryFanoutService(store, app.SystemClock{})
+
+	source, err := control.CreateSource(ctx, actor, app.CreateSourceRequest{Name: "replay controls source", Provider: "stripe", Adapter: "stripe", VerificationSecret: "whsec_it"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	endpoint, _, err := control.CreateEndpoint(ctx, actor, app.CreateEndpointRequest{Name: "replay controls endpoint", URL: "https://receiver.example.com/webhook"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	route, err := control.CreateRoute(ctx, actor, app.CreateRouteRequest{SourceID: source.ID, Name: "replay controls route", Priority: 3, EventTypes: []string{eventType}, EndpointID: endpoint.ID, State: domain.StateActive})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ingested := ingestPostgresIntegrationEvent(t, ctx, store, actor, source.ID, eventType, "evt_it_replay_controls_"+now.Format("150405.000000000"), now)
+
+	outboxItems, err := store.ClaimOutbox(ctx, "it-replay-controls-route-outbox", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	routeOutbox := findPostgresOutboxItem(t, outboxItems, app.OutboxKindRouteEvent, ingested.EventID)
+	if err := fanout.ProcessOutbox(ctx, routeOutbox); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.CompleteOutbox(ctx, routeOutbox.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	deliveries, err := control.ListDeliveries(ctx, actor, 20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	originalDelivery := findPostgresDeliveryForEvent(t, deliveries, ingested.EventID)
+	if originalDelivery.DeliveryPayloadID == "" || originalDelivery.DeliveryPayloadSHA256 == "" {
+		t.Fatalf("original delivery did not preserve replayable payload evidence: %+v", originalDelivery)
+	}
+	canceledDelivery, err := control.CancelDelivery(ctx, actor, originalDelivery.ID, app.StateChangeRequest{Reason: "operator paused receiver"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if canceledDelivery.State != "canceled" {
+		t.Fatalf("expected canceled delivery, got %+v", canceledDelivery)
+	}
+	if _, err := control.CancelDelivery(ctx, actor, originalDelivery.ID, app.StateChangeRequest{Reason: "already canceled"}); !errors.Is(err, app.ErrNotFound) {
+		t.Fatalf("canceled delivery must not be cancelable again, got %v", err)
+	}
+	retriedDelivery, err := control.RetryDelivery(ctx, actor, originalDelivery.ID, "receiver recovered")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if retriedDelivery.State != "scheduled" || retriedDelivery.NextAttemptAt.IsZero() {
+		t.Fatalf("expected manual retry to reschedule delivery, got %+v", retriedDelivery)
+	}
+	assertPostgresAuditEvent(t, ctx, store, actor.TenantID, "delivery.canceled", "delivery", originalDelivery.ID)
+	assertPostgresAuditEvent(t, ctx, store, actor.TenantID, "delivery.retry_requested", "delivery", originalDelivery.ID)
+
+	policy, err := control.CreateReplayApprovalPolicy(ctx, actor, app.CreateReplayApprovalPolicyRequest{
+		ScopeType:            app.ReplayApprovalScopeRoute,
+		ScopeID:              route.ID,
+		RequireApproval:      true,
+		DefaultExpirySeconds: 600,
+		Reason:               "sensitive receiver route",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if policy.TenantID != actor.TenantID || policy.ScopeID != route.ID || !policy.RequireApproval || policy.State != domain.StateActive {
+		t.Fatalf("replay approval policy did not persist route scope: %+v", policy)
+	}
+	policies, err := control.ListReplayApprovalPolicies(ctx, actor, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !containsPostgresReplayApprovalPolicy(policies, policy.ID, domain.StateActive) {
+		t.Fatalf("expected replay approval policy in tenant list, got %+v", policies)
+	}
+
+	pendingReplay, err := control.CreateReplay(ctx, actor, app.ReplayRequest{
+		EventID:            ingested.EventID,
+		ReasonCode:         app.ReplayReasonTestDrill,
+		Reason:             "route approval drill",
+		ConfigMode:         app.ReplayConfigOriginal,
+		RateLimitPerMinute: 30,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pendingReplay.State != "pending_approval" || !pendingReplay.ApprovalRequired || pendingReplay.TotalItems != 1 || pendingReplay.ApprovalExpiresAt == nil {
+		t.Fatalf("route-scoped replay policy did not require approval: %+v", pendingReplay)
+	}
+	assertPostgresNoOutboxItem(t, ctx, store, actor.TenantID, app.OutboxKindReplayJob, pendingReplay.ID)
+	if _, err := control.ApproveReplayJob(ctx, actor, pendingReplay.ID, app.StateChangeRequest{Reason: "self approval must fail"}); !errors.Is(err, app.ErrNotFound) {
+		t.Fatalf("replay creator must not self-approve pending replay, got %v", err)
+	}
+
+	approver := actor
+	approver.ID = actor.ID + "_approver"
+	if _, err := store.CreateAPIKey(ctx, app.APIKeyCreateInput{
+		Key: domain.APIKey{
+			TenantID: actor.TenantID,
+			UserID:   approver.ID,
+			Name:     "replay approver",
+			Prefix:   "it-appr",
+			Last4:    "appr",
+			Hash:     app.HashToken("integration-replay-approver-" + now.Format("150405.000000000")),
+			Scopes:   []string{"*"},
+			State:    domain.StateActive,
+		},
+		Role:    authz.RoleOwner,
+		ActorID: actor.ID,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	approvedReplay, err := control.ApproveReplayJob(ctx, approver, pendingReplay.ID, app.StateChangeRequest{Reason: "independent approval"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if approvedReplay.State != "scheduled" || approvedReplay.ApprovedBy != approver.ID || approvedReplay.ApprovedAt == nil {
+		t.Fatalf("replay approval did not schedule durable work: %+v", approvedReplay)
+	}
+	pausedReplay, err := control.PauseReplayJob(ctx, actor, approvedReplay.ID, app.StateChangeRequest{Reason: "hold replay window"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pausedReplay.State != "paused" {
+		t.Fatalf("expected paused replay, got %+v", pausedReplay)
+	}
+	resumedReplay, err := control.ResumeReplayJob(ctx, actor, approvedReplay.ID, app.StateChangeRequest{Reason: "resume replay window"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resumedReplay.State != "scheduled" {
+		t.Fatalf("expected resumed replay, got %+v", resumedReplay)
+	}
+	replayJobs, err := control.ListReplayJobs(ctx, actor, 20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !containsPostgresReplayJob(replayJobs, approvedReplay.ID, "scheduled") {
+		t.Fatalf("expected scheduled replay job in tenant list, got %+v", replayJobs)
+	}
+
+	outboxItems, err = store.ClaimOutbox(ctx, "it-replay-controls-replay-outbox", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	replayOutbox := findPostgresOutboxItem(t, outboxItems, app.OutboxKindReplayJob, approvedReplay.ID)
+	if err := fanout.ProcessOutbox(ctx, replayOutbox); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.CompleteOutbox(ctx, replayOutbox.ID); err != nil {
+		t.Fatal(err)
+	}
+	replayJobs, err = control.ListReplayJobs(ctx, actor, 20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !containsPostgresReplayJob(replayJobs, approvedReplay.ID, "completed") {
+		t.Fatalf("expected completed replay job after fanout, got %+v", replayJobs)
+	}
+	var originalDeliveryID, newDeliveryID, replayPayloadID, replayPayloadSHA256, configMode string
+	if err := store.pool.QueryRow(ctx, `
+		SELECT original_delivery_id, new_delivery_id, delivery_payload_id, delivery_payload_sha256, config_mode
+		FROM replay_items
+		WHERE tenant_id=$1 AND replay_job_id=$2 AND event_id=$3`,
+		actor.TenantID, approvedReplay.ID, ingested.EventID,
+	).Scan(&originalDeliveryID, &newDeliveryID, &replayPayloadID, &replayPayloadSHA256, &configMode); err != nil {
+		t.Fatal(err)
+	}
+	if originalDeliveryID != originalDelivery.ID || newDeliveryID == "" || replayPayloadID == "" || replayPayloadSHA256 == "" || configMode != app.ReplayConfigOriginal {
+		t.Fatalf("replay item did not preserve original decision evidence: original=%s new=%s payload=%s hash=%s mode=%s", originalDeliveryID, newDeliveryID, replayPayloadID, replayPayloadSHA256, configMode)
+	}
+	var replayDeliveryPayloadID, replayDeliveryState string
+	if err := store.pool.QueryRow(ctx, `SELECT delivery_payload_id, state FROM deliveries WHERE tenant_id=$1 AND id=$2 AND replay_job_id=$3`, actor.TenantID, newDeliveryID, approvedReplay.ID).Scan(&replayDeliveryPayloadID, &replayDeliveryState); err != nil {
+		t.Fatal(err)
+	}
+	if replayDeliveryPayloadID == "" || replayDeliveryState != "scheduled" {
+		t.Fatalf("replay fanout did not create a scheduled delivery with payload evidence: payload=%s state=%s", replayDeliveryPayloadID, replayDeliveryState)
+	}
+
+	disabledPolicy, err := control.DisableReplayApprovalPolicy(ctx, actor, policy.ID, app.StateChangeRequest{Reason: "approval drill complete"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if disabledPolicy.State != domain.StateDisabled {
+		t.Fatalf("expected disabled replay approval policy, got %+v", disabledPolicy)
+	}
+	directReplay, err := control.CreateReplay(ctx, actor, app.ReplayRequest{
+		DeliveryID: originalDelivery.ID,
+		ReasonCode: app.ReplayReasonOperatorRequested,
+		Reason:     "cancel replay drill",
+		ConfigMode: app.ReplayConfigCurrent,
+		EndpointID: endpoint.ID,
+		DryRun:     false,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if directReplay.State != "scheduled" || directReplay.ApprovalRequired {
+		t.Fatalf("disabled replay approval policy should allow direct scheduling, got %+v", directReplay)
+	}
+	canceledReplay, err := control.CancelReplayJob(ctx, actor, directReplay.ID, app.StateChangeRequest{Reason: "cancel replay drill"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if canceledReplay.State != "canceled" {
+		t.Fatalf("expected canceled replay job, got %+v", canceledReplay)
+	}
+	outboxItems, err = store.ClaimOutbox(ctx, "it-replay-controls-canceled-outbox", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	canceledOutbox := findPostgresOutboxItem(t, outboxItems, app.OutboxKindReplayJob, directReplay.ID)
+	if err := fanout.ProcessOutbox(ctx, canceledOutbox); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.CompleteOutbox(ctx, canceledOutbox.ID); err != nil {
+		t.Fatal(err)
+	}
+	var canceledReplayDeliveries int
+	if err := store.pool.QueryRow(ctx, `SELECT count(*) FROM deliveries WHERE tenant_id=$1 AND replay_job_id=$2`, actor.TenantID, directReplay.ID).Scan(&canceledReplayDeliveries); err != nil {
+		t.Fatal(err)
+	}
+	if canceledReplayDeliveries != 0 {
+		t.Fatalf("canceled replay job must not create delivery work, got %d deliveries", canceledReplayDeliveries)
+	}
+
+	assertPostgresAuditEvent(t, ctx, store, actor.TenantID, "replay_approval_policy.upserted", "replay_approval_policy", policy.ID)
+	assertPostgresAuditEvent(t, ctx, store, actor.TenantID, "replay.approved", "replay_job", approvedReplay.ID)
+	assertPostgresAuditEvent(t, ctx, store, actor.TenantID, "replay.paused", "replay_job", approvedReplay.ID)
+	assertPostgresAuditEvent(t, ctx, store, actor.TenantID, "replay.resumed", "replay_job", approvedReplay.ID)
+	assertPostgresAuditEvent(t, ctx, store, actor.TenantID, "replay_approval_policy.disabled", "replay_approval_policy", policy.ID)
+	assertPostgresAuditEvent(t, ctx, store, actor.TenantID, "replay.canceled", "replay_job", directReplay.ID)
+}
+
 func TestPostgresConcurrentDuplicateCapturePreservesEvidence(t *testing.T) {
 	ctx, store, actor := openPostgresIntegrationStore(t)
 	defer store.Close()
@@ -2814,6 +3063,28 @@ func findPostgresDelivery(deliveries []domain.Delivery, id string) (domain.Deliv
 	return domain.Delivery{}, false
 }
 
+func findPostgresDeliveryForEvent(t *testing.T, deliveries []domain.Delivery, eventID string) domain.Delivery {
+	t.Helper()
+	for _, delivery := range deliveries {
+		if delivery.EventID == eventID {
+			return delivery
+		}
+	}
+	t.Fatalf("expected delivery for event %s, got %+v", eventID, deliveries)
+	return domain.Delivery{}
+}
+
+func findPostgresOutboxItem(t *testing.T, items []worker.OutboxItem, kind, resourceID string) worker.OutboxItem {
+	t.Helper()
+	for _, item := range items {
+		if item.Kind == kind && item.ResourceID == resourceID {
+			return item
+		}
+	}
+	t.Fatalf("expected outbox item kind=%s resource_id=%s, got %+v", kind, resourceID, items)
+	return worker.OutboxItem{}
+}
+
 func containsPostgresTimelineKind(timeline []app.EventTimelineEntry, kind string) bool {
 	for _, item := range timeline {
 		if item.Kind == kind {
@@ -2862,6 +3133,24 @@ func containsPostgresRetentionPolicy(policies []domain.RetentionPolicy, id, reso
 	return false
 }
 
+func containsPostgresReplayApprovalPolicy(policies []domain.ReplayApprovalPolicy, id, state string) bool {
+	for _, policy := range policies {
+		if policy.ID == id && policy.State == state {
+			return true
+		}
+	}
+	return false
+}
+
+func containsPostgresReplayJob(jobs []app.ReplayJob, id, state string) bool {
+	for _, job := range jobs {
+		if job.ID == id && job.State == state {
+			return true
+		}
+	}
+	return false
+}
+
 func containsPostgresProviderAdapter(adapters []domain.ProviderAdapter, id, state string) bool {
 	for _, adapter := range adapters {
 		if adapter.ID == id && adapter.State == state {
@@ -2896,6 +3185,22 @@ func containsPostgresReconciliationJob(jobs []domain.ReconciliationJob, id, stat
 		}
 	}
 	return false
+}
+
+func assertPostgresNoOutboxItem(t *testing.T, ctx context.Context, store *Store, tenantID, kind, resourceID string) {
+	t.Helper()
+	var count int
+	if err := store.pool.QueryRow(ctx, `
+		SELECT count(*)
+		FROM outbox
+		WHERE tenant_id=$1 AND kind=$2 AND resource_id=$3 AND state <> 'completed'`,
+		tenantID, kind, resourceID,
+	).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 0 {
+		t.Fatalf("expected no active outbox item kind=%s resource_id=%s, got %d", kind, resourceID, count)
+	}
 }
 
 func containsPostgresProducerClient(clients []domain.ProducerClient, id, state string) bool {
