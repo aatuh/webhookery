@@ -1654,12 +1654,26 @@ func TestPostgresSecretRotationAndOpsVisibility(t *testing.T) {
 	if storage.TenantID != actor.TenantID || storage.RawStorageMode != domain.RawStoragePostgres || storage.RawPayloadsByStatus[domain.StorageStatusStored] < 2 || storage.RawPayloadsByBackend[domain.RawStoragePostgres] < 2 {
 		t.Fatalf("ops storage did not expose tenant raw evidence counts: %+v", storage)
 	}
+	globalStorage, err := store.OpsStorage(ctx, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if globalStorage.TenantID != "" || globalStorage.RawPayloadsByStatus[domain.StorageStatusStored] < storage.RawPayloadsByStatus[domain.StorageStatusStored] {
+		t.Fatalf("global ops storage should include tenant raw evidence counts: tenant=%+v global=%+v", storage, globalStorage)
+	}
 	metrics, err := control.OpsMetrics(ctx, actor)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if metrics.EventsTotal < 2 {
 		t.Fatalf("ops metrics did not expose captured events: %+v", metrics)
+	}
+	globalMetrics, err := store.OpsMetrics(ctx, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if globalMetrics.EventsTotal < metrics.EventsTotal || globalMetrics.AuditChainUnchainedEvents < metrics.AuditChainUnchainedEvents {
+		t.Fatalf("global ops metrics should include tenant metrics: tenant=%+v global=%+v", metrics, globalMetrics)
 	}
 	assertPostgresAuditEvent(t, ctx, store, actor.TenantID, "source_secret.rotated", "source", source.ID)
 	assertPostgresAuditEvent(t, ctx, store, actor.TenantID, "endpoint_secret.rotated", "endpoint", endpoint.ID)
