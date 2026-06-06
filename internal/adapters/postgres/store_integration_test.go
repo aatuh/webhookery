@@ -1741,6 +1741,96 @@ func TestPostgresEvidenceExportIncludesBodyArtifactsAndProofs(t *testing.T) {
 	}
 }
 
+func TestPostgresAuditExportDownloadStorageReadPaths(t *testing.T) {
+	ctx, store, actor := openPostgresIntegrationStore(t)
+	defer store.Close()
+
+	control := app.NewControlService(store, ssrf.Validator{})
+	export, err := control.CreateAuditExport(ctx, actor, app.CreateAuditExportRequest{Reason: "download storage branch regression"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	download, err := store.DownloadAuditExport(ctx, actor.TenantID, export.ID, actor.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := append([]byte(nil), download.Body...)
+	if len(body) == 0 || download.Filename != export.ID+".tar.gz" || download.ContentType != "application/gzip" {
+		t.Fatalf("unexpected postgres-backed export download: filename=%s content_type=%s body=%d", download.Filename, download.ContentType, len(body))
+	}
+	if _, err := store.DownloadAuditExport(ctx, "ten_it_wrong_export_download", export.ID, actor.ID); !errors.Is(err, app.ErrNotFound) {
+		t.Fatalf("wrong-tenant export download must be hidden, got %v", err)
+	}
+
+	if _, err := store.pool.Exec(ctx, `UPDATE evidence_exports SET state=$3 WHERE tenant_id=$1 AND id=$2`, actor.TenantID, export.ID, domain.EvidenceExportStateFailed); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.DownloadAuditExport(ctx, actor.TenantID, export.ID, actor.ID); !errors.Is(err, app.ErrGone) {
+		t.Fatalf("failed export should not be downloadable, got %v", err)
+	}
+	if _, err := store.pool.Exec(ctx, `UPDATE evidence_exports SET state=$3 WHERE tenant_id=$1 AND id=$2`, actor.TenantID, export.ID, domain.EvidenceExportStateReady); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := store.pool.Exec(ctx, `UPDATE evidence_exports SET bundle='' WHERE tenant_id=$1 AND id=$2`, actor.TenantID, export.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.DownloadAuditExport(ctx, actor.TenantID, export.ID, actor.ID); !errors.Is(err, app.ErrGone) {
+		t.Fatalf("empty postgres bundle should be gone, got %v", err)
+	}
+	if _, err := store.pool.Exec(ctx, `UPDATE evidence_exports SET bundle=$3 WHERE tenant_id=$1 AND id=$2`, actor.TenantID, export.ID, body); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := store.pool.Exec(ctx, `UPDATE evidence_exports SET sha256=$3 WHERE tenant_id=$1 AND id=$2`, actor.TenantID, export.ID, evidence.SHA256([]byte("different export bundle"))); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.DownloadAuditExport(ctx, actor.TenantID, export.ID, actor.ID); err == nil || !strings.Contains(err.Error(), "hash mismatch") {
+		t.Fatalf("postgres bundle hash mismatch should fail, got %v", err)
+	}
+	if _, err := store.pool.Exec(ctx, `UPDATE evidence_exports SET sha256=$3 WHERE tenant_id=$1 AND id=$2`, actor.TenantID, export.ID, evidence.SHA256(body)); err != nil {
+		t.Fatal(err)
+	}
+
+	objectBucket := "export-bucket"
+	objectKey := "export-download.bin"
+	if _, err := store.pool.Exec(ctx, `
+		UPDATE evidence_exports
+		SET storage_backend=$3, object_bucket=$4, object_key=$5, bundle=''
+		WHERE tenant_id=$1 AND id=$2`, actor.TenantID, export.ID, domain.RawStorageS3, objectBucket, objectKey); err != nil {
+		t.Fatal(err)
+	}
+	store.objectStore = nil
+	if _, err := store.DownloadAuditExport(ctx, actor.TenantID, export.ID, actor.ID); err == nil || !strings.Contains(err.Error(), "object store is not configured") {
+		t.Fatalf("missing object store should fail before export read, got %v", err)
+	}
+
+	store.objectStore = &fakeObjectStore{}
+	if _, err := store.DownloadAuditExport(ctx, actor.TenantID, export.ID, actor.ID); !errors.Is(err, app.ErrGone) {
+		t.Fatalf("missing export object should be gone, got %v", err)
+	}
+
+	store.objectStore = &fakeObjectStore{getErr: errors.New("backend leaked export secret and bundle bytes")}
+	if _, err := store.DownloadAuditExport(ctx, actor.TenantID, export.ID, actor.ID); !errors.Is(err, errObjectStoreReadFailed) || strings.Contains(err.Error(), "export secret") || strings.Contains(err.Error(), "bundle bytes") {
+		t.Fatalf("object export read failure should be redacted, got %v", err)
+	}
+
+	store.objectStore = &fakeObjectStore{objects: map[string][]byte{objectBucket + "/" + objectKey: []byte("wrong bundle")}}
+	if _, err := store.DownloadAuditExport(ctx, actor.TenantID, export.ID, actor.ID); err == nil || !strings.Contains(err.Error(), "hash mismatch") {
+		t.Fatalf("object bundle hash mismatch should fail, got %v", err)
+	}
+
+	store.objectStore = &fakeObjectStore{objects: map[string][]byte{objectBucket + "/" + objectKey: body}}
+	s3Download, err := store.DownloadAuditExport(ctx, actor.TenantID, export.ID, actor.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(s3Download.Body, body) || s3Download.Export.StorageBackend != domain.RawStorageS3 {
+		t.Fatalf("s3 export bundle did not round trip: export=%+v body=%d", s3Download.Export, len(s3Download.Body))
+	}
+	assertPostgresAuditEvent(t, ctx, store, actor.TenantID, "audit_export.downloaded", "audit_export", export.ID)
+}
+
 func TestPostgresRetentionDeletesBodyArtifactsAndTombstonesAuditEvents(t *testing.T) {
 	ctx, store, actor := openPostgresIntegrationStore(t)
 	defer store.Close()
