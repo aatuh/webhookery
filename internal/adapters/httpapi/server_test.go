@@ -773,6 +773,226 @@ func TestSignalRoutesReturnSSRFProblemWithoutLeakingCustomerURL(t *testing.T) {
 	}
 }
 
+func TestEndpointHandlersReturnBlockedSSRFValidationWithoutPersisting(t *testing.T) {
+	store := &endpointHandlerControlStore{}
+	server := NewServer(ServerConfig{
+		Control: app.NewControlService(store, ssrf.Validator{Resolver: ssrf.StaticResolver{
+			"receiver.example": {netip.MustParseAddr("93.184.216.34")},
+		}}),
+		Ingest:  app.NewIngestService(&fakeIngestStore{}, app.SystemClock{}),
+		Auth:    app.NewStaticAuthenticator("token", authz.Actor{ID: "usr_endpoints", TenantID: "ten_endpoints", Role: authz.RoleDeveloper, Scopes: []string{"endpoints:write"}}),
+		OpenAPI: []byte("openapi: 3.1.0\n"),
+	})
+	blockedURL := "https://169.254.169.254/latest?token=secret-token"
+	tests := []struct {
+		name   string
+		method string
+		path   string
+		body   string
+	}{
+		{
+			name:   "create",
+			method: http.MethodPost,
+			path:   "/v1/endpoints",
+			body:   `{"name":"receiver","url":"` + blockedURL + `"}`,
+		},
+		{
+			name:   "update",
+			method: http.MethodPatch,
+			path:   "/v1/endpoints/end_1",
+			body:   `{"url":"` + blockedURL + `","reason":"move receiver"}`,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			req := httptest.NewRequest(tt.method, tt.path, strings.NewReader(tt.body))
+			req.Header.Set("Authorization", "Bearer token")
+			req.Header.Set("Content-Type", "application/json")
+
+			server.Routes().ServeHTTP(rec, req)
+
+			if rec.Code != http.StatusUnprocessableEntity {
+				t.Fatalf("expected 422, got %d body=%s", rec.Code, rec.Body.String())
+			}
+			body := rec.Body.String()
+			for _, want := range []string{`"allowed":false`, "ip_literal_blocked", "blocked_ip_range"} {
+				if !strings.Contains(body, want) {
+					t.Fatalf("blocked endpoint validation missing %q: %s", want, body)
+				}
+			}
+			for _, forbidden := range []string{"secret-token", "/latest"} {
+				if strings.Contains(body, forbidden) {
+					t.Fatalf("blocked endpoint validation leaked %q: %s", forbidden, body)
+				}
+			}
+		})
+	}
+	if store.created || store.updated {
+		t.Fatalf("blocked endpoint URL must not persist changes: %+v", store)
+	}
+}
+
+func TestEndpointCreateRejectsTrailingJSONBeforeStoreAccess(t *testing.T) {
+	store := &endpointHandlerControlStore{}
+	server := NewServer(ServerConfig{
+		Control: app.NewControlService(store, ssrf.Validator{Resolver: ssrf.StaticResolver{
+			"receiver.example": {netip.MustParseAddr("93.184.216.34")},
+		}}),
+		Ingest:  app.NewIngestService(&fakeIngestStore{}, app.SystemClock{}),
+		Auth:    app.NewStaticAuthenticator("token", authz.Actor{ID: "usr_endpoints", TenantID: "ten_endpoints", Role: authz.RoleDeveloper, Scopes: []string{"endpoints:write"}}),
+		OpenAPI: []byte("openapi: 3.1.0\n"),
+	})
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/v1/endpoints", strings.NewReader(`{"name":"receiver","url":"https://receiver.example/hook"} {}`))
+	req.Header.Set("Authorization", "Bearer token")
+	req.Header.Set("Content-Type", "application/json")
+
+	server.Routes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "single value") {
+		t.Fatalf("expected duplicate JSON value problem, got %s", rec.Body.String())
+	}
+	if store.created || store.updated {
+		t.Fatalf("invalid JSON must not reach endpoint store: %+v", store)
+	}
+}
+
+func TestIncidentReportMarkdownFormatReturnsPlainMarkdown(t *testing.T) {
+	server := testServerWithActor(authz.Actor{ID: "usr_incident", TenantID: "ten_1", Role: authz.RoleOperator, Scopes: []string{"incidents:read"}})
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/v1/incidents/inc_1/report?format=markdown", nil)
+	req.Header.Set("Authorization", "Bearer token")
+
+	server.Routes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if got := rec.Header().Get("Content-Type"); !strings.Contains(got, "text/markdown") {
+		t.Fatalf("expected markdown content-type, got %q", got)
+	}
+	if rec.Body.String() != "incident report" {
+		t.Fatalf("unexpected markdown body %q", rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), "{") {
+		t.Fatalf("markdown response must not be JSON encoded: %s", rec.Body.String())
+	}
+}
+
+func TestSignalListHandlersPropagateFiltersTenantAndLimit(t *testing.T) {
+	store := &signalListControlStore{}
+	server := NewServer(ServerConfig{
+		Control: app.NewControlService(store, ssrf.Validator{Resolver: ssrf.StaticResolver{}}),
+		Ingest:  app.NewIngestService(&fakeIngestStore{}, app.SystemClock{}),
+		Auth:    app.NewStaticAuthenticator("token", authz.Actor{ID: "usr_ops", TenantID: "ten_ops", Role: authz.RoleOwner, Scopes: []string{"*"}}),
+		OpenAPI: []byte("openapi: 3.1.0\n"),
+	})
+	tests := []struct {
+		name     string
+		path     string
+		wantCall signalListCall
+	}{
+		{
+			name: "metric rollups",
+			path: "/v1/ops/metrics/rollups?metric_name=deliveries.failed&limit=17",
+			wantCall: signalListCall{
+				tenantID:   "ten_ops",
+				metricName: "deliveries.failed",
+				limit:      17,
+			},
+		},
+		{
+			name: "alert firings",
+			path: "/v1/alert-firings?state=acknowledged&limit=9",
+			wantCall: signalListCall{
+				tenantID: "ten_ops",
+				state:    domain.AlertFiringAcknowledged,
+				limit:    9,
+			},
+		},
+		{
+			name: "notification deliveries",
+			path: "/v1/notification-deliveries?state=scheduled&limit=11",
+			wantCall: signalListCall{
+				tenantID: "ten_ops",
+				state:    domain.SignalDeliveryScheduled,
+				limit:    11,
+			},
+		},
+		{
+			name: "siem deliveries",
+			path: "/v1/siem-deliveries?state=failed&limit=13",
+			wantCall: signalListCall{
+				tenantID: "ten_ops",
+				state:    domain.SignalDeliveryFailed,
+				limit:    13,
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			req := httptest.NewRequest(http.MethodGet, tt.path, nil)
+			req.Header.Set("Authorization", "Bearer token")
+
+			server.Routes().ServeHTTP(rec, req)
+
+			if rec.Code != http.StatusOK {
+				t.Fatalf("expected 200, got %d body=%s", rec.Code, rec.Body.String())
+			}
+			if got := store.calls[tt.name]; got != tt.wantCall {
+				t.Fatalf("wrong %s store call: got %+v want %+v", tt.name, got, tt.wantCall)
+			}
+		})
+	}
+}
+
+func TestSignalListHandlersRejectInvalidFiltersBeforeStoreAccess(t *testing.T) {
+	store := &signalListControlStore{}
+	server := NewServer(ServerConfig{
+		Control: app.NewControlService(store, ssrf.Validator{Resolver: ssrf.StaticResolver{}}),
+		Ingest:  app.NewIngestService(&fakeIngestStore{}, app.SystemClock{}),
+		Auth:    app.NewStaticAuthenticator("token", authz.Actor{ID: "usr_ops", TenantID: "ten_ops", Role: authz.RoleOwner, Scopes: []string{"*"}}),
+		OpenAPI: []byte("openapi: 3.1.0\n"),
+	})
+	tests := []struct {
+		name string
+		path string
+	}{
+		{name: "metric rollups", path: "/v1/ops/metrics/rollups?metric_name=bad%20secret"},
+		{name: "alert firings", path: "/v1/alert-firings?state=bad-secret"},
+		{name: "notification deliveries", path: "/v1/notification-deliveries?state=bad-secret"},
+		{name: "siem deliveries", path: "/v1/siem-deliveries?state=bad-secret"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			req := httptest.NewRequest(http.MethodGet, tt.path, nil)
+			req.Header.Set("Authorization", "Bearer token")
+
+			server.Routes().ServeHTTP(rec, req)
+
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("expected 400, got %d body=%s", rec.Code, rec.Body.String())
+			}
+			body := rec.Body.String()
+			if !strings.Contains(body, `"code":"validation_error"`) {
+				t.Fatalf("expected validation error problem, got %s", body)
+			}
+			if strings.Contains(body, "bad-secret") || strings.Contains(body, "bad secret") {
+				t.Fatalf("invalid filter response leaked submitted value: %s", body)
+			}
+			if _, called := store.calls[tt.name]; called {
+				t.Fatalf("invalid %s filter reached store", tt.name)
+			}
+		})
+	}
+}
+
 func TestSlackChallengeExtraction(t *testing.T) {
 	challenge := slackChallenge([]byte(`{"type":"url_verification","challenge":"abc123"}`))
 	if challenge != "abc123" {
@@ -1439,6 +1659,62 @@ func (f *eventSearchControlStore) ListEvents(_ context.Context, tenantID string,
 	f.tenantID = tenantID
 	f.req = req
 	return []domain.Event{{ID: "evt_1", TenantID: tenantID, Provider: req.Provider, ProviderID: req.ExternalID, RawPayloadHash: "sha256:raw"}}, nil
+}
+
+type endpointHandlerControlStore struct {
+	noopControlStore
+	created bool
+	updated bool
+}
+
+func (f *endpointHandlerControlStore) CreateEndpoint(_ context.Context, endpoint domain.Endpoint) (domain.Endpoint, error) {
+	f.created = true
+	endpoint.ID = "end_1"
+	return endpoint, nil
+}
+
+func (f *endpointHandlerControlStore) UpdateEndpoint(_ context.Context, tenantID, endpointID, actorID string, req app.UpdateEndpointRequest) (domain.Endpoint, error) {
+	f.updated = true
+	return domain.Endpoint{ID: endpointID, TenantID: tenantID, CreatedBy: actorID}, nil
+}
+
+type signalListCall struct {
+	tenantID   string
+	metricName string
+	state      string
+	limit      int
+}
+
+type signalListControlStore struct {
+	noopControlStore
+	calls map[string]signalListCall
+}
+
+func (f *signalListControlStore) record(name string, call signalListCall) {
+	if f.calls == nil {
+		f.calls = make(map[string]signalListCall)
+	}
+	f.calls[name] = call
+}
+
+func (f *signalListControlStore) ListMetricRollups(_ context.Context, tenantID, metricName string, limit int) ([]domain.MetricRollup, error) {
+	f.record("metric rollups", signalListCall{tenantID: tenantID, metricName: metricName, limit: limit})
+	return []domain.MetricRollup{{ID: "mru_1", TenantID: tenantID, MetricName: metricName, Value: 1}}, nil
+}
+
+func (f *signalListControlStore) ListAlertFirings(_ context.Context, tenantID, state string, limit int) ([]domain.AlertFiring, error) {
+	f.record("alert firings", signalListCall{tenantID: tenantID, state: state, limit: limit})
+	return []domain.AlertFiring{{ID: "afr_1", TenantID: tenantID, State: state}}, nil
+}
+
+func (f *signalListControlStore) ListNotificationDeliveries(_ context.Context, tenantID, state string, limit int) ([]domain.NotificationDelivery, error) {
+	f.record("notification deliveries", signalListCall{tenantID: tenantID, state: state, limit: limit})
+	return []domain.NotificationDelivery{{ID: "ndel_1", TenantID: tenantID, State: state}}, nil
+}
+
+func (f *signalListControlStore) ListSIEMDeliveries(_ context.Context, tenantID, state string, limit int) ([]domain.SIEMDelivery, error) {
+	f.record("siem deliveries", signalListCall{tenantID: tenantID, state: state, limit: limit})
+	return []domain.SIEMDelivery{{ID: "sdel_1", TenantID: tenantID, State: state}}, nil
 }
 
 func NewNoopControl() *app.ControlService {
