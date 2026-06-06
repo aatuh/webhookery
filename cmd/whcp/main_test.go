@@ -302,6 +302,50 @@ func TestFormatEventTimelineSupportsTableMarkdownAndJSON(t *testing.T) {
 	}
 }
 
+func TestGetEventTimelineFetchesAndWritesMarkdown(t *testing.T) {
+	var gotAuth string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/v1/events/evt_1/timeline" {
+			t.Fatalf("unexpected timeline request %s %s", r.Method, r.URL.Path)
+		}
+		gotAuth = r.Header.Get("Authorization")
+		_ = json.NewEncoder(w).Encode(eventTimelinePage{Data: []apppkg.EventTimelineEntry{{
+			SchemaVersion: apppkg.EventTimelineSchemaV1,
+			Sequence:      1,
+			Kind:          "delivery",
+			RefID:         "del_1",
+			State:         "failed",
+			Detail:        "receiver timeout",
+			OccurredAt:    time.Unix(123, 0).UTC(),
+		}}})
+	}))
+	defer server.Close()
+
+	oldStdout := os.Stdout
+	reader, writer, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Stdout = writer
+	defer func() { os.Stdout = oldStdout }()
+
+	err = getEventTimeline(server.URL, "whkey_timeline", "evt_1", "markdown")
+	_ = writer.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := io.ReadAll(reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotAuth != "Bearer whkey_timeline" {
+		t.Fatalf("authorization header=%q", gotAuth)
+	}
+	if !strings.Contains(string(body), "## Event Timeline") || !strings.Contains(string(body), "`delivery`") || !strings.Contains(string(body), "receiver timeout") {
+		t.Fatalf("unexpected timeline output:\n%s", body)
+	}
+}
+
 func TestReplayCreateRequiresReasonCodeBeforeRequest(t *testing.T) {
 	err := runReplayJobs([]string{"create", "--event-id", "evt_1", "--reason", "debug", "--base-url", "https://api.example", "--api-key", "whkey_test"})
 	if err == nil || !strings.Contains(err.Error(), "reason-code is required") {
@@ -1294,6 +1338,46 @@ func TestPilotDoctorReportsDatabaseReadiness(t *testing.T) {
 	for _, want := range []string{"ok: database-connectivity", "ok: migrations", "ok: queue", "ok: retention", "ok: audit-chain"} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("expected %q in pilot doctor output:\n%s", want, body)
+		}
+	}
+}
+
+func TestRunPilotDoctorNoNetworkUsesEnvironmentAndRedactsStdout(t *testing.T) {
+	t.Setenv("WEBHOOKERY_ENVIRONMENT", "production")
+	t.Setenv("WEBHOOKERY_DATABASE_URL", "postgres://webhookery:secret-db-password@db.internal/webhookery?sslmode=require")
+	t.Setenv("WEBHOOKERY_SECRET_BOX_MODE", "local")
+	t.Setenv("WEBHOOKERY_MASTER_KEY_BASE64", "MTIzNDU2Nzg5MDEyMzQ1Njc4OTAxMjM0NTY3ODkwMTI=")
+	t.Setenv("WEBHOOKERY_RAW_STORAGE_MODE", "postgres")
+	t.Setenv("WEBHOOKERY_PILOT_RECEIVER_CHECK_URL", "https://receiver.internal/webhook?token=secret")
+	t.Setenv("WEBHOOKERY_PILOT_ALLOW_RECEIVER_CHECK", "true")
+	t.Setenv("WEBHOOKERY_PROVIDER_PROOF_MANIFEST_PATH", "docs/provider-proof-manifest.json")
+
+	oldStdout := os.Stdout
+	reader, writer, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Stdout = writer
+	defer func() { os.Stdout = oldStdout }()
+
+	err = runPilotDoctor([]string{"--no-network", "--timeout", "1ms"})
+	_ = writer.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := io.ReadAll(reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	output := string(body)
+	for _, want := range []string{"ok: database - database URL is configured", "warning: database-connectivity", "warning: receiver-connectivity"} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("expected %q in pilot doctor output:\n%s", want, output)
+		}
+	}
+	for _, forbidden := range []string{"secret-db-password", "token=secret", os.Getenv("WEBHOOKERY_DATABASE_URL")} {
+		if strings.Contains(output, forbidden) {
+			t.Fatalf("pilot doctor stdout leaked sensitive value %q in %s", forbidden, output)
 		}
 	}
 }
