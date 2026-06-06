@@ -18,3 +18,9 @@ func TestMarshalProducesStableObjectOrdering(t *testing.T) {
 		t.Fatalf("unexpected canonical JSON: %s", left)
 	}
 }
+
+func TestMarshalReturnsJSONErrors(t *testing.T) {
+	if _, err := Marshal(func() {}); err == nil {
+		t.Fatal("expected JSON marshal error")
+	}
+}

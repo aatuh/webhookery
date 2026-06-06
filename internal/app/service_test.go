@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"webhookery/internal/domain"
+	"webhookery/pkg/verifier"
 )
 
 func TestIngestCapturesBeforeAccepted(t *testing.T) {
@@ -85,6 +86,38 @@ func TestIngestInvalidSignatureCapturesEvidenceButDoesNotAccept(t *testing.T) {
 	}
 	if len(store.last.Normalized.Envelope) != 0 {
 		t.Fatal("unverified provider payload must not create a normalized envelope")
+	}
+}
+
+func TestIngestProviderPathScopesSourceAndProvider(t *testing.T) {
+	store := &fakeStore{source: domain.Source{
+		ID:                 "src_provider_path",
+		TenantID:           "ten_provider_path",
+		Provider:           "github",
+		Adapter:            "github",
+		State:              domain.StateActive,
+		VerificationSecret: []byte("secret"),
+	}}
+	svc := NewIngestService(store, fixedClock(time.Unix(1_700_000_000, 0)))
+	body := []byte(`{"id":"evt_provider_path"}`)
+	signature := hmacHex([]byte("secret"), body)
+
+	res, err := svc.IngestProviderPath(context.Background(), "github", "src_provider_path", IngestRequest{
+		RawBody: body,
+		Headers: []domain.HeaderPair{
+			{Name: "X-Hub-Signature-256", Value: "sha256=" + signature},
+			{Name: "X-GitHub-Delivery", Value: "delivery-guid"},
+			{Name: "X-GitHub-Event", Value: "push"},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !res.Accepted || !store.captured {
+		t.Fatalf("expected provider-path request to be captured and accepted, result=%+v captured=%v", res, store.captured)
+	}
+	if store.last.Event.TenantID != "ten_provider_path" || store.last.Event.SourceID != "src_provider_path" || store.last.Event.Provider != "github" {
+		t.Fatalf("provider-path ingest did not scope source and provider: %+v", store.last.Event)
 	}
 }
 
@@ -279,6 +312,25 @@ func TestIngestCloudEventsBinaryModeIsEvidenceOnly(t *testing.T) {
 	}
 	if len(store.last.Normalized.Envelope) != 0 {
 		t.Fatal("unsigned binary CloudEvents must not create a trusted normalized envelope")
+	}
+}
+
+func TestSystemClockAndInvalidSignatureHelpers(t *testing.T) {
+	if (SystemClock{}).Now().Location() != time.UTC {
+		t.Fatal("system clock must return UTC timestamps")
+	}
+	for _, reason := range []string{
+		verifier.ReasonInvalidSignature,
+		verifier.ReasonMissingSignature,
+		verifier.ReasonExpiredTimestamp,
+		verifier.ReasonMalformedHeader,
+	} {
+		if !IsInvalidSignature(IngestResult{VerifyReason: reason}) {
+			t.Fatalf("%s should be classified as invalid signature", reason)
+		}
+	}
+	if IsInvalidSignature(IngestResult{VerifyReason: "ok"}) {
+		t.Fatal("ok verification reason must not be classified as invalid signature")
 	}
 }
 

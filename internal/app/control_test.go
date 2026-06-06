@@ -140,6 +140,52 @@ func TestControlServiceIncidentLifecycleScopesAndRedactsReports(t *testing.T) {
 	}
 }
 
+func TestControlServiceIncidentReadRemoveAndEvidenceExportScopeTenant(t *testing.T) {
+	store := &fakeControlStore{}
+	svc := NewControlService(store, ssrf.Validator{Resolver: ssrf.StaticResolver{}})
+	operator := authz.Actor{ID: "usr_ops", TenantID: "ten_a", Role: authz.RoleOperator, Scopes: []string{"incidents:read", "incidents:write", "events:read"}}
+	owner := authz.Actor{ID: "usr_owner", TenantID: "ten_a", Role: authz.RoleOwner, Scopes: []string{"*"}}
+
+	incidents, err := svc.ListIncidents(context.Background(), operator, 250)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(incidents) != 1 || incidents[0].TenantID != "ten_a" || store.incidentTenantID != "ten_a" {
+		t.Fatalf("incident list was not tenant scoped: incidents=%+v tenant=%q", incidents, store.incidentTenantID)
+	}
+	if _, err := svc.GetIncident(context.Background(), operator, " "); !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("expected blank incident id rejection, got %v", err)
+	}
+	incident, err := svc.GetIncident(context.Background(), operator, " inc_1 ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if incident.ID != "inc_1" || store.incidentID != "inc_1" {
+		t.Fatalf("incident read was not trimmed and tenant scoped: incident=%+v storeID=%q", incident, store.incidentID)
+	}
+	if _, err := svc.RemoveIncidentEvent(context.Background(), operator, "inc_1", "evt_1", StateChangeRequest{}); !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("expected missing remove reason rejection, got %v", err)
+	}
+	removed, err := svc.RemoveIncidentEvent(context.Background(), operator, " inc_1 ", " evt_1 ", StateChangeRequest{Reason: " no longer related "})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if removed.IncidentID != "inc_1" || removed.EventID != "evt_1" || store.incidentReason != "no longer related" {
+		t.Fatalf("incident event removal was not normalized: removed=%+v reason=%q", removed, store.incidentReason)
+	}
+
+	if _, _, err := svc.CreateIncidentEvidenceExport(context.Background(), operator, "inc_1", CreateIncidentEvidenceExportRequest{Reason: "support handoff"}); err != ErrForbidden {
+		t.Fatalf("expected incident evidence export to require audit read, got %v", err)
+	}
+	link, export, err := svc.CreateIncidentEvidenceExport(context.Background(), owner, " inc_1 ", CreateIncidentEvidenceExportRequest{Reason: " evidence package "})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if link.TenantID != "ten_a" || link.IncidentID != "inc_1" || export.TenantID != "ten_a" || store.incidentReason != "evidence package" {
+		t.Fatalf("incident evidence export was not tenant scoped and normalized: link=%+v export=%+v reason=%q", link, export, store.incidentReason)
+	}
+}
+
 func TestControlServiceScopesEventSchemaReadsToActorTenant(t *testing.T) {
 	store := &fakeControlStore{}
 	svc := NewControlService(store, ssrf.Validator{Resolver: ssrf.StaticResolver{}})
@@ -951,6 +997,43 @@ func TestControlServiceScopesAuditExportDownloadToActorTenant(t *testing.T) {
 	}
 }
 
+func TestControlServiceScopesAuditExportReadsAndRawAccess(t *testing.T) {
+	store := &fakeControlStore{auditExport: domain.EvidenceExport{ID: "exp_raw", TenantID: "ten_a", IncludeRawPayloads: true}}
+	svc := NewControlService(store, ssrf.Validator{Resolver: ssrf.StaticResolver{}})
+	auditor := authz.Actor{ID: "usr_audit", TenantID: "ten_a", Role: authz.RoleAuditor, Scopes: []string{"audit:read"}}
+	rawReader := authz.Actor{ID: "usr_raw", TenantID: "ten_a", Role: authz.RoleAuditor, Scopes: []string{"audit:read", "events:raw"}}
+
+	if _, err := svc.GetAuditExport(context.Background(), auditor, "exp_raw"); err != ErrForbidden {
+		t.Fatalf("expected raw-inclusive audit export read to require raw scope, got %v", err)
+	}
+	export, err := svc.GetAuditExport(context.Background(), rawReader, "exp_raw")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if export.TenantID != "ten_a" || export.ID != "exp_raw" {
+		t.Fatalf("audit export read was not tenant scoped: %+v", export)
+	}
+}
+
+func TestControlServiceAuditExportCreateValidatesWindowAndRawScope(t *testing.T) {
+	store := &fakeControlStore{}
+	svc := NewControlService(store, ssrf.Validator{Resolver: ssrf.StaticResolver{}})
+	actor := authz.Actor{ID: "usr_raw", TenantID: "ten_a", Role: authz.RoleAuditor, Scopes: []string{"audit:read", "events:raw"}}
+	from := time.Date(2026, 6, 8, 12, 0, 0, 0, time.UTC)
+	to := from.Add(-time.Minute)
+
+	if _, err := svc.CreateAuditExport(context.Background(), actor, CreateAuditExportRequest{From: from, To: to, Reason: "bad window"}); !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("expected invalid audit export window, got %v", err)
+	}
+	export, err := svc.CreateAuditExport(context.Background(), actor, CreateAuditExportRequest{IncludePayloadBodies: true, From: to, To: from, Reason: " collect evidence "})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if export.TenantID != "ten_a" || !export.IncludePayloadBodies {
+		t.Fatalf("audit export create was not tenant scoped: %+v", export)
+	}
+}
+
 func TestControlServiceForbidsRawInclusiveDownloadBeforeBundleRead(t *testing.T) {
 	store := &fakeControlStore{auditExport: domain.EvidenceExport{ID: "exp_raw", TenantID: "ten_a", IncludeRawPayloads: true}}
 	svc := NewControlService(store, ssrf.Validator{Resolver: ssrf.StaticResolver{}})
@@ -996,6 +1079,20 @@ func TestControlServiceHidesRawInclusiveAuditExportsWithoutRawScope(t *testing.T
 	}
 	if len(exports) != 1 || exports[0].ID != "exp_public" {
 		t.Fatalf("unexpected exports: %+v", exports)
+	}
+}
+
+func TestControlServiceValidateEndpointURLUsesSSRFPolicy(t *testing.T) {
+	svc := NewControlService(&fakeControlStore{}, ssrf.Validator{Resolver: ssrf.StaticResolver{
+		"receiver.example": {netip.MustParseAddr("93.184.216.34")},
+	}})
+	allowed := svc.ValidateEndpointURL(context.Background(), "https://receiver.example/hook")
+	if !allowed.Allowed || allowed.NormalizedURL != "https://receiver.example/hook" {
+		t.Fatalf("expected receiver URL to be allowed, got %+v", allowed)
+	}
+	blocked := svc.ValidateEndpointURL(context.Background(), "http://169.254.169.254/latest")
+	if blocked.Allowed || !containsString(blocked.BlockedReasons, "blocked_scheme") || !containsString(blocked.BlockedReasons, "ip_literal_blocked") {
+		t.Fatalf("expected metadata URL to be blocked by SSRF policy, got %+v", blocked)
 	}
 }
 
@@ -1594,6 +1691,132 @@ func TestControlServiceRetryPolicyValidation(t *testing.T) {
 	}
 	if store.retryPolicyTenantID != "ten_a" {
 		t.Fatalf("retry policy was not tenant scoped: %q", store.retryPolicyTenantID)
+	}
+}
+
+func TestControlServiceAlertAndSignalValidationHelpers(t *testing.T) {
+	createAlert := CreateAlertRuleRequest{
+		Name:       " DLQ ",
+		RuleType:   domain.AlertRuleDeadLetterOpen,
+		Threshold:  1,
+		Dimensions: map[string]string{"endpoint.id": "end_1"},
+		ChannelIDs: []string{" nch_1 ", "nch_1"},
+	}
+	if err := normalizeCreateAlertRule(&createAlert); err != nil {
+		t.Fatal(err)
+	}
+	if createAlert.Name != "DLQ" || createAlert.MetricName != "dead_letter.open" || createAlert.Comparator != ">=" || createAlert.WindowSeconds != 300 || createAlert.State != domain.StateActive {
+		t.Fatalf("alert defaults not normalized: %+v", createAlert)
+	}
+	if len(createAlert.ChannelIDs) != 1 || createAlert.ChannelIDs[0] != "nch_1" {
+		t.Fatalf("channel IDs not trimmed and deduped: %+v", createAlert.ChannelIDs)
+	}
+	for _, ruleType := range []string{
+		domain.AlertRuleQuarantineOpen,
+		domain.AlertRuleEndpointFailureRate24h,
+		domain.AlertRuleEndpointCircuitOpen,
+		domain.AlertRuleOldestOutboxAgeSeconds,
+		domain.AlertRuleWorkerLeaseExpired,
+		domain.AlertRuleAuditChainVerificationFails,
+		domain.AlertRuleReconciliationFailedItems,
+	} {
+		if defaultAlertMetric(ruleType) == "" {
+			t.Fatalf("missing default alert metric for %s", ruleType)
+		}
+	}
+
+	comparator := " <= "
+	state := " disabled "
+	channelIDs := []string{"nch_1", "nch_1", "nch_2"}
+	updateAlert := UpdateAlertRuleRequest{
+		Name:       ptrString(" backlog "),
+		Comparator: &comparator,
+		State:      &state,
+		Dimensions: map[string]string{"queue": "outbox"},
+		ChannelIDs: &channelIDs,
+	}
+	if err := normalizeUpdateAlertRule(&updateAlert); err != nil {
+		t.Fatal(err)
+	}
+	if *updateAlert.Name != "backlog" || *updateAlert.Comparator != "<=" || *updateAlert.State != domain.StateDisabled {
+		t.Fatalf("alert update fields not normalized: %+v", updateAlert)
+	}
+	if len(*updateAlert.ChannelIDs) != 2 {
+		t.Fatalf("alert update channel IDs not deduped: %+v", *updateAlert.ChannelIDs)
+	}
+
+	tooManyIDs := make([]string, 17)
+	for i := range tooManyIDs {
+		tooManyIDs[i] = "nch"
+	}
+	invalidAlertCases := []struct {
+		name string
+		err  error
+	}{
+		{name: "bad dimensions", err: validateAlertDimensions(map[string]string{"bad key": "value"})},
+		{name: "empty ids", err: func() error { _, err := normalizeIDList([]string{"nch_1", " "}, 16, "channel_ids"); return err }()},
+		{name: "too many ids", err: func() error { _, err := normalizeIDList(tooManyIDs, 16, "channel_ids"); return err }()},
+		{name: "invalid comparator", err: normalizeUpdateAlertRule(&UpdateAlertRuleRequest{Comparator: ptrString("!=")})},
+		{name: "invalid state", err: normalizeUpdateAlertRule(&UpdateAlertRuleRequest{State: ptrString("paused")})},
+	}
+	for _, tc := range invalidAlertCases {
+		t.Run(tc.name, func(t *testing.T) {
+			if !errors.Is(tc.err, ErrInvalidInput) {
+				t.Fatalf("expected invalid input, got %v", tc.err)
+			}
+		})
+	}
+
+	notification := CreateNotificationChannelRequest{Name: " Ops ", URL: " https://signals.example/hook ", SigningSecret: " 0123456789abcdef "}
+	if err := normalizeCreateNotificationChannel(&notification); err != nil {
+		t.Fatal(err)
+	}
+	if notification.Name != "Ops" || notification.ChannelType != domain.NotificationChannelWebhook || notification.URL != "https://signals.example/hook" || notification.SigningSecret != "0123456789abcdef" {
+		t.Fatalf("notification channel not normalized: %+v", notification)
+	}
+	if err := normalizeCreateNotificationChannel(&CreateNotificationChannelRequest{Name: "ops", ChannelType: "email", URL: "https://signals.example/hook", SigningSecret: "0123456789abcdef"}); !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("expected unsupported notification channel type, got %v", err)
+	}
+	updateNotification := UpdateNotificationChannelRequest{
+		Name:          ptrString(" Ops "),
+		URL:           ptrString(" https://signals.example/new "),
+		SigningSecret: ptrString(" 0123456789abcdef "),
+		State:         ptrString(" disabled "),
+	}
+	if err := normalizeUpdateNotificationChannel(&updateNotification); err != nil {
+		t.Fatal(err)
+	}
+	if *updateNotification.Name != "Ops" || *updateNotification.URL != "https://signals.example/new" || *updateNotification.SigningSecret != "0123456789abcdef" || *updateNotification.State != domain.StateDisabled {
+		t.Fatalf("notification update not normalized: %+v", updateNotification)
+	}
+	if err := normalizeUpdateNotificationChannel(&UpdateNotificationChannelRequest{}); !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("expected empty notification update to be invalid, got %v", err)
+	}
+
+	siem := CreateSIEMSinkRequest{Name: " SOC ", URL: " https://siem.example/ingest ", SigningSecret: " 0123456789abcdef "}
+	if err := normalizeCreateSIEMSink(&siem); err != nil {
+		t.Fatal(err)
+	}
+	if siem.Name != "SOC" || siem.SinkType != domain.SIEMSinkWebhook || siem.URL != "https://siem.example/ingest" || siem.SigningSecret != "0123456789abcdef" {
+		t.Fatalf("SIEM sink not normalized: %+v", siem)
+	}
+	if err := normalizeCreateSIEMSink(&CreateSIEMSinkRequest{Name: "soc", SinkType: "syslog", URL: "https://siem.example/ingest", SigningSecret: "0123456789abcdef"}); !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("expected unsupported SIEM sink type, got %v", err)
+	}
+	updateSIEM := UpdateSIEMSinkRequest{
+		Name:          ptrString(" SOC "),
+		URL:           ptrString(" https://siem.example/new "),
+		SigningSecret: ptrString(" 0123456789abcdef "),
+		State:         ptrString(" active "),
+	}
+	if err := normalizeUpdateSIEMSink(&updateSIEM); err != nil {
+		t.Fatal(err)
+	}
+	if *updateSIEM.Name != "SOC" || *updateSIEM.URL != "https://siem.example/new" || *updateSIEM.SigningSecret != "0123456789abcdef" || *updateSIEM.State != domain.StateActive {
+		t.Fatalf("SIEM update not normalized: %+v", updateSIEM)
+	}
+	if err := normalizeUpdateSIEMSink(&UpdateSIEMSinkRequest{}); !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("expected empty SIEM update to be invalid, got %v", err)
 	}
 }
 

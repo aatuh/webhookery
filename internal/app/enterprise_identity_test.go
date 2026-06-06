@@ -149,6 +149,47 @@ func TestEnterpriseIdentityProviderManagementScopesAndValidates(t *testing.T) {
 	}
 }
 
+func TestEnterpriseIdentitySecurityHelpersNormalizeRedirectsAndDomains(t *testing.T) {
+	redirects := map[string]string{
+		"":                       "/",
+		"/console?tab=security":  "/console?tab=security",
+		"https://evil.test/path": "/",
+		"//evil.test/path":       "/",
+		"relative/path":          "/",
+		"://bad":                 "/",
+	}
+	for raw, want := range redirects {
+		t.Run(raw, func(t *testing.T) {
+			if got := safeRedirectPath(raw); got != want {
+				t.Fatalf("safeRedirectPath(%q)=%q want %q", raw, got, want)
+			}
+		})
+	}
+
+	if !emailDomainAllowed(" Person@Example.COM ", []string{"example.com"}) {
+		t.Fatal("expected matching email domain to be allowed")
+	}
+	if emailDomainAllowed("person@example.org", []string{"example.com"}) {
+		t.Fatal("unexpected non-matching email domain allowed")
+	}
+	if emailDomainAllowed("not-an-email", []string{"example.com"}) {
+		t.Fatal("malformed email should not match restricted domains")
+	}
+	if !emailDomainAllowed("person@anything.test", nil) {
+		t.Fatal("empty allowed domain list should allow any email domain")
+	}
+
+	if identityWildcard(" ") != "*" || identityWildcard(" security ") != "security" {
+		t.Fatal("identity wildcard should trim and default empty values")
+	}
+	if !wouldDenySecurityWrite("deny", "*", " ", " ") {
+		t.Fatal("wildcard deny should protect security write")
+	}
+	if wouldDenySecurityWrite("allow", "security:write", "security", "*") {
+		t.Fatal("allow rule should not be treated as a deny")
+	}
+}
+
 func TestEnterpriseSessionLifecycleHashesTokensAndScopesTenant(t *testing.T) {
 	store := &enterpriseFakeStore{}
 	svc := NewControlService(store, ssrf.Validator{})
