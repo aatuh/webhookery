@@ -5,10 +5,16 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/base64"
 	"encoding/json"
+	"encoding/pem"
 	"errors"
 	"io"
+	"math/big"
 	"net/netip"
 	"os"
 	"path/filepath"
@@ -1041,6 +1047,179 @@ func TestPostgresIncidentLifecycleReportAndEvidenceExport(t *testing.T) {
 	}
 }
 
+func TestPostgresProducerClientAndMTLSLifecycle(t *testing.T) {
+	ctx, store, actor := openPostgresIntegrationStore(t)
+	defer store.Close()
+
+	control := app.NewControlService(store, ssrf.Validator{Resolver: ssrf.StaticResolver{}})
+	source, err := control.CreateSource(ctx, actor, app.CreateSourceRequest{
+		Name:               "producer source",
+		Provider:           "stripe",
+		Adapter:            "stripe",
+		VerificationSecret: "whsec_producer",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	created, err := control.CreateProducerClient(ctx, actor, app.CreateProducerClientRequest{
+		Name:            "batch producer",
+		SourceID:        source.ID,
+		Scopes:          []string{"events:write"},
+		TokenTTLSeconds: 600,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if created.Client.TenantID != actor.TenantID || created.Client.SourceID != source.ID || created.ClientSecret == "" || !strings.HasPrefix(created.ClientSecret, "whpcs_") {
+		t.Fatalf("unexpected producer client creation: %+v secret=%q", created.Client, created.ClientSecret)
+	}
+	if created.Client.ID == created.ClientSecret || strings.Contains(created.Client.ID, created.ClientSecret) {
+		t.Fatalf("client response leaked secret into id fields: %+v", created.Client)
+	}
+	assertPostgresAuditEvent(t, ctx, store, actor.TenantID, "producer_client.created", "producer_client", created.Client.ID)
+
+	clients, err := control.ListProducerClients(ctx, actor, 20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !containsPostgresProducerClient(clients, created.Client.ID, domain.StateActive) {
+		t.Fatalf("expected active producer client in list, got %+v", clients)
+	}
+	gotClient, err := control.GetProducerClient(ctx, actor, created.Client.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotClient.ID != created.Client.ID || gotClient.SourceID != source.ID {
+		t.Fatalf("producer client did not round trip: %+v", gotClient)
+	}
+	if _, err := store.GetProducerClient(ctx, "ten_it_wrong_producer", created.Client.ID); !errors.Is(err, app.ErrNotFound) {
+		t.Fatalf("wrong-tenant producer client lookup must be hidden, got %v", err)
+	}
+
+	producerToken, err := control.IssueProducerToken(ctx, created.Client.ID, created.ClientSecret)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if producerToken.AccessToken == "" || producerToken.TokenType != "Bearer" || producerToken.ExpiresIn != 600 {
+		t.Fatalf("unexpected producer token response: %+v", producerToken)
+	}
+	producerActor, err := store.AuthenticateProducerAccessToken(ctx, app.HashToken(producerToken.AccessToken))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if producerActor.TenantID != actor.TenantID || producerActor.SourceID != source.ID || producerActor.ID != "producer_client:"+created.Client.ID {
+		t.Fatalf("unexpected producer access actor: %+v", producerActor)
+	}
+
+	newName := "batch producer renamed"
+	newTTL := 1200
+	updated, err := control.UpdateProducerClient(ctx, actor, created.Client.ID, app.UpdateProducerClientRequest{
+		Name:            &newName,
+		TokenTTLSeconds: &newTTL,
+		Scopes:          []string{"events:write"},
+		Reason:          "tighten token policy",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.Name != newName || updated.TokenTTLSeconds != newTTL || strings.Join(updated.Scopes, ",") != "events:write" {
+		t.Fatalf("producer client update did not persist: %+v", updated)
+	}
+	assertPostgresAuditEvent(t, ctx, store, actor.TenantID, "producer_client.updated", "producer_client", created.Client.ID)
+
+	rotated, err := control.RotateProducerClientSecret(ctx, actor, created.Client.ID, app.RotateProducerClientSecretRequest{Reason: "scheduled rotation"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rotated.ClientSecret == "" || rotated.Secret.Hash != "" || rotated.Secret.ClientID != created.Client.ID {
+		t.Fatalf("rotated producer secret response leaked hash or lost linkage: %+v secret=%q", rotated.Secret, rotated.ClientSecret)
+	}
+	if _, err := control.IssueProducerToken(ctx, created.Client.ID, created.ClientSecret); !errors.Is(err, app.ErrUnauthorized) {
+		t.Fatalf("old producer secret must not authenticate after rotation, got %v", err)
+	}
+	if _, err := control.IssueProducerToken(ctx, created.Client.ID, rotated.ClientSecret); err != nil {
+		t.Fatalf("rotated producer secret should authenticate, got %v", err)
+	}
+	assertPostgresAuditEvent(t, ctx, store, actor.TenantID, "producer_client.secret_rotated", "producer_client", created.Client.ID)
+
+	certPEM := testPostgresClientCertificatePEM(t, "Webhookery Producer Integration")
+	identity, err := control.CreateProducerMTLSIdentity(ctx, actor, app.CreateProducerMTLSIdentityRequest{
+		Name:           "producer certificate",
+		SourceID:       source.ID,
+		CertificatePEM: certPEM,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if identity.TenantID != actor.TenantID || identity.SourceID != source.ID || identity.CertificateFingerprintSHA256 == "" || identity.State != domain.StateActive {
+		t.Fatalf("unexpected producer mTLS identity: %+v", identity)
+	}
+	assertPostgresAuditEvent(t, ctx, store, actor.TenantID, "producer_mtls_identity.created", "producer_mtls_identity", identity.ID)
+
+	mtlsActor, err := store.AuthenticateProducerMTLSIdentity(ctx, identity.CertificateFingerprintSHA256)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mtlsActor.TenantID != actor.TenantID || mtlsActor.SourceID != source.ID || mtlsActor.ID != "producer_mtls:"+identity.ID {
+		t.Fatalf("unexpected producer mTLS actor: %+v", mtlsActor)
+	}
+	verification, err := control.VerifyProducerMTLSIdentity(ctx, actor, identity.ID, app.VerifyProducerMTLSIdentityRequest{CertificatePEM: certPEM})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !verification.Matched {
+		t.Fatalf("expected producer certificate to match identity: %+v", verification)
+	}
+	identities, err := control.ListProducerMTLSIdentities(ctx, actor, 20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !containsPostgresProducerMTLSIdentity(identities, identity.ID, domain.StateActive) {
+		t.Fatalf("expected active producer mTLS identity in list, got %+v", identities)
+	}
+	if _, err := store.GetProducerMTLSIdentity(ctx, "ten_it_wrong_producer", identity.ID); !errors.Is(err, app.ErrNotFound) {
+		t.Fatalf("wrong-tenant producer mTLS identity lookup must be hidden, got %v", err)
+	}
+
+	mtlsName := "producer certificate renamed"
+	updatedIdentity, err := control.UpdateProducerMTLSIdentity(ctx, actor, identity.ID, app.UpdateProducerMTLSIdentityRequest{Name: &mtlsName, Reason: "rename certificate"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updatedIdentity.Name != mtlsName || updatedIdentity.State != domain.StateActive {
+		t.Fatalf("producer mTLS update did not persist: %+v", updatedIdentity)
+	}
+	assertPostgresAuditEvent(t, ctx, store, actor.TenantID, "producer_mtls_identity.updated", "producer_mtls_identity", identity.ID)
+
+	disabledIdentity, err := control.DeleteProducerMTLSIdentity(ctx, actor, identity.ID, app.StateChangeRequest{Reason: "certificate retired"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if disabledIdentity.State != domain.StateDisabled {
+		t.Fatalf("expected disabled producer mTLS identity, got %+v", disabledIdentity)
+	}
+	if _, err := store.AuthenticateProducerMTLSIdentity(ctx, identity.CertificateFingerprintSHA256); !errors.Is(err, app.ErrUnauthorized) {
+		t.Fatalf("disabled producer mTLS identity must not authenticate, got %v", err)
+	}
+	assertPostgresAuditEvent(t, ctx, store, actor.TenantID, "producer_mtls_identity.disabled", "producer_mtls_identity", identity.ID)
+
+	disabledClient, err := control.DeleteProducerClient(ctx, actor, created.Client.ID, app.StateChangeRequest{Reason: "producer retired"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if disabledClient.State != domain.StateDisabled {
+		t.Fatalf("expected disabled producer client, got %+v", disabledClient)
+	}
+	if _, err := control.IssueProducerToken(ctx, created.Client.ID, rotated.ClientSecret); !errors.Is(err, app.ErrUnauthorized) {
+		t.Fatalf("disabled producer client must not authenticate, got %v", err)
+	}
+	if _, err := store.AuthenticateProducerAccessToken(ctx, app.HashToken(producerToken.AccessToken)); !errors.Is(err, app.ErrUnauthorized) {
+		t.Fatalf("producer access token must be revoked when client is disabled, got %v", err)
+	}
+	assertPostgresAuditEvent(t, ctx, store, actor.TenantID, "producer_client.disabled", "producer_client", created.Client.ID)
+}
+
 func TestPostgresEnterpriseIdentitySessionsAndProviderLifecycle(t *testing.T) {
 	ctx, store, actor := openPostgresIntegrationStore(t)
 	defer store.Close()
@@ -1797,6 +1976,24 @@ func containsPostgresIncident(incidents []domain.Incident, id, state string) boo
 	return false
 }
 
+func containsPostgresProducerClient(clients []domain.ProducerClient, id, state string) bool {
+	for _, client := range clients {
+		if client.ID == id && client.State == state {
+			return true
+		}
+	}
+	return false
+}
+
+func containsPostgresProducerMTLSIdentity(identities []domain.ProducerMTLSIdentity, id, state string) bool {
+	for _, identity := range identities {
+		if identity.ID == id && identity.State == state {
+			return true
+		}
+	}
+	return false
+}
+
 func containsPostgresSource(sources []domain.Source, id, state string) bool {
 	for _, source := range sources {
 		if source.ID == id && source.State == state {
@@ -2108,6 +2305,28 @@ func sortedTestMapKeys[V any](items map[string]V) []string {
 	}
 	sort.Strings(keys)
 	return keys
+}
+
+func testPostgresClientCertificatePEM(t *testing.T, commonName string) string {
+	t.Helper()
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	template := &x509.Certificate{
+		SerialNumber: big.NewInt(1),
+		Subject:      pkix.Name{CommonName: commonName},
+		NotBefore:    now.Add(-time.Hour),
+		NotAfter:     now.Add(time.Hour),
+		KeyUsage:     x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
+	}
+	der, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}))
 }
 
 func decodeTestJSONLines(t *testing.T, body []byte) []map[string]any {

@@ -783,6 +783,15 @@ func (s *Store) CreateProducerMTLSIdentity(ctx context.Context, tenantID, actorI
 	if identity.State == "" {
 		identity.State = domain.StateActive
 	}
+	if identity.DNSSANs == nil {
+		identity.DNSSANs = []string{}
+	}
+	if identity.URISANs == nil {
+		identity.URISANs = []string{}
+	}
+	if identity.EmailSANs == nil {
+		identity.EmailSANs = []string{}
+	}
 	identity.TenantID = tenantID
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
