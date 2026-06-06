@@ -261,6 +261,48 @@ func TestViewEvidenceBundleFileSummarizesWithoutPrintingBodies(t *testing.T) {
 	}
 }
 
+func TestRunEvidenceViewReadsExplicitBundleFile(t *testing.T) {
+	bundle, err := evidence.BuildTarGzipBundle(evidence.Manifest{
+		ExportID:  "exp_1",
+		TenantID:  "ten_1",
+		CreatedAt: time.Unix(1, 0).UTC(),
+	}, map[string][]byte{
+		"audit_events.jsonl": []byte(`{"action":"event.captured"}` + "\n"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "bundle.tar.gz")
+	if err := os.WriteFile(path, bundle.Bytes, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	oldStdout := os.Stdout
+	reader, writer, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Stdout = writer
+	defer func() { os.Stdout = oldStdout }()
+
+	err = runEvidence([]string{"view", "--file", path})
+	_ = writer.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := io.ReadAll(reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var view evidence.BundleView
+	if err := json.Unmarshal(body, &view); err != nil {
+		t.Fatalf("invalid evidence view JSON %q: %v", body, err)
+	}
+	if view.Manifest.ExportID != "exp_1" || view.Manifest.TenantIDHash == "" || !view.Verification.Valid {
+		t.Fatalf("unexpected evidence view: %+v", view)
+	}
+}
+
 func TestAPIEndpointRejectsUnsafeBaseURLs(t *testing.T) {
 	tests := []string{
 		"ftp://api.example",
@@ -1852,6 +1894,68 @@ func TestDownloadAuditExportWritesPrivateFile(t *testing.T) {
 	}
 }
 
+func TestDownloadAuditExportUsesDefaultPrivateOutputPath(t *testing.T) {
+	var gotAuth string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/audit-exports/exp_default:download" {
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+		gotAuth = r.Header.Get("Authorization")
+		_, _ = w.Write([]byte("default bundle"))
+	}))
+	defer server.Close()
+
+	t.Chdir(t.TempDir())
+	if err := downloadAuditExport(server.URL, "whkey_default", "exp_default", ""); err != nil {
+		t.Fatal(err)
+	}
+	if gotAuth != "Bearer whkey_default" {
+		t.Fatalf("authorization header %q did not use the provided API key", gotAuth)
+	}
+	body, err := os.ReadFile("exp_default.tar.gz")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(body) != "default bundle" {
+		t.Fatalf("unexpected default export body %q", string(body))
+	}
+	info, err := os.Stat("exp_default.tar.gz")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := info.Mode().Perm(); got != 0o600 {
+		t.Fatalf("permissions=%o want 0600", got)
+	}
+}
+
+func TestDownloadAuditExportProblemErrorRedactsDetailsAndDoesNotWriteFile(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = w.Write([]byte(`{"stable_code":"WEBHOOKERY_TENANT_ACCESS_DENIED","request_id":"req_export","detail":"tenant secret detail"}`))
+	}))
+	defer server.Close()
+
+	output := filepath.Join(t.TempDir(), "blocked.tar.gz")
+	err := downloadAuditExport(server.URL, "whkey_export_secret", "exp_1", output)
+	if err == nil {
+		t.Fatal("expected problem response")
+	}
+	got := err.Error()
+	for _, want := range []string{"audit export download failed", "403", "WEBHOOKERY_TENANT_ACCESS_DENIED", "req_export"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("error %q did not contain %q", got, want)
+		}
+	}
+	for _, forbidden := range []string{"whkey_export_secret", "tenant secret detail"} {
+		if strings.Contains(got, forbidden) {
+			t.Fatalf("error %q leaked %q", got, forbidden)
+		}
+	}
+	if _, statErr := os.Stat(output); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("blocked export output should not exist, stat err=%v", statErr)
+	}
+}
+
 func TestCreateAndDownloadIncidentExportCreatesThenDownloadsPrivateFile(t *testing.T) {
 	var seen []string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -1934,6 +2038,27 @@ func TestProblemResponseErrorIncludesStableCodeAndRequestID(t *testing.T) {
 		if strings.Contains(got, forbidden) {
 			t.Fatalf("error %q leaked %q", got, forbidden)
 		}
+	}
+}
+
+func TestProblemResponseErrorFallsBackWithoutLeakingBody(t *testing.T) {
+	err := problemResponseError("request failed", http.StatusBadGateway, []byte(`{"code":"temporary_http","detail":"backend secret detail"}`))
+	if err == nil {
+		t.Fatal("expected problem response error")
+	}
+	got := err.Error()
+	for _, want := range []string{"request failed", "502", "temporary_http"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("error %q did not contain %q", got, want)
+		}
+	}
+	if strings.Contains(got, "backend secret detail") || strings.Contains(got, "request_id=") {
+		t.Fatalf("fallback problem error leaked body detail or phantom request id: %q", got)
+	}
+
+	unknown := problemResponseError("request failed", http.StatusTeapot, []byte(`not-json-secret`))
+	if unknown == nil || !strings.Contains(unknown.Error(), "unknown_error") || strings.Contains(unknown.Error(), "not-json-secret") {
+		t.Fatalf("unexpected unknown problem error: %v", unknown)
 	}
 }
 

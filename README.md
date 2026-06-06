@@ -11,7 +11,7 @@
 ![Go Version](https://img.shields.io/badge/go-1.25.11+-00ADD8.svg)
 ![OpenAPI](https://img.shields.io/badge/OpenAPI-214%20operations-brightgreen.svg)
 ![Coverage Gate](https://img.shields.io/badge/local%20coverage-50%25+-yellow.svg)
-![DB Coverage Gate](https://img.shields.io/badge/db%20coverage-75%25+-yellowgreen.svg)
+![DB Coverage Gate](https://img.shields.io/badge/db%20coverage-76%25+-yellowgreen.svg)
 
 Audit-grade webhook capture, replay, and evidence -- self-hosted.
 
