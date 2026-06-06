@@ -3,6 +3,7 @@ package client
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -50,6 +51,78 @@ func TestClientRejectsUnsafeBaseURL(t *testing.T) {
 	if _, err := New("file:///tmp/webhookery.sock", "key"); err == nil {
 		t.Fatal("expected unsafe base URL rejection")
 	}
+	if _, err := New("https://", "key"); err == nil {
+		t.Fatal("expected missing host rejection")
+	}
+}
+
+func TestClientUsesInjectedHTTPClientAndJoinsBasePath(t *testing.T) {
+	called := false
+	custom := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		called = true
+		if req.URL.String() != "https://api.example.test/base/v1/audit-chain/head" {
+			t.Fatalf("unexpected URL %s", req.URL.String())
+		}
+		if req.Header.Get("Authorization") != "Bearer key_123" {
+			t.Fatalf("missing bearer auth")
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     make(http.Header),
+			Body:       io.NopCloser(strings.NewReader(`{"tenant_id":"ten_1","sequence":3,"chain_hash":"sha256:def","unchained_events":0}`)),
+			Request:    req,
+		}, nil
+	})}
+
+	c, err := New("https://api.example.test/base/", "key_123", WithHTTPClient(custom))
+	if err != nil {
+		t.Fatal(err)
+	}
+	head, err := c.AuditChainHead(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !called || head.Sequence != 3 {
+		t.Fatalf("custom client not used or unexpected head: called=%t head=%+v", called, head)
+	}
+}
+
+func TestCreateEventValidatesRequiredFieldsBeforeRequest(t *testing.T) {
+	called := false
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		called = true
+		w.WriteHeader(http.StatusAccepted)
+	}))
+	defer server.Close()
+	c, err := New(server.URL, "key_123")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	tests := []ProductEvent{
+		{ID: "evt_1", Type: "invoice.paid"},
+		{Type: "invoice.paid", SourceID: "src_1"},
+		{ID: "evt_1", SourceID: "src_1"},
+	}
+	for _, event := range tests {
+		if _, err := c.CreateEvent(context.Background(), event); err == nil {
+			t.Fatalf("expected validation error for %+v", event)
+		}
+	}
+	if called {
+		t.Fatal("request should not be sent for invalid product event")
+	}
+}
+
+func TestIdempotencyKeyIgnoresBlankValues(t *testing.T) {
+	req, err := http.NewRequest(http.MethodPost, "https://api.example.test/v1/events", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	WithIdempotencyKey("  ")(req)
+	if req.Header.Get("Idempotency-Key") != "" {
+		t.Fatalf("blank idempotency key should not be set: %+v", req.Header)
+	}
 }
 
 func TestClientErrorDoesNotLeakBearer(t *testing.T) {
@@ -68,6 +141,15 @@ func TestClientErrorDoesNotLeakBearer(t *testing.T) {
 	}
 	if strings.Contains(err.Error(), "secret-key") {
 		t.Fatalf("error leaked API key: %v", err)
+	}
+}
+
+func TestHTTPErrorFormatsEmptyAndNonEmptyBodies(t *testing.T) {
+	if got := (HTTPError{StatusCode: http.StatusInternalServerError}).Error(); got != "webhookery API returned HTTP 500" {
+		t.Fatalf("unexpected empty-body error %q", got)
+	}
+	if got := (HTTPError{StatusCode: http.StatusBadRequest, Body: "bad request"}).Error(); got != "webhookery API returned HTTP 400: bad request" {
+		t.Fatalf("unexpected body error %q", got)
 	}
 }
 
@@ -121,4 +203,10 @@ func TestVerifyAuditChain(t *testing.T) {
 	if !result.Valid || result.CheckedEntries != 4 {
 		t.Fatalf("unexpected verification: %+v", result)
 	}
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return f(req)
 }
