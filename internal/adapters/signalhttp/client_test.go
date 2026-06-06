@@ -106,6 +106,80 @@ func TestDeliverRejectsUnsafeCustomHTTPTransport(t *testing.T) {
 	}
 }
 
+func TestDeliverBlocksUnsafeSignalURLWithoutLeakingSecret(t *testing.T) {
+	client := Client{}
+	result, err := client.Deliver(context.Background(), "http://169.254.169.254/latest?token=secret-token", []byte("{}"), []byte("signing-secret"))
+	if err == nil {
+		t.Fatal("expected unsafe signal URL rejection")
+	}
+	if result.FailureClass != "policy_blocked" {
+		t.Fatalf("expected policy_blocked, got %+v", result)
+	}
+	if strings.Contains(err.Error(), "secret-token") || strings.Contains(err.Error(), "signing-secret") {
+		t.Fatalf("blocked signal error leaked secret material: %v", err)
+	}
+}
+
+func TestDeliverNetworkErrorDoesNotLeakSignalURL(t *testing.T) {
+	client := Client{
+		HTTP: HTTPClient(time.Millisecond, ssrf.StaticResolver{
+			"signals.example": {netip.MustParseAddr("93.184.216.34")},
+		}),
+		SSRF: ssrf.Validator{Resolver: ssrf.StaticResolver{
+			"signals.example": {netip.MustParseAddr("93.184.216.34")},
+		}},
+	}
+	result, err := client.Deliver(context.Background(), "https://signals.example/hook?token=secret-token", []byte("{}"), []byte("signing-secret"))
+	if err == nil {
+		t.Fatal("expected signal delivery network error")
+	}
+	if result.FailureClass != "network_error" {
+		t.Fatalf("expected network_error, got %+v", result)
+	}
+	if strings.Contains(err.Error(), "secret-token") || strings.Contains(err.Error(), "signals.example") || strings.Contains(err.Error(), "signing-secret") {
+		t.Fatalf("signal delivery network error leaked sensitive detail: %v", err)
+	}
+}
+
+func TestSignalHTTPClientDefaultsAndPinsBaseTransport(t *testing.T) {
+	defaultClient, err := (Client{}).httpClient()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := defaultClient.Transport.(*http.Transport); !ok {
+		t.Fatalf("expected default pinned transport, got %T", defaultClient.Transport)
+	}
+	if err := defaultClient.CheckRedirect(&http.Request{}, []*http.Request{{}}); !errors.Is(err, http.ErrUseLastResponse) {
+		t.Fatalf("default signal client should block redirects, got %v", err)
+	}
+
+	base := &http.Client{}
+	pinned, err := (Client{
+		HTTP: base,
+		SSRF: ssrf.Validator{Resolver: ssrf.StaticResolver{
+			"signals.example": {netip.MustParseAddr("10.0.0.10")},
+		}},
+	}).httpClient()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pinned == base {
+		t.Fatal("httpClient should copy caller-provided client")
+	}
+	transport, ok := pinned.Transport.(*http.Transport)
+	if !ok {
+		t.Fatalf("expected pinned base transport, got %T", pinned.Transport)
+	}
+	_, err = transport.DialContext(context.Background(), "tcp", "signals.example:443")
+	var policyErr ssrf.PolicyError
+	if !errors.As(err, &policyErr) {
+		t.Fatalf("expected pinned transport policy error, got %v", err)
+	}
+	if err := pinned.CheckRedirect(&http.Request{}, []*http.Request{{}}); !errors.Is(err, http.ErrUseLastResponse) {
+		t.Fatalf("base signal client should block redirects, got %v", err)
+	}
+}
+
 func TestReadTruncatedSignalResponse(t *testing.T) {
 	body, err := readTruncated(strings.NewReader(strings.Repeat("x", 20)), 8)
 	if err != nil {
