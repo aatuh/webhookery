@@ -328,6 +328,96 @@ func TestPostgresDuplicateRawPayloadEvidenceRemainsLinkedAndExported(t *testing.
 	}
 }
 
+func TestPostgresRawPayloadEvidenceStorageReadPaths(t *testing.T) {
+	ctx, store, actor := openPostgresIntegrationStore(t)
+	defer store.Close()
+
+	now := time.Now().UTC().Truncate(time.Second)
+	control := app.NewControlService(store, ssrf.Validator{Resolver: ssrf.StaticResolver{"receiver.example.com": {netip.MustParseAddr("93.184.216.34")}}})
+	source, _ := createPostgresIntegrationRoute(t, ctx, control, actor, "invoice.raw_storage")
+
+	deleted := ingestPostgresIntegrationEvent(t, ctx, store, actor, source.ID, "invoice.raw_storage", "evt_it_raw_deleted_"+now.Format("150405.000000000"), now)
+	if _, err := store.pool.Exec(ctx, `
+		UPDATE raw_payloads
+		SET body='', storage_status='deleted', storage_deleted_at=now()
+		WHERE tenant_id=$1 AND id=$2`, actor.TenantID, deleted.RawPayloadID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.GetRawPayload(ctx, actor.TenantID, deleted.EventID, actor.ID, "deleted raw evidence"); !errors.Is(err, app.ErrGone) {
+		t.Fatalf("deleted raw payload should be gone, got %v", err)
+	}
+
+	s3MissingConfig := ingestPostgresIntegrationEvent(t, ctx, store, actor, source.ID, "invoice.raw_storage", "evt_it_raw_s3_missing_config_"+now.Add(time.Second).Format("150405.000000000"), now.Add(time.Second))
+	if _, err := store.pool.Exec(ctx, `
+		UPDATE raw_payloads
+		SET body='', storage_backend=$3, object_bucket='raw-bucket', object_key='missing-config.bin', storage_status='stored'
+		WHERE tenant_id=$1 AND id=$2`, actor.TenantID, s3MissingConfig.RawPayloadID, domain.RawStorageS3); err != nil {
+		t.Fatal(err)
+	}
+	store.objectStore = nil
+	if _, err := store.GetRawPayload(ctx, actor.TenantID, s3MissingConfig.EventID, actor.ID, "missing object store"); err == nil || !strings.Contains(err.Error(), "object store is not configured") {
+		t.Fatalf("missing object store should fail before read, got %v", err)
+	}
+
+	s3NotFound := ingestPostgresIntegrationEvent(t, ctx, store, actor, source.ID, "invoice.raw_storage", "evt_it_raw_s3_not_found_"+now.Add(2*time.Second).Format("150405.000000000"), now.Add(2*time.Second))
+	if _, err := store.pool.Exec(ctx, `
+		UPDATE raw_payloads
+		SET body='', storage_backend=$3, object_bucket='raw-bucket', object_key='not-found.bin', storage_status='stored'
+		WHERE tenant_id=$1 AND id=$2`, actor.TenantID, s3NotFound.RawPayloadID, domain.RawStorageS3); err != nil {
+		t.Fatal(err)
+	}
+	store.objectStore = &fakeObjectStore{}
+	if _, err := store.GetRawPayload(ctx, actor.TenantID, s3NotFound.EventID, actor.ID, "missing object"); !errors.Is(err, app.ErrGone) {
+		t.Fatalf("missing object should be gone, got %v", err)
+	}
+
+	s3ReadFailure := ingestPostgresIntegrationEvent(t, ctx, store, actor, source.ID, "invoice.raw_storage", "evt_it_raw_s3_read_failure_"+now.Add(3*time.Second).Format("150405.000000000"), now.Add(3*time.Second))
+	if _, err := store.pool.Exec(ctx, `
+		UPDATE raw_payloads
+		SET body='', storage_backend=$3, object_bucket='raw-bucket', object_key='read-failure.bin', storage_status='stored'
+		WHERE tenant_id=$1 AND id=$2`, actor.TenantID, s3ReadFailure.RawPayloadID, domain.RawStorageS3); err != nil {
+		t.Fatal(err)
+	}
+	store.objectStore = &fakeObjectStore{getErr: errors.New("backend leaked whsec_secret and payload bytes")}
+	if _, err := store.GetRawPayload(ctx, actor.TenantID, s3ReadFailure.EventID, actor.ID, "read failure"); !errors.Is(err, errObjectStoreReadFailed) || strings.Contains(err.Error(), "whsec_secret") || strings.Contains(err.Error(), "payload bytes") {
+		t.Fatalf("object read failure should be redacted, got %v", err)
+	}
+
+	s3HashMismatch := ingestPostgresIntegrationEvent(t, ctx, store, actor, source.ID, "invoice.raw_storage", "evt_it_raw_s3_hash_mismatch_"+now.Add(4*time.Second).Format("150405.000000000"), now.Add(4*time.Second))
+	mismatchKey := "hash-mismatch.bin"
+	if _, err := store.pool.Exec(ctx, `
+		UPDATE raw_payloads
+		SET body='', sha256=$3, size_bytes=$4, storage_backend=$5, object_bucket='raw-bucket', object_key=$6, storage_status='stored'
+		WHERE tenant_id=$1 AND id=$2`,
+		actor.TenantID, s3HashMismatch.RawPayloadID, domain.HashSHA256([]byte("expected payload")), int64(len("expected payload")), domain.RawStorageS3, mismatchKey); err != nil {
+		t.Fatal(err)
+	}
+	store.objectStore = &fakeObjectStore{objects: map[string][]byte{"raw-bucket/" + mismatchKey: []byte("different payload")}}
+	if _, err := store.GetRawPayload(ctx, actor.TenantID, s3HashMismatch.EventID, actor.ID, "hash mismatch"); err == nil || !strings.Contains(err.Error(), "hash mismatch") {
+		t.Fatalf("hash mismatch should fail, got %v", err)
+	}
+
+	s3Success := ingestPostgresIntegrationEvent(t, ctx, store, actor, source.ID, "invoice.raw_storage", "evt_it_raw_s3_success_"+now.Add(5*time.Second).Format("150405.000000000"), now.Add(5*time.Second))
+	objectBody := []byte(`{"id":"evt_it_raw_s3_success","type":"invoice.raw_storage"}`)
+	objectKey := "raw-success.bin"
+	if _, err := store.pool.Exec(ctx, `
+		UPDATE raw_payloads
+		SET body='', sha256=$3, size_bytes=$4, storage_backend=$5, object_bucket='raw-bucket', object_key=$6, storage_status='stored'
+		WHERE tenant_id=$1 AND id=$2`,
+		actor.TenantID, s3Success.RawPayloadID, domain.HashSHA256(objectBody), int64(len(objectBody)), domain.RawStorageS3, objectKey); err != nil {
+		t.Fatal(err)
+	}
+	store.objectStore = &fakeObjectStore{objects: map[string][]byte{"raw-bucket/" + objectKey: objectBody}}
+	raw, err := store.GetRawPayload(ctx, actor.TenantID, s3Success.EventID, actor.ID, "s3 raw evidence")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(raw.Body, objectBody) || raw.StorageBackend != domain.RawStorageS3 || raw.ObjectKey != objectKey {
+		t.Fatalf("s3 raw payload did not round trip: %+v body=%q", raw, string(raw.Body))
+	}
+	assertPostgresAuditEvent(t, ctx, store, actor.TenantID, "raw_payload.read", "event", s3Success.EventID)
+}
+
 func TestPostgresEventSearchDeliveryControlAndDeadLetterLifecycle(t *testing.T) {
 	ctx, store, actor := openPostgresIntegrationStore(t)
 	defer store.Close()
