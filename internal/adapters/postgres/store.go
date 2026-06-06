@@ -3862,6 +3862,7 @@ func (s *Store) EvaluateAlertRules(ctx context.Context, workerID string, limit i
 	if err := rows.Err(); err != nil {
 		return err
 	}
+	rows.Close()
 	for _, rule := range rules {
 		observed, err := s.alertObservedValue(ctx, rule)
 		if err != nil {
@@ -3889,7 +3890,7 @@ func (s *Store) alertObservedValue(ctx context.Context, rule domain.AlertRule) (
 		FROM metrics_rollups
 		WHERE tenant_id=$1
 		  AND metric_name=$2
-		  AND bucket_start >= now() - ($3::text || ' seconds')::interval
+		  AND bucket_start >= now() - ($3::int * interval '1 second')
 		  AND dimensions @> $4::jsonb`,
 		rule.TenantID, rule.MetricName, rule.WindowSeconds, string(dimensions)).Scan(&value); err != nil {
 		return 0, err
@@ -3969,21 +3970,25 @@ func (s *Store) resolveAlertFirings(ctx context.Context, rule domain.AlertRule, 
 		return err
 	}
 	defer rows.Close()
+	var firings []domain.AlertFiring
 	for rows.Next() {
 		firing, err := scanAlertFiring(rows)
 		if err != nil {
 			return err
 		}
-		firing = normalizeAlertFiring(firing)
+		firings = append(firings, normalizeAlertFiring(firing))
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	rows.Close()
+	for _, firing := range firings {
 		if _, err := recordAuditEventTx(ctx, tx, auditEventInput{TenantID: rule.TenantID, ActorID: workerID, Action: "alert_firing.resolved", Resource: "alert_firing", ResourceID: firing.ID, Reason: rule.Name}); err != nil {
 			return err
 		}
 		if err := s.enqueueNotificationDeliveriesTx(ctx, tx, firing, domain.AlertFiringResolved, rule.Name); err != nil {
 			return err
 		}
-	}
-	if err := rows.Err(); err != nil {
-		return err
 	}
 	return tx.Commit(ctx)
 }
@@ -4098,11 +4103,19 @@ func (s *Store) enqueueNotificationDeliveriesTx(ctx context.Context, tx pgx.Tx, 
 		return err
 	}
 	defer rows.Close()
+	var channelIDs []string
 	for rows.Next() {
 		var channelID string
 		if err := rows.Scan(&channelID); err != nil {
 			return err
 		}
+		channelIDs = append(channelIDs, channelID)
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	rows.Close()
+	for _, channelID := range channelIDs {
 		body, err := notificationPayload(firing, transition, reason)
 		if err != nil {
 			return err
@@ -4115,7 +4128,7 @@ func (s *Store) enqueueNotificationDeliveriesTx(ctx context.Context, tx pgx.Tx, 
 			return err
 		}
 	}
-	return rows.Err()
+	return nil
 }
 
 func notificationPayload(firing domain.AlertFiring, transition, reason string) ([]byte, error) {
@@ -4182,6 +4195,7 @@ func (s *Store) RefreshMetricsRollups(ctx context.Context, workerID string, limi
 	if err := rows.Err(); err != nil {
 		return err
 	}
+	rows.Close()
 	bucketStart := time.Now().UTC().Truncate(time.Minute)
 	for _, tenantID := range tenants {
 		if err := s.refreshTenantMetricsRollups(ctx, tenantID, workerID, bucketStart); err != nil {

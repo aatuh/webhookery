@@ -8,7 +8,7 @@ GOSEC_VERSION ?= v2.25.0
 GOVULNCHECK_VERSION ?= v1.2.0
 FUZZTIME ?= 5s
 COVERAGE_MIN ?= 50.0
-COVERAGE_DB_MIN ?= 68.0
+COVERAGE_DB_MIN ?= 70.0
 
 .PHONY: help tools fmt lint vuln gosec test test-race coverage coverage-check coverage-db coverage-db-check openapi-check openapi-reference-generate openapi-reference-check test-vectors-check provider-conformance-check provider-proof-check crypto-inventory deployment-profile-check collections-check documentation-structure-check failure-drills-check demo-media-check static-site-check meta-files-check release-assets-check fuzz-smoke perf-smoke demo-media restore-drill sdk-generate sdk-check docs-check release-acceptance rc-check compose-up compose-down migrate live-postgres-check postgres-integration-test redis-integration-test fast-check finalize clean
 
@@ -388,7 +388,7 @@ meta-files-check: ## Check governance, licensing, and release-evidence metadata
 	@grep -q "actions/workflows/codeql.yml/badge.svg" README.md
 	@grep -q "actions/workflows/scorecard.yml/badge.svg" README.md
 	@grep -q "local%20coverage-50%25+" README.md
-	@grep -q "db%20coverage-68%25+" README.md
+	@grep -q "db%20coverage-70%25+" README.md
 	@op_count="$$(grep -c '^[[:space:]]*operationId:' openapi.yaml)"; grep -q "OpenAPI-$${op_count}%20operations" README.md
 	@grep -q "make live-postgres-check" docs/operations.md
 	@grep -q "make live-postgres-check" docs/release-evidence-template.md

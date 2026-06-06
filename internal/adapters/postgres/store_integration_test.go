@@ -1269,6 +1269,124 @@ func TestPostgresSignalDeliveryAttemptLifecycle(t *testing.T) {
 	assertPostgresAuditEvent(t, ctx, store, actor.TenantID, "siem_delivery.retry_requested", "siem_delivery", siemItem.ID)
 }
 
+func TestPostgresMetricsRollupsAndAlertFiringLifecycle(t *testing.T) {
+	ctx, store, actor := openPostgresIntegrationStore(t)
+	defer store.Close()
+
+	if _, err := store.pool.Exec(ctx, `UPDATE alert_rules SET state='disabled' WHERE tenant_id LIKE 'ten_it_%' AND state='active'`); err != nil {
+		t.Fatalf("disable prior integration alert rules: %v", err)
+	}
+	if _, err := store.pool.Exec(ctx, `UPDATE notification_channels SET state='disabled' WHERE tenant_id LIKE 'ten_it_%' AND state='active'`); err != nil {
+		t.Fatalf("disable prior integration notification channels: %v", err)
+	}
+	if _, err := store.pool.Exec(ctx, `UPDATE notification_deliveries SET state='succeeded', worker_id='' WHERE tenant_id LIKE 'ten_it_%' AND state IN ('scheduled','in_progress')`); err != nil {
+		t.Fatalf("clear prior integration notification work: %v", err)
+	}
+
+	control := app.NewControlService(store, ssrf.Validator{Resolver: ssrf.StaticResolver{
+		"signals.example.com": {netip.MustParseAddr("93.184.216.34")},
+	}})
+	if err := store.RefreshMetricsRollups(ctx, "it-metrics-worker", 1000); err != nil {
+		t.Fatal(err)
+	}
+	eventRollups, err := control.ListMetricRollups(ctx, actor, "events.total", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !containsPostgresMetricRollup(eventRollups, actor.TenantID, "events.total") {
+		t.Fatalf("expected refreshed events.total rollup for tenant, got %+v", eventRollups)
+	}
+
+	channel, _, err := control.CreateNotificationChannel(ctx, actor, app.CreateNotificationChannelRequest{Name: "metrics alert notification", URL: "https://signals.example.com/notify", SigningSecret: "notify-secret-value"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rule, err := control.CreateAlertRule(ctx, actor, app.CreateAlertRuleRequest{
+		Name:          "dead letter metric threshold",
+		RuleType:      domain.AlertRuleDeadLetterOpen,
+		MetricName:    "dead_letter.open",
+		Threshold:     1,
+		Comparator:    ">=",
+		WindowSeconds: 300,
+		ChannelIDs:    []string{channel.ID},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	bucketStart := time.Now().UTC().Truncate(time.Minute)
+	thresholdRollup := domain.MetricRollup{
+		ID:             mustID("mru"),
+		TenantID:       actor.TenantID,
+		MetricName:     "dead_letter.open",
+		BucketStart:    bucketStart,
+		BucketSeconds:  60,
+		Dimensions:     map[string]string{},
+		DimensionsHash: domain.MetricDimensionsHash(map[string]string{}),
+		Value:          3,
+		Source:         "integration-test",
+	}
+	if err := store.upsertMetricRollup(ctx, thresholdRollup); err != nil {
+		t.Fatal(err)
+	}
+	deadLetterRollups, err := control.ListMetricRollups(ctx, actor, "dead_letter.open", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !containsPostgresMetricRollupValue(deadLetterRollups, actor.TenantID, "dead_letter.open", 3) {
+		t.Fatalf("expected threshold rollup value in tenant list, got %+v", deadLetterRollups)
+	}
+	if err := store.EvaluateAlertRules(ctx, "it-alert-evaluator", 1000); err != nil {
+		t.Fatal(err)
+	}
+	openFirings, err := control.ListAlertFirings(ctx, actor, domain.AlertFiringOpen, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	firing := findPostgresAlertFiringForRule(t, openFirings, rule.ID)
+	if firing.ObservedValue < 3 || firing.Threshold != 1 {
+		t.Fatalf("alert firing did not preserve metric evidence: %+v", firing)
+	}
+	fetched, err := control.GetAlertFiring(ctx, actor, firing.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fetched.ID != firing.ID || fetched.State != domain.AlertFiringOpen {
+		t.Fatalf("alert firing lookup mismatch: %+v", fetched)
+	}
+	acked, err := control.AcknowledgeAlertFiring(ctx, actor, firing.ID, app.StateChangeRequest{Reason: "integration alert acknowledged"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if acked.State != domain.AlertFiringAcknowledged || acked.AcknowledgedBy != actor.ID || acked.AcknowledgedAt.IsZero() {
+		t.Fatalf("alert acknowledgment did not persist actor evidence: %+v", acked)
+	}
+	assertPostgresAuditEvent(t, ctx, store, actor.TenantID, "alert_firing.acknowledged", "alert_firing", firing.ID)
+
+	thresholdRollup.Value = 0
+	if err := store.upsertMetricRollup(ctx, thresholdRollup); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.EvaluateAlertRules(ctx, "it-alert-resolver", 1000); err != nil {
+		t.Fatal(err)
+	}
+	resolved, err := control.GetAlertFiring(ctx, actor, firing.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolved.State != domain.AlertFiringResolved || resolved.ResolvedAt.IsZero() || resolved.ObservedValue != 0 {
+		t.Fatalf("alert firing did not resolve after metric recovery: %+v", resolved)
+	}
+	notificationDeliveries, err := control.ListNotificationDeliveries(ctx, actor, domain.SignalDeliveryScheduled, 20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, transition := range []string{domain.AlertFiringOpen, domain.AlertFiringAcknowledged, domain.AlertFiringResolved} {
+		if !containsPostgresNotificationTransition(notificationDeliveries, firing.ID, transition) {
+			t.Fatalf("expected %s notification delivery for firing %s, got %+v", transition, firing.ID, notificationDeliveries)
+		}
+	}
+}
+
 func TestPostgresIncidentLifecycleReportAndEvidenceExport(t *testing.T) {
 	ctx, store, actor := openPostgresIntegrationStore(t)
 	defer store.Close()
@@ -2428,6 +2546,35 @@ func containsPostgresAlertRule(rules []domain.AlertRule, id, state string) bool 
 	return false
 }
 
+func containsPostgresMetricRollup(rollups []domain.MetricRollup, tenantID, metricName string) bool {
+	for _, rollup := range rollups {
+		if rollup.TenantID == tenantID && rollup.MetricName == metricName {
+			return true
+		}
+	}
+	return false
+}
+
+func containsPostgresMetricRollupValue(rollups []domain.MetricRollup, tenantID, metricName string, value float64) bool {
+	for _, rollup := range rollups {
+		if rollup.TenantID == tenantID && rollup.MetricName == metricName && rollup.Value == value {
+			return true
+		}
+	}
+	return false
+}
+
+func findPostgresAlertFiringForRule(t *testing.T, firings []domain.AlertFiring, ruleID string) domain.AlertFiring {
+	t.Helper()
+	for _, firing := range firings {
+		if firing.RuleID == ruleID {
+			return firing
+		}
+	}
+	t.Fatalf("expected alert firing for rule %s, got %+v", ruleID, firings)
+	return domain.AlertFiring{}
+}
+
 func containsPostgresNotificationChannel(channels []domain.NotificationChannel, id, state string) bool {
 	for _, channel := range channels {
 		if channel.ID == id && channel.State == state {
@@ -2440,6 +2587,15 @@ func containsPostgresNotificationChannel(channels []domain.NotificationChannel, 
 func containsPostgresNotificationDelivery(deliveries []domain.NotificationDelivery, id, state string) bool {
 	for _, delivery := range deliveries {
 		if delivery.ID == id && delivery.State == state {
+			return true
+		}
+	}
+	return false
+}
+
+func containsPostgresNotificationTransition(deliveries []domain.NotificationDelivery, firingID, transition string) bool {
+	for _, delivery := range deliveries {
+		if delivery.FiringID == firingID && delivery.Transition == transition {
 			return true
 		}
 	}
