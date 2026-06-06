@@ -13,7 +13,8 @@ not accepted.
 
 | ID | Source | Severity | Risk | Owner | Expiry | Mitigation | Release decision |
 |----|--------|----------|------|-------|--------|------------|------------------|
-| _none_ |  |  |  |  |  |  |  |
+| AR-2026-06-08-001 | `v0.2.0-pilot` release evidence | Medium | `master` branch protection is not enabled and no repository ruleset is configured. | Maintainer | 2026-07-31 | Keep `v0.2.0-pilot` positioned as a pilot prerelease only; require public CI/security/release workflow evidence; use `CODEOWNERS` for review routing; enable branch protection or equivalent ruleset before broader production positioning. | accepted_risk for `v0.2.0-pilot`; blocks broad production-readiness language |
+| AR-2026-06-08-002 | `v0.2.0-pilot` release evidence | Medium | External security or production-readiness review is not completed. | Maintainer | 2026-07-31 | Keep release language limited to controlled self-hosted pilot evaluation; use public checks, provider conformance, proof guides, and release evidence; complete or explicitly scope external review before broader production positioning. | accepted_risk for `v0.2.0-pilot`; blocks broad production-readiness language |
 
 ## Status Values
 
