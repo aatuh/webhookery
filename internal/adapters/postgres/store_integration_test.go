@@ -12,6 +12,7 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -921,6 +922,125 @@ func TestPostgresControlResourcesTenantIsolationAndEvidence(t *testing.T) {
 	}
 }
 
+func TestPostgresIncidentLifecycleReportAndEvidenceExport(t *testing.T) {
+	ctx, store, actor := openPostgresIntegrationStore(t)
+	defer store.Close()
+
+	control := app.NewControlService(store, ssrf.Validator{Resolver: ssrf.StaticResolver{
+		"receiver.example.com": {netip.MustParseAddr("93.184.216.34")},
+	}})
+	source, _ := createPostgresIntegrationRoute(t, ctx, control, actor, "invoice.incident")
+	now := time.Date(2026, 6, 8, 12, 0, 0, 0, time.UTC)
+	ingested := ingestPostgresIntegrationEvent(t, ctx, store, actor, source.ID, "invoice.incident", "evt_it_incident_"+time.Now().UTC().Format("150405.000000000"), now)
+
+	incident, err := control.CreateIncident(ctx, actor, app.CreateIncidentRequest{
+		Title:  "Receiver outage for invoice incident",
+		Reason: "support investigation",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if incident.TenantID != actor.TenantID || incident.State != domain.StateActive || incident.CreatedBy != actor.ID {
+		t.Fatalf("incident was not tenant scoped and active: %+v", incident)
+	}
+	assertPostgresAuditEvent(t, ctx, store, actor.TenantID, "incident.created", "incident", incident.ID)
+
+	incidents, err := control.ListIncidents(ctx, actor, 20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !containsPostgresIncident(incidents, incident.ID, domain.StateActive) {
+		t.Fatalf("expected incident in tenant list, got %+v", incidents)
+	}
+	if _, err := store.GetIncident(ctx, "ten_it_wrong_incident", incident.ID); !errors.Is(err, app.ErrNotFound) {
+		t.Fatalf("wrong-tenant incident lookup must be hidden, got %v", err)
+	}
+
+	link, err := control.AddIncidentEvent(ctx, actor, incident.ID, app.AddIncidentEventRequest{
+		EventID: ingested.EventID,
+		Reason:  "customer escalation",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if link.TenantID != actor.TenantID || link.IncidentID != incident.ID || link.EventID != ingested.EventID || link.AddedBy != actor.ID {
+		t.Fatalf("incident event link was not scoped correctly: %+v", link)
+	}
+	updatedLink, err := control.AddIncidentEvent(ctx, actor, incident.ID, app.AddIncidentEventRequest{
+		EventID: ingested.EventID,
+		Reason:  "customer escalation updated",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updatedLink.ID != link.ID || updatedLink.Reason != "customer escalation updated" {
+		t.Fatalf("duplicate incident event link did not update idempotently: original=%+v updated=%+v", link, updatedLink)
+	}
+	links, err := store.ListIncidentEvents(ctx, actor.TenantID, incident.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(links) != 1 || links[0].EventID != ingested.EventID {
+		t.Fatalf("expected one incident event link, got %+v", links)
+	}
+	assertPostgresAuditEvent(t, ctx, store, actor.TenantID, "incident.event_added", "incident", incident.ID)
+
+	snapshot, err := control.GenerateIncidentReport(ctx, actor, incident.ID, app.IncidentReportRequest{Reason: "handoff"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.TenantID != actor.TenantID || snapshot.IncidentID != incident.ID || snapshot.SchemaVersion != "webhookery.incident_report.v1" || !strings.Contains(snapshot.Markdown, "Receiver outage for invoice incident") {
+		t.Fatalf("unexpected report snapshot: %+v", snapshot)
+	}
+	latestSnapshot, err := control.GetIncidentReport(ctx, actor, incident.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if latestSnapshot.ID != snapshot.ID || !bytes.Contains(latestSnapshot.Report, []byte(ingested.EventID)) {
+		t.Fatalf("latest incident report did not round trip: %+v", latestSnapshot)
+	}
+	assertPostgresAuditEvent(t, ctx, store, actor.TenantID, "incident_report.generated", "incident", incident.ID)
+
+	incidentExport, export, err := control.CreateIncidentEvidenceExport(ctx, actor, incident.ID, app.CreateIncidentEvidenceExportRequest{Reason: "customer evidence"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if incidentExport.TenantID != actor.TenantID || incidentExport.IncidentID != incident.ID || incidentExport.ExportID != export.ID || !export.IncludeTimelines || export.IncludeRawPayloads || export.IncludePayloadBodies {
+		t.Fatalf("unexpected incident evidence export: incident_export=%+v export=%+v", incidentExport, export)
+	}
+	download, err := control.DownloadAuditExport(ctx, actor, export.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	files := readTestTarGzipFiles(t, download.Body)
+	if !bytes.Contains(files["incident_report.json"], []byte(ingested.EventID)) || !bytes.Contains(files["incident_report.md"], []byte("Receiver outage for invoice incident")) {
+		t.Fatalf("incident export did not include expected report files: names=%v", sortedTestMapKeys(files))
+	}
+	if bytes.Contains(files["incident_report.json"], []byte("acct_it")) {
+		t.Fatalf("incident export included raw payload content: %s", files["incident_report.json"])
+	}
+	assertPostgresAuditEvent(t, ctx, store, actor.TenantID, "incident_evidence_export.created", "incident", incident.ID)
+
+	removed, err := control.RemoveIncidentEvent(ctx, actor, incident.ID, ingested.EventID, app.StateChangeRequest{Reason: "resolved"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if removed.ID != link.ID || removed.EventID != ingested.EventID {
+		t.Fatalf("unexpected removed incident event link: %+v", removed)
+	}
+	links, err = store.ListIncidentEvents(ctx, actor.TenantID, incident.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(links) != 0 {
+		t.Fatalf("expected incident links to be removed, got %+v", links)
+	}
+	assertPostgresAuditEvent(t, ctx, store, actor.TenantID, "incident.event_removed", "incident", incident.ID)
+	if _, err := control.RemoveIncidentEvent(ctx, actor, incident.ID, ingested.EventID, app.StateChangeRequest{Reason: "already removed"}); !errors.Is(err, app.ErrNotFound) {
+		t.Fatalf("removing a missing incident event should return not found, got %v", err)
+	}
+}
+
 func TestPostgresEnterpriseIdentitySessionsAndProviderLifecycle(t *testing.T) {
 	ctx, store, actor := openPostgresIntegrationStore(t)
 	defer store.Close()
@@ -1668,6 +1788,15 @@ func containsPostgresAuthSession(sessions []domain.AuthSession, id, state string
 	return false
 }
 
+func containsPostgresIncident(incidents []domain.Incident, id, state string) bool {
+	for _, incident := range incidents {
+		if incident.ID == id && incident.State == state {
+			return true
+		}
+	}
+	return false
+}
+
 func containsPostgresSource(sources []domain.Source, id, state string) bool {
 	for _, source := range sources {
 		if source.ID == id && source.State == state {
@@ -1970,6 +2099,15 @@ func readTestTarGzipFiles(t *testing.T, body []byte) map[string][]byte {
 		files[header.Name] = data
 	}
 	return files
+}
+
+func sortedTestMapKeys[V any](items map[string]V) []string {
+	keys := make([]string, 0, len(items))
+	for key := range items {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
 }
 
 func decodeTestJSONLines(t *testing.T, body []byte) []map[string]any {
