@@ -21,6 +21,7 @@ For DB-backed release-candidate evidence, run with a disposable PostgreSQL
 database:
 
 ```sh
+WEBHOOKERY_TEST_DATABASE_URL=postgres://... make coverage-db-check
 WEBHOOKERY_TEST_DATABASE_URL=postgres://... make rc-check
 WEBHOOKERY_TEST_DATABASE_URL=postgres://... make live-postgres-check
 ```
@@ -60,6 +61,8 @@ Each tagged release evidence packet should record:
   published;
 - `make release-acceptance`, `make rc-check`, and `make finalize` output;
 - `make coverage-check` output and `coverage.out`;
+- `make coverage-db-check` output and `coverage-db.out` when a disposable
+  database is available;
 - DB-backed `make rc-check` and `make live-postgres-check` output when a
   disposable database is available;
 - restore drill output or an accepted-risk decision when skipped;

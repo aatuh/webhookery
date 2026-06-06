@@ -63,6 +63,7 @@ the live third-party provider scope and risk.
 | `make provider-conformance-check` |  |  |
 | `make provider-proof-check` |  |  |
 | `make perf-smoke` with `WEBHOOKERY_TEST_DATABASE_URL` |  |  |
+| `make coverage-db-check` with `WEBHOOKERY_TEST_DATABASE_URL` |  |  |
 | `make live-postgres-check` with `WEBHOOKERY_TEST_DATABASE_URL` |  |  |
 | DB-backed `make rc-check` with `WEBHOOKERY_TEST_DATABASE_URL` |  |  |
 | backup/restore drill with explicit restore database |  |  |

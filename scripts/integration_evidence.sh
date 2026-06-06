@@ -6,6 +6,7 @@ mkdir -p "$out_dir"
 
 migration_count="$(find migrations -type f -name '*.up.sql' | wc -l | tr -d ' ')"
 live_postgres_outcome="${LIVE_POSTGRES_CHECK_OUTCOME:-${POSTGRES_INTEGRATION_OUTCOME:-unknown}}"
+db_coverage_outcome="${DB_COVERAGE_OUTCOME:-unknown}"
 rc_outcome="${RC_CHECK_OUTCOME:-unknown}"
 restore_status="${RESTORE_DRILL_STATUS:-skipped_not_configured}"
 perf_smoke_outcome="${PERF_SMOKE_OUTCOME:-unknown}"
@@ -18,6 +19,9 @@ if [ -d tmp/perf-smoke ]; then
   cp tmp/perf-smoke/perf-smoke.json "$out_dir/perf-smoke/" 2>/dev/null || true
   cp tmp/perf-smoke/perf-smoke.md "$out_dir/perf-smoke/" 2>/dev/null || true
 fi
+if [ -f coverage-db.out ]; then
+  cp coverage-db.out "$out_dir/coverage-db.out"
+fi
 
 {
   printf '%s\n' "# Webhookery Integration Evidence"
@@ -29,6 +33,7 @@ fi
   printf '%s\n' "## Checks"
   printf '%s\n' "- Postgres migrations discovered: ${migration_count}"
   printf '%s\n' "- make live-postgres-check: ${live_postgres_outcome}"
+  printf '%s\n' "- make coverage-db-check: ${db_coverage_outcome}"
   printf '%s\n' "- DB-backed make rc-check: ${rc_outcome}"
   printf '%s\n' "- make perf-smoke: ${perf_smoke_outcome}"
   printf '%s\n' "- make provider-conformance-check: ${provider_conformance_outcome}"

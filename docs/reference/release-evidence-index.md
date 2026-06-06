@@ -50,6 +50,7 @@ The current release workflow prepares and uploads a fuller asset set for new
 | `release-notes.md` | `scripts/release_assets.sh` | Preserve tag-specific release notes when available. |
 | `release-check-summary.txt` | `scripts/release_assets.sh` | Record the completed release gate family and non-claims. |
 | `coverage.out` | `make coverage-check`, when available | Preserve the local coverage profile used by the release gate. |
+| `coverage-db.out` | `make coverage-db-check`, when available | Preserve the DB-backed coverage profile when a disposable Postgres database is available. |
 | `webhookery-release-manifest.json` | `scripts/release_assets.sh` | List release files, hashes, sizes, source commit, and non-claims. |
 | `webhookery-release-provenance.json` | `scripts/release_assets.sh` | Record project release provenance metadata. It is not a SLSA level claim. |
 | `webhookery-release-provenance.intoto.jsonl` | `scripts/release_assets.sh` | In-toto-shaped metadata for release artifact review. It is not certification. |

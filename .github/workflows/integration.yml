@@ -53,6 +53,10 @@ jobs:
         id: live_postgres_check
         run: make live-postgres-check
 
+      - name: DB-backed coverage gate
+        id: db_coverage
+        run: make coverage-db-check
+
       - name: Provider conformance evidence
         id: provider_conformance
         run: make provider-conformance-check
@@ -69,6 +73,7 @@ jobs:
         if: always()
         env:
           LIVE_POSTGRES_CHECK_OUTCOME: ${{ steps.live_postgres_check.outcome }}
+          DB_COVERAGE_OUTCOME: ${{ steps.db_coverage.outcome }}
           PROVIDER_CONFORMANCE_OUTCOME: ${{ steps.provider_conformance.outcome }}
           PERF_SMOKE_OUTCOME: ${{ steps.perf_smoke.outcome }}
           RC_CHECK_OUTCOME: ${{ steps.rc_check.outcome }}

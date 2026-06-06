@@ -91,6 +91,9 @@ fi
 if [ -f coverage.out ]; then
   cp coverage.out "$out_dir/coverage.out"
 fi
+if [ -f coverage-db.out ]; then
+  cp coverage-db.out "$out_dir/coverage-db.out"
+fi
 if [ -f release-evidence/release-evidence.md ]; then
   cp release-evidence/release-evidence.md "$out_dir/release-evidence.md"
 fi
