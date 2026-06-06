@@ -122,6 +122,63 @@ func TestDeliveryFanoutCreatesSubscriptionThenRouteSnapshots(t *testing.T) {
 	}
 }
 
+func TestDeliveryFanoutProcessOutboxDispatchesRouteKinds(t *testing.T) {
+	now := time.Date(2026, 5, 26, 12, 0, 0, 0, time.UTC)
+	tests := []struct {
+		name      string
+		item      worker.OutboxItem
+		event     domain.Event
+		wantCount int
+	}{
+		{
+			name: "verified route event",
+			item: worker.OutboxItem{TenantID: "ten_1", Kind: OutboxKindRouteEvent, ResourceID: "evt_verified"},
+			event: domain.Event{
+				ID: "evt_verified", TenantID: "ten_1", SourceID: "src_1", Type: "invoice.created", Verified: true,
+			},
+			wantCount: 1,
+		},
+		{
+			name: "provider recovered route event",
+			item: worker.OutboxItem{TenantID: "ten_1", Kind: OutboxKindRouteRecoveredEvent, ResourceID: "evt_recovered"},
+			event: domain.Event{
+				ID: "evt_recovered", TenantID: "ten_1", SourceID: "src_1", Type: "invoice.created", Verified: false, VerifyReason: domain.VerificationReasonProviderAPIReconcile,
+			},
+			wantCount: 1,
+		},
+		{
+			name:      "unknown kind",
+			item:      worker.OutboxItem{TenantID: "ten_1", Kind: "future_kind", ResourceID: "evt_future"},
+			event:     domain.Event{ID: "evt_future", TenantID: "ten_1", SourceID: "src_1", Type: "invoice.created", Verified: true},
+			wantCount: 0,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			store := &fakeDeliveryFanoutStore{
+				event: tt.event,
+				targets: []DeliveryFanoutTarget{{
+					EndpointID: "end_1", RouteID: "rte_1", RouteVersionID: "rv_1",
+				}},
+			}
+			svc := NewDeliveryFanoutService(store, fixedFanoutClock{now: now})
+
+			if err := svc.ProcessOutbox(context.Background(), tt.item); err != nil {
+				t.Fatalf("process outbox: %v", err)
+			}
+			if len(store.creates) != tt.wantCount {
+				t.Fatalf("created delivery snapshots=%d want %d", len(store.creates), tt.wantCount)
+			}
+			if tt.wantCount > 0 {
+				req := store.creates[0]
+				if req.TenantID != tt.item.TenantID || req.EventID != tt.item.ResourceID || req.DeliveryPayloadMode != DeliveryPayloadMaterialize {
+					t.Fatalf("route outbox dispatch lost context: %+v", req)
+				}
+			}
+		})
+	}
+}
+
 func TestDeliveryFanoutReplayOriginalClonesPayloadsAndCompletesJob(t *testing.T) {
 	now := time.Date(2026, 5, 26, 12, 0, 0, 0, time.UTC)
 	store := &fakeDeliveryFanoutStore{
@@ -160,6 +217,27 @@ func TestDeliveryFanoutReplayOriginalClonesPayloadsAndCompletesJob(t *testing.T)
 	}
 }
 
+func TestDeliveryFanoutReplayOriginalRecordsNoopWhenNoOriginalDeliveriesExist(t *testing.T) {
+	store := &fakeDeliveryFanoutStore{
+		replayWork: ReplayJobWork{
+			State:      "scheduled",
+			ConfigMode: ReplayConfigOriginal,
+			Request:    ReplayRequest{EventID: "evt_1", ConfigMode: ReplayConfigOriginal},
+		},
+	}
+	svc := NewDeliveryFanoutService(store, fixedFanoutClock{now: time.Date(2026, 5, 26, 12, 0, 0, 0, time.UTC)})
+
+	if err := svc.CreateReplayDeliveries(context.Background(), "ten_1", "rpl_1"); err != nil {
+		t.Fatal(err)
+	}
+	if len(store.creates) != 0 || store.completedReplayItems != 0 {
+		t.Fatalf("no original deliveries should complete without snapshots, creates=%d completed=%d", len(store.creates), store.completedReplayItems)
+	}
+	if got := store.noopItems; len(got) != 1 || got[0] != "evt_1:no original deliveries found" {
+		t.Fatalf("expected explicit original replay noop evidence, got %v", got)
+	}
+}
+
 func TestDeliveryFanoutReplayOriginalKeepsDuplicateSourcesVisible(t *testing.T) {
 	now := time.Date(2026, 5, 26, 12, 0, 0, 0, time.UTC)
 	store := &fakeDeliveryFanoutStore{
@@ -188,6 +266,28 @@ func TestDeliveryFanoutReplayOriginalKeepsDuplicateSourcesVisible(t *testing.T) 
 	}
 	if store.creates[1].OriginalDeliveryID != "del_duplicate_b" || store.creates[1].SourceDeliveryPayloadID != "dpl_b" {
 		t.Fatalf("second duplicate replay linkage lost: %+v", store.creates[1])
+	}
+}
+
+func TestDeliveryFanoutReplayCurrentRecordsNoopWhenNoRouteMatches(t *testing.T) {
+	store := &fakeDeliveryFanoutStore{
+		event: domain.Event{ID: "evt_1", TenantID: "ten_1", SourceID: "src_1", Type: "invoice.created", Verified: true},
+		replayWork: ReplayJobWork{
+			State:      "scheduled",
+			ConfigMode: ReplayConfigCurrent,
+			Request:    ReplayRequest{EventID: "evt_1", ConfigMode: ReplayConfigCurrent},
+		},
+	}
+	svc := NewDeliveryFanoutService(store, fixedFanoutClock{now: time.Date(2026, 5, 26, 12, 0, 0, 0, time.UTC)})
+
+	if err := svc.CreateReplayDeliveries(context.Background(), "ten_1", "rpl_1"); err != nil {
+		t.Fatal(err)
+	}
+	if len(store.creates) != 0 || store.completedReplayItems != 0 {
+		t.Fatalf("no current route should complete without snapshots, creates=%d completed=%d", len(store.creates), store.completedReplayItems)
+	}
+	if got := store.noopItems; len(got) != 1 || got[0] != "evt_1:no current route or subscription matched" {
+		t.Fatalf("expected explicit current replay noop evidence, got %v", got)
 	}
 }
 
@@ -228,6 +328,23 @@ func TestDeliveryFanoutReplayCurrentUsesCurrentRouteConfig(t *testing.T) {
 	}
 }
 
+func TestDeliveryFanoutDefersReplayWhenStartLosesRace(t *testing.T) {
+	started := false
+	store := &fakeDeliveryFanoutStore{
+		replayWork:        ReplayJobWork{State: "scheduled", Request: ReplayRequest{EventID: "evt_1"}},
+		startReplayResult: &started,
+	}
+	svc := NewDeliveryFanoutService(store, fixedFanoutClock{now: time.Now().UTC()})
+
+	err := svc.CreateReplayDeliveries(context.Background(), "ten_1", "rpl_1")
+	if !errors.Is(err, worker.ErrDeferred) {
+		t.Fatalf("expected replay start race to defer, got %v", err)
+	}
+	if len(store.creates) != 0 || len(store.noopItems) != 0 || store.completedReplayItems != 0 {
+		t.Fatalf("deferred replay must not create, noop, or complete work: creates=%d noop=%d completed=%d", len(store.creates), len(store.noopItems), store.completedReplayItems)
+	}
+}
+
 func TestDeliveryFanoutDefersPausedReplay(t *testing.T) {
 	store := &fakeDeliveryFanoutStore{replayWork: ReplayJobWork{State: "paused"}}
 	svc := NewDeliveryFanoutService(store, fixedFanoutClock{now: time.Now().UTC()})
@@ -258,6 +375,7 @@ type fakeDeliveryFanoutStore struct {
 	deliverySource       DeliveryReplaySource
 	currentTarget        DeliveryFanoutTarget
 	currentOK            bool
+	startReplayResult    *bool
 	noopItems            []string
 	completedReplayItems int
 	reconciliationJobID  string
@@ -288,6 +406,9 @@ func (f *fakeDeliveryFanoutStore) GetReplayJobWork(context.Context, string, stri
 }
 
 func (f *fakeDeliveryFanoutStore) StartReplayJob(context.Context, string, string) (bool, error) {
+	if f.startReplayResult != nil {
+		return *f.startReplayResult, nil
+	}
 	return true, nil
 }
 
