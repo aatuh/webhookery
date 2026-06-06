@@ -1298,6 +1298,53 @@ func TestControlServiceProducerClientsRequireSecurityWriteAndRedactSecrets(t *te
 	}
 }
 
+func TestControlServiceProducerClientManagementScopesTenantAndRequiresReasons(t *testing.T) {
+	store := &fakeControlStore{}
+	svc := NewControlService(store, ssrf.Validator{Resolver: ssrf.StaticResolver{}})
+	reader := authz.Actor{ID: "usr_reader", TenantID: "ten_a", Role: authz.RoleAuditor, Scopes: []string{"security:read"}}
+	security := authz.Actor{ID: "usr_sec", TenantID: "ten_a", Role: authz.RoleSecurity, Scopes: []string{"security:write", "security:read"}}
+
+	clients, err := svc.ListProducerClients(context.Background(), reader, 250)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(clients) != 1 || clients[0].TenantID != "ten_a" || store.producerClientTenantID != "ten_a" {
+		t.Fatalf("producer client list was not tenant scoped: clients=%+v tenant=%q", clients, store.producerClientTenantID)
+	}
+	client, err := svc.GetProducerClient(context.Background(), reader, "pcl_1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if client.ID != "pcl_1" || client.TenantID != "ten_a" {
+		t.Fatalf("producer client get did not round trip tenant/id: %+v", client)
+	}
+	if _, err := svc.GetProducerClient(context.Background(), reader, " "); !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("expected blank producer client id to be invalid, got %v", err)
+	}
+	if _, err := svc.UpdateProducerClient(context.Background(), security, "pcl_1", UpdateProducerClientRequest{}); !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("expected update without reason/fields to be invalid, got %v", err)
+	}
+	name := "billing producer"
+	ttl := 1200
+	updated, err := svc.UpdateProducerClient(context.Background(), security, "pcl_1", UpdateProducerClientRequest{Name: &name, TokenTTLSeconds: &ttl, Scopes: []string{"events:write"}, Reason: "rotate owner"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.ID != "pcl_1" || store.producerClientActorID != "usr_sec" || store.producerClientReason != "rotate owner" {
+		t.Fatalf("producer client update was not scoped with reason: updated=%+v actor=%q reason=%q", updated, store.producerClientActorID, store.producerClientReason)
+	}
+	if _, err := svc.UpdateProducerClient(context.Background(), security, "pcl_1", UpdateProducerClientRequest{Scopes: []string{"events:read"}, Reason: "bad scope"}); !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("expected unsupported producer scope to be invalid, got %v", err)
+	}
+	disabled, err := svc.DeleteProducerClient(context.Background(), security, "pcl_1", StateChangeRequest{Reason: "offboard producer"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if disabled.State != domain.StateDisabled || store.producerClientReason != "offboard producer" {
+		t.Fatalf("producer client delete was not scoped with reason: disabled=%+v reason=%q", disabled, store.producerClientReason)
+	}
+}
+
 func TestControlServiceUsesCentralAuthorizationForProducerSecretRotation(t *testing.T) {
 	store := &policyDecisionStore{decision: authz.Decision{Allowed: false, Reason: "denied by access policy"}}
 	svc := NewControlService(store, ssrf.Validator{Resolver: ssrf.StaticResolver{}})
@@ -1486,6 +1533,49 @@ func TestControlServiceProducerMTLSIdentitiesValidateCertAndScopeTenant(t *testi
 	}
 	if !verified.Matched {
 		t.Fatalf("expected certificate verification to match stored fingerprint: %+v", verified)
+	}
+}
+
+func TestControlServiceProducerMTLSManagementScopesTenantAndRequiresReasons(t *testing.T) {
+	store := &fakeControlStore{}
+	svc := NewControlService(store, ssrf.Validator{Resolver: ssrf.StaticResolver{}})
+	reader := authz.Actor{ID: "usr_reader", TenantID: "ten_a", Role: authz.RoleAuditor, Scopes: []string{"security:read"}}
+	security := authz.Actor{ID: "usr_sec", TenantID: "ten_a", Role: authz.RoleSecurity, Scopes: []string{"security:write", "security:read"}}
+
+	identities, err := svc.ListProducerMTLSIdentities(context.Background(), reader, 250)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(identities) != 1 || identities[0].TenantID != "ten_a" || store.producerMTLSTenantID != "ten_a" {
+		t.Fatalf("producer mTLS list was not tenant scoped: identities=%+v tenant=%q", identities, store.producerMTLSTenantID)
+	}
+	identity, err := svc.GetProducerMTLSIdentity(context.Background(), reader, "pmi_1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if identity.ID != "pmi_1" || identity.TenantID != "ten_a" {
+		t.Fatalf("producer mTLS get did not round trip tenant/id: %+v", identity)
+	}
+	if _, err := svc.GetProducerMTLSIdentity(context.Background(), reader, " "); !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("expected blank mTLS identity id to be invalid, got %v", err)
+	}
+	if _, err := svc.UpdateProducerMTLSIdentity(context.Background(), security, "pmi_1", UpdateProducerMTLSIdentityRequest{}); !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("expected update without reason/fields to be invalid, got %v", err)
+	}
+	name := "renamed certificate"
+	updated, err := svc.UpdateProducerMTLSIdentity(context.Background(), security, "pmi_1", UpdateProducerMTLSIdentityRequest{Name: &name, Reason: "certificate owner changed"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.ID != "pmi_1" || store.producerMTLSActorID != "usr_sec" || store.producerMTLSReason != "certificate owner changed" {
+		t.Fatalf("producer mTLS update was not scoped with reason: updated=%+v actor=%q reason=%q", updated, store.producerMTLSActorID, store.producerMTLSReason)
+	}
+	disabled, err := svc.DeleteProducerMTLSIdentity(context.Background(), security, "pmi_1", StateChangeRequest{Reason: "certificate retired"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if disabled.State != domain.StateDisabled || store.producerMTLSReason != "certificate retired" {
+		t.Fatalf("producer mTLS delete was not scoped with reason: disabled=%+v reason=%q", disabled, store.producerMTLSReason)
 	}
 }
 
@@ -1682,6 +1772,83 @@ func TestControlServiceAdapterVersionRejectsSecretFields(t *testing.T) {
 	}
 	if store.adapterVersionReq.Version != "2026-05-01" || store.adapterTenantID != "ten_a" {
 		t.Fatalf("adapter version not passed through tenant boundary: req=%+v tenant=%q", store.adapterVersionReq, store.adapterTenantID)
+	}
+}
+
+func TestControlServiceAdapterRegistryReadVectorsAndTransitions(t *testing.T) {
+	store := &fakeControlStore{}
+	svc := NewControlService(store, ssrf.Validator{Resolver: ssrf.StaticResolver{}})
+	reader := authz.Actor{ID: "usr_reader", TenantID: "ten_a", Role: authz.RoleDeveloper, Scopes: []string{"sources:read"}}
+	security := authz.Actor{ID: "usr_sec", TenantID: "ten_a", Role: authz.RoleSecurity, Scopes: []string{"security:write", "sources:read"}}
+
+	adapters, err := svc.ListProviderAdapters(context.Background(), reader, 250)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(adapters) != 1 || adapters[0].TenantID != "ten_a" || store.adapterTenantID != "ten_a" {
+		t.Fatalf("adapter list was not tenant scoped: adapters=%+v tenant=%q", adapters, store.adapterTenantID)
+	}
+	adapter, err := svc.GetProviderAdapter(context.Background(), reader, "pad_1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if adapter.ID != "pad_1" || adapter.TenantID != "ten_a" {
+		t.Fatalf("adapter get did not round trip tenant/id: %+v", adapter)
+	}
+	if _, err := svc.GetProviderAdapter(context.Background(), reader, " "); !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("expected blank adapter id to be invalid, got %v", err)
+	}
+	versions, err := svc.ListAdapterVersions(context.Background(), reader, "pad_1", 250)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(versions) != 1 || versions[0].AdapterID != "pad_1" {
+		t.Fatalf("adapter version list did not scope by adapter: %+v", versions)
+	}
+	if _, err := svc.ListAdapterVersions(context.Background(), reader, "", 10); !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("expected blank adapter id to be invalid for versions, got %v", err)
+	}
+
+	vectorReq := CreateAdapterTestVectorRequest{
+		Name:     " valid vector ",
+		Request:  json.RawMessage(`{"headers":{"x-acme-signature":"sig"},"body":"{}"}`),
+		Expected: json.RawMessage(`{"type":"invoice.created"}`),
+	}
+	vector, err := svc.CreateAdapterTestVector(context.Background(), security, "pad_1", "adv_1", vectorReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if vector.Name != "valid vector" || vector.TenantID != "ten_a" || vector.CreatedBy != "usr_sec" {
+		t.Fatalf("adapter test vector was not normalized/scoped: %+v", vector)
+	}
+	if _, err := svc.CreateAdapterTestVector(context.Background(), reader, "pad_1", "adv_1", vectorReq); err != ErrForbidden {
+		t.Fatalf("expected non-security writer to be forbidden, got %v", err)
+	}
+	if _, err := svc.CreateAdapterTestVector(context.Background(), security, "", "adv_1", vectorReq); !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("expected missing adapter id to be invalid, got %v", err)
+	}
+	if _, err := svc.CreateAdapterTestVector(context.Background(), security, "pad_1", "adv_1", CreateAdapterTestVectorRequest{Name: "bad", Request: json.RawMessage(`{"token":"leak"}`), Expected: json.RawMessage(`{"ok":true}`)}); !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("expected secret-bearing vector to be invalid, got %v", err)
+	}
+	if _, err := svc.CreateAdapterTestVector(context.Background(), security, "pad_1", "adv_1", CreateAdapterTestVectorRequest{Name: "bad", Request: json.RawMessage(`{`), Expected: json.RawMessage(`{"ok":true}`)}); !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("expected malformed vector JSON to be invalid, got %v", err)
+	}
+
+	if _, err := svc.TransitionAdapterVersion(context.Background(), security, "pad_1", "adv_1", AdapterVersionTransitionRequest{Action: "activate"}); !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("expected missing transition reason to be invalid, got %v", err)
+	}
+	if _, err := svc.TransitionAdapterVersion(context.Background(), security, "pad_1", "adv_1", AdapterVersionTransitionRequest{Action: "ship", Reason: "release"}); !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("expected unsupported transition to be invalid, got %v", err)
+	}
+	if _, err := svc.TransitionAdapterVersion(context.Background(), security, "pad_1", "adv_1", AdapterVersionTransitionRequest{Action: "submit_tests", Reason: "tests", TestResults: json.RawMessage(`{`)}); !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("expected malformed test results to be invalid, got %v", err)
+	}
+	transitioned, err := svc.TransitionAdapterVersion(context.Background(), security, "pad_1", "adv_1", AdapterVersionTransitionRequest{Action: "activate", Reason: "approved for production", TestResults: json.RawMessage(`{"passed":true}`)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if transitioned.ID != "adv_1" || transitioned.TenantID != "ten_a" || store.adapterActorID != "usr_sec" {
+		t.Fatalf("adapter transition was not tenant/actor scoped: version=%+v actor=%q", transitioned, store.adapterActorID)
 	}
 }
 
@@ -2044,6 +2211,7 @@ type fakeControlStore struct {
 	producerClientInput          ProducerClientCreateInput
 	producerMTLSTenantID         string
 	producerMTLSActorID          string
+	producerMTLSReason           string
 	producerMTLSIdentity         domain.ProducerMTLSIdentity
 	eventSchema                  domain.EventSchema
 	schemaTenantID               string
@@ -2163,8 +2331,9 @@ func (f *fakeControlStore) CreateProducerClient(_ context.Context, input Produce
 	input.Client.ID = "pcl_1"
 	return input.Client, nil
 }
-func (f *fakeControlStore) ListProducerClients(context.Context, string, int) ([]domain.ProducerClient, error) {
-	return nil, nil
+func (f *fakeControlStore) ListProducerClients(_ context.Context, tenantID string, limit int) ([]domain.ProducerClient, error) {
+	f.producerClientTenantID = tenantID
+	return []domain.ProducerClient{{ID: "pcl_1", TenantID: tenantID, Name: "producer", Scopes: []string{"events:write"}, TokenTTLSeconds: 900, State: domain.StateActive}}, nil
 }
 func (f *fakeControlStore) GetProducerClient(_ context.Context, tenantID, clientID string) (domain.ProducerClient, error) {
 	f.producerClientTenantID = tenantID
@@ -2199,10 +2368,12 @@ func (f *fakeControlStore) CreateProducerMTLSIdentity(_ context.Context, tenantI
 	f.producerMTLSIdentity = identity
 	return identity, nil
 }
-func (f *fakeControlStore) ListProducerMTLSIdentities(context.Context, string, int) ([]domain.ProducerMTLSIdentity, error) {
-	return nil, nil
+func (f *fakeControlStore) ListProducerMTLSIdentities(_ context.Context, tenantID string, limit int) ([]domain.ProducerMTLSIdentity, error) {
+	f.producerMTLSTenantID = tenantID
+	return []domain.ProducerMTLSIdentity{{ID: "pmi_1", TenantID: tenantID, Name: "producer", CertificateFingerprintSHA256: "sha256:test", State: domain.StateActive}}, nil
 }
 func (f *fakeControlStore) GetProducerMTLSIdentity(_ context.Context, tenantID, identityID string) (domain.ProducerMTLSIdentity, error) {
+	f.producerMTLSTenantID = tenantID
 	item := f.producerMTLSIdentity
 	if item.ID == "" {
 		item = domain.ProducerMTLSIdentity{ID: identityID, TenantID: tenantID, Name: "producer", CertificateFingerprintSHA256: "sha256:test", State: domain.StateActive}
@@ -2212,11 +2383,13 @@ func (f *fakeControlStore) GetProducerMTLSIdentity(_ context.Context, tenantID, 
 func (f *fakeControlStore) UpdateProducerMTLSIdentity(_ context.Context, tenantID, identityID, actorID string, req UpdateProducerMTLSIdentityRequest) (domain.ProducerMTLSIdentity, error) {
 	f.producerMTLSTenantID = tenantID
 	f.producerMTLSActorID = actorID
+	f.producerMTLSReason = req.Reason
 	return domain.ProducerMTLSIdentity{ID: identityID, TenantID: tenantID, Name: "producer", State: domain.StateActive}, nil
 }
 func (f *fakeControlStore) DeleteProducerMTLSIdentity(_ context.Context, tenantID, identityID, actorID, reason string) (domain.ProducerMTLSIdentity, error) {
 	f.producerMTLSTenantID = tenantID
 	f.producerMTLSActorID = actorID
+	f.producerMTLSReason = reason
 	return domain.ProducerMTLSIdentity{ID: identityID, TenantID: tenantID, Name: "producer", State: domain.StateDisabled}, nil
 }
 func (f *fakeControlStore) CreateSource(context.Context, domain.Source) (domain.Source, error) {
