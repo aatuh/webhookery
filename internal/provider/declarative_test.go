@@ -66,3 +66,62 @@ func TestDeclarativeAdapterRejectsExpiredAndMutatedPayloads(t *testing.T) {
 		t.Fatalf("expected invalid signature for mutated raw body, got %+v", mutated)
 	}
 }
+
+func TestNormalizeDeclarativeUsesExtractorsTemplatesAndHashes(t *testing.T) {
+	definition := json.RawMessage(`{
+		"name":"acme-hmac",
+		"version":"2026-05-01",
+		"verification":{"type":"hmac_sha256","signature_header":"X-Sig"},
+		"extractors":{
+			"provider_event_id":"$.id",
+			"type":"$.event_type",
+			"account_id":"header:X-Acme-Account"
+		},
+		"normalization":{
+			"source":"acme/{{account_id}}/{{$.resource.id}}",
+			"subject":"$.resource.id",
+			"data":"$.data"
+		}
+	}`)
+	raw := []byte(`{"id":"evt_1","event_type":"thing.created","resource":{"id":"res_1"},"data":{"z":2,"a":1}}`)
+	env, ok, err := NormalizeDeclarative(NormalizeInput{
+		Adapter:      "acme",
+		Provider:     "acme",
+		SourceID:     "src_1",
+		TenantID:     "ten_1",
+		RawBody:      raw,
+		RawHash:      "sha256:raw",
+		Headers:      map[string][]string{"x-acme-account": {"acct_1"}},
+		Verified:     true,
+		VerifyReason: verifier.ReasonOK,
+	}, definition)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("expected declarative normalization to produce an envelope")
+	}
+	if env.ID != "evt_1" || env.ProviderEventID != "evt_1" || env.Type != "thing.created" || env.Source != "acme/acct_1/res_1" || env.Subject != "res_1" {
+		t.Fatalf("unexpected declarative envelope fields: %+v", env)
+	}
+	if string(env.Data) != `{"a":1,"z":2}` {
+		t.Fatalf("data was not canonicalized: %s", env.Data)
+	}
+	var envelope map[string]any
+	if err := json.Unmarshal(env.Envelope, &envelope); err != nil {
+		t.Fatal(err)
+	}
+	if envelope["tenant_id"] != "ten_1" || envelope["signature_verified"] != true || envelope["verification_reason"] != verifier.ReasonOK {
+		t.Fatalf("envelope missing tenant or verification evidence: %s", env.Envelope)
+	}
+	var metadata map[string]any
+	if err := json.Unmarshal(env.Metadata, &metadata); err != nil {
+		t.Fatal(err)
+	}
+	if metadata["declarative_adapter"] != "acme-hmac" || metadata["declarative_version"] != "2026-05-01" || metadata["account_id"] != "acct_1" {
+		t.Fatalf("metadata missing declarative adapter evidence: %s", env.Metadata)
+	}
+	if env.EnvelopeHash == "" || env.DataHash == "" || env.MetadataHash == "" {
+		t.Fatalf("expected hashes to be populated: %+v", env)
+	}
+}

@@ -284,6 +284,160 @@ func TestVerifyTarGzipBundleToleratesUnknownOptionalManifestField(t *testing.T) 
 	}
 }
 
+func TestInspectTarGzipBundleSummarizesEvidenceAndWarnings(t *testing.T) {
+	bundle, err := BuildTarGzipBundle(Manifest{
+		ExportID:             "exp_1",
+		TenantID:             "ten_1",
+		CreatedAt:            time.Unix(123, 0).UTC(),
+		IncludedEvents:       []string{"evt_1"},
+		IncludedIncidents:    []string{"inc_1"},
+		IncludeRawPayloads:   true,
+		IncludePayloadBodies: true,
+	}, map[string][]byte{
+		"incident_report.json":    []byte(`{"id":"inc_1"}`),
+		"incident_report.md":      []byte("# Incident\n"),
+		"timelines.jsonl":         []byte("{\"kind\":\"delivery\"}\n{\"kind\":\"replay\"}\n{\"kind\":\"delivery\"}\n"),
+		"audit_events.jsonl":      []byte("{\"id\":\"aud_1\"}\n{\"id\":\"aud_2\"}\n"),
+		"audit_chain_proof.jsonl": chainProofJSONL(t),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	view, err := InspectTarGzipBundle(bundle.Bytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !view.Verification.Valid || view.Verification.CheckedChainEntries != 1 {
+		t.Fatalf("expected valid inspected bundle with checked chain proof, got %+v", view.Verification)
+	}
+	if view.SchemaVersion != BundleViewSchemaV1 || view.Manifest.SchemaVersion != ManifestSchemaV1 {
+		t.Fatalf("unexpected view/manifest schema versions: %+v", view)
+	}
+	if view.Summary.FileCount != 5 || view.Summary.IncludedEventCount != 1 || view.Summary.IncludedIncidentCount != 1 {
+		t.Fatalf("unexpected summary counts: %+v", view.Summary)
+	}
+	if view.Summary.TimelineEntryCount != 3 || view.Summary.TimelineKinds["delivery"] != 2 || view.Summary.TimelineKinds["replay"] != 1 {
+		t.Fatalf("timeline summary was not populated: %+v", view.Summary)
+	}
+	if view.Summary.AuditEventCount != 2 || !view.Summary.HasIncidentReportJSON || !view.Summary.HasIncidentReportMarkdown || !view.Summary.HasAuditChainProof || view.Summary.AuditChainStatus != "verified" {
+		t.Fatalf("incident/audit summary was not populated: %+v", view.Summary)
+	}
+	if !hasWarning(view.Warnings, "raw payload bodies may be included") || !hasWarning(view.Warnings, "payload bodies may be included") {
+		t.Fatalf("expected sensitive payload warnings, got %+v", view.Warnings)
+	}
+}
+
+func TestInspectTarGzipBundleReportsInvalidSummariesAndMissingManifest(t *testing.T) {
+	bundle, err := BuildTarGzipBundle(Manifest{
+		ExportID:  "exp_1",
+		TenantID:  "ten_1",
+		CreatedAt: time.Unix(123, 0).UTC(),
+	}, map[string][]byte{
+		"timelines.jsonl":    []byte("{bad-json}\n"),
+		"audit_events.jsonl": []byte("{bad-json}\n"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	view, err := InspectTarGzipBundle(bundle.Bytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !hasWarning(view.Warnings, "timelines.jsonl could not be summarized") || !hasWarning(view.Warnings, "audit_events.jsonl could not be summarized") {
+		t.Fatalf("expected invalid jsonl warnings, got %+v", view.Warnings)
+	}
+	if !hasWarning(view.Warnings, "raw payload bodies and payload bodies are omitted") {
+		t.Fatalf("expected omitted payload warning, got %+v", view.Warnings)
+	}
+
+	files, err := readTarGzipFiles(bundle.Bytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	delete(files, "manifest.json")
+	missingManifest, err := InspectTarGzipBundle(tarGzipTestFiles(t, files))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if missingManifest.Verification.Valid || !hasWarning(missingManifest.Warnings, "manifest.json is missing") {
+		t.Fatalf("expected missing manifest warning and invalid verification, got %+v", missingManifest)
+	}
+}
+
+func TestInspectTarGzipBundleCleansZeroTimeWindowAndReportsManifestFailures(t *testing.T) {
+	bundle, err := BuildTarGzipBundle(Manifest{ExportID: "exp_1", TenantID: "ten_1", CreatedAt: time.Unix(123, 0).UTC()}, map[string][]byte{
+		"audit_events.jsonl": []byte("{\"id\":\"aud_1\"}\n"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	files, err := readTarGzipFiles(bundle.Bytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var manifest map[string]any
+	if err := json.Unmarshal(files["manifest.json"], &manifest); err != nil {
+		t.Fatal(err)
+	}
+	manifest["from"] = "0001-01-01T00:00:00Z"
+	manifest["to"] = "0001-01-01T00:00:00Z"
+	files["manifest.json"], err = json.MarshalIndent(manifest, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	files["manifest.json"] = append(files["manifest.json"], '\n')
+
+	view, err := InspectTarGzipBundle(tarGzipTestFiles(t, files))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if view.Manifest.From != nil || view.Manifest.To != nil {
+		t.Fatalf("zero time window should be omitted after inspection: from=%v to=%v", view.Manifest.From, view.Manifest.To)
+	}
+
+	delete(manifest, "bundle_id")
+	delete(manifest, "tenant_id_hash")
+	delete(manifest, "non_claims")
+	delete(manifest, "redaction_policy")
+	delete(manifest, "hashes")
+	files["manifest.json"], err = json.MarshalIndent(manifest, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	files["manifest.json"] = append(files["manifest.json"], '\n')
+	result, err := VerifyTarGzipBundle(tarGzipTestFiles(t, files))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"bundle_id is missing", "tenant_id_hash is missing", "non_claims are missing", "redaction_policy is missing", "hashes are missing"} {
+		if !hasFailure(result.Failures, want) {
+			t.Fatalf("expected manifest failure %q, got %+v", want, result.Failures)
+		}
+	}
+}
+
+func TestReadTarGzipFilesRejectsUnsafeEntryNames(t *testing.T) {
+	var out bytes.Buffer
+	gz := gzip.NewWriter(&out)
+	tw := tar.NewWriter(gz)
+	if err := tw.WriteHeader(&tar.Header{Name: "../secret.txt", Typeflag: tar.TypeReg, Size: int64(len("secret"))}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tw.Write([]byte("secret")); err != nil {
+		t.Fatal(err)
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := gz.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := readTarGzipFiles(out.Bytes()); err == nil || !strings.Contains(err.Error(), "unsafe tar entry name") {
+		t.Fatalf("expected unsafe tar entry rejection, got %v", err)
+	}
+}
+
 func tarGzipTestFiles(t *testing.T, files map[string][]byte) []byte {
 	t.Helper()
 	names := make([]string, 0, len(files))
@@ -316,6 +470,15 @@ func tarGzipTestFiles(t *testing.T, files map[string][]byte) []byte {
 func hasFailure(failures []string, want string) bool {
 	for _, failure := range failures {
 		if strings.Contains(failure, want) {
+			return true
+		}
+	}
+	return false
+}
+
+func hasWarning(warnings []string, want string) bool {
+	for _, warning := range warnings {
+		if strings.Contains(warning, want) {
 			return true
 		}
 	}
