@@ -2,7 +2,13 @@ package httpapi
 
 import (
 	"context"
+	"crypto"
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
+	"math/big"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -130,6 +136,100 @@ func TestOIDCCallbackRejectsMissingOrMismatchedStateCookie(t *testing.T) {
 				t.Fatalf("OIDC state was consumed before cookie validation: %q", store.consumedStateHash)
 			}
 		})
+	}
+}
+
+func TestOIDCCallbackCreatesHardenedSessionCookieAndClearsState(t *testing.T) {
+	issuer := newHTTPTestOIDCIssuerWithNonce(t, "expected-nonce")
+	store := &identityHTTPStore{
+		idp: domain.IdentityProvider{
+			ID:                  "idp_1",
+			TenantID:            "ten_1",
+			IssuerURL:           issuer.URL,
+			ClientID:            "client",
+			ClientSecret:        []byte("secret"),
+			RedirectURI:         "https://webhookery.example/v1/auth/oidc/callback",
+			AllowedEmailDomains: []string{"example.com"},
+			State:               domain.StateActive,
+		},
+		loginState: domain.OIDCLoginState{
+			TenantID:           "ten_1",
+			IdentityProviderID: "idp_1",
+			StateHash:          app.HashToken("good-state"),
+			NonceHash:          app.HashToken("expected-nonce"),
+			PKCEVerifier:       []byte("verifier"),
+			ExpiresAt:          time.Now().Add(time.Hour),
+		},
+	}
+	server := NewServer(ServerConfig{Control: app.NewControlService(store, ssrf.Validator{})})
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/v1/auth/oidc/callback?state=good-state&code=auth-code", nil)
+	req.AddCookie(&http.Cookie{Name: "webhookery_oidc_state", Value: "good-state"})
+	req.Header.Set("User-Agent", "WebhookeryBrowser/1.0")
+	req.RemoteAddr = "203.0.113.10:4812"
+
+	server.Routes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected OIDC callback 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	sessionCookie := responseCookie(t, rec, sessionCookieName)
+	if sessionCookie.Value == "" {
+		t.Fatal("session cookie value was empty")
+	}
+	rawSetCookie := strings.Join(rec.Result().Header.Values("Set-Cookie"), "\n")
+	for _, want := range []string{sessionCookieName + "=", "Path=/", "HttpOnly", "Secure", "SameSite=Lax", "webhookery_oidc_state=", "Path=/v1/auth/oidc", "Max-Age=0"} {
+		if !strings.Contains(rawSetCookie, want) {
+			t.Fatalf("OIDC callback cookie missing %q in %q", want, rawSetCookie)
+		}
+	}
+	body := rec.Body.String()
+	for _, forbidden := range []string{sessionCookie.Value, "good-state", "auth-code", "secret"} {
+		if strings.Contains(body, forbidden) {
+			t.Fatalf("OIDC callback response leaked %q: %s", forbidden, body)
+		}
+	}
+	if store.consumedStateHash == "" || store.consumedStateHash == "good-state" || !strings.HasPrefix(store.consumedStateHash, "sha256:") {
+		t.Fatalf("OIDC state was not hashed before consume: %q", store.consumedStateHash)
+	}
+	if store.createdSession.TenantID != "ten_1" || store.createdSession.IdentityProviderID != "idp_1" || store.createdSession.ExternalSubject != "sub_123" || store.createdSession.Email != "person@example.com" || !store.createdSession.EmailVerified {
+		t.Fatalf("unexpected OIDC session input: %+v", store.createdSession)
+	}
+	if store.createdSession.SessionHash == "" || store.createdSession.SessionHash == sessionCookie.Value || !strings.HasPrefix(store.createdSession.SessionHash, "sha256:") {
+		t.Fatalf("raw session token reached session store: %+v cookie=%q", store.createdSession, sessionCookie.Value)
+	}
+	if store.createdSession.UserAgentHash == "" || store.createdSession.UserAgentHash == "WebhookeryBrowser/1.0" || !strings.HasPrefix(store.createdSession.UserAgentHash, "sha256:") {
+		t.Fatalf("raw user agent reached session store: %+v", store.createdSession)
+	}
+	if store.createdSession.IPHash == "" || store.createdSession.IPHash == req.RemoteAddr || !strings.HasPrefix(store.createdSession.IPHash, "sha256:") {
+		t.Fatalf("raw remote address reached session store: %+v", store.createdSession)
+	}
+}
+
+func TestCurrentSessionUsesActorTenantAndHashedCookie(t *testing.T) {
+	store := &identityHTTPStore{}
+	actor := authz.Actor{ID: "usr_session", TenantID: "ten_1", Role: authz.RoleDeveloper, Scopes: []string{"events:read"}}
+	server := NewServer(ServerConfig{
+		Control:     app.NewControlService(store, ssrf.Validator{}),
+		SessionAuth: app.NewStaticAuthenticator("raw-session-token", actor),
+	})
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/v1/auth/session", nil)
+	req.AddCookie(&http.Cookie{Name: sessionCookieName, Value: "raw-session-token"})
+
+	server.Routes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected current session 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if store.currentTenantID != "ten_1" || store.currentActorID != "usr_session" {
+		t.Fatalf("current session was not scoped to actor tenant/id: tenant=%q actor=%q", store.currentTenantID, store.currentActorID)
+	}
+	if store.currentSessionHash == "" || store.currentSessionHash == "raw-session-token" || !strings.HasPrefix(store.currentSessionHash, "sha256:") {
+		t.Fatalf("raw session token reached current-session store boundary: %q", store.currentSessionHash)
+	}
+	if strings.Contains(rec.Body.String(), "raw-session-token") || strings.Contains(rec.Body.String(), store.currentSessionHash) {
+		t.Fatalf("current session response leaked session material: %s", rec.Body.String())
 	}
 }
 
@@ -436,6 +536,15 @@ func responseCookie(t *testing.T, rec *httptest.ResponseRecorder, name string) *
 
 func newHTTPTestOIDCIssuer(t *testing.T) *httptest.Server {
 	t.Helper()
+	return newHTTPTestOIDCIssuerWithNonce(t, "")
+}
+
+func newHTTPTestOIDCIssuerWithNonce(t *testing.T, nonce string) *httptest.Server {
+	t.Helper()
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
 	var issuerURL string
 	mux := http.NewServeMux()
 	mux.HandleFunc("/.well-known/openid-configuration", func(w http.ResponseWriter, r *http.Request) {
@@ -446,10 +555,67 @@ func newHTTPTestOIDCIssuer(t *testing.T) *httptest.Server {
 			"jwks_uri":               issuerURL + "/jwks",
 		})
 	})
+	mux.HandleFunc("/jwks", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, map[string]any{"keys": []map[string]any{httpTestRSAJWK(&key.PublicKey, "kid-1")}})
+	})
+	mux.HandleFunc("/token", func(w http.ResponseWriter, r *http.Request) {
+		claims := map[string]any{
+			"iss":            issuerURL,
+			"sub":            "sub_123",
+			"aud":            "client",
+			"nonce":          nonce,
+			"email":          "person@example.com",
+			"email_verified": true,
+			"name":           "Person Example",
+			"iat":            time.Now().Add(-time.Minute).Unix(),
+			"exp":            time.Now().Add(time.Hour).Unix(),
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"access_token": "access",
+			"token_type":   "Bearer",
+			"expires_in":   3600,
+			"id_token":     httpTestSignedJWT(t, key, "kid-1", claims),
+		})
+	})
 	server := httptest.NewServer(mux)
 	issuerURL = server.URL
 	t.Cleanup(server.Close)
 	return server
+}
+
+func httpTestSignedJWT(t *testing.T, key *rsa.PrivateKey, kid string, claims map[string]any) string {
+	t.Helper()
+	header := map[string]any{"alg": "RS256", "typ": "JWT", "kid": kid}
+	encodedHeader := httpTestEncodeJWTPart(t, header)
+	encodedClaims := httpTestEncodeJWTPart(t, claims)
+	signingInput := encodedHeader + "." + encodedClaims
+	sum := sha256.Sum256([]byte(signingInput))
+	signature, err := rsa.SignPKCS1v15(rand.Reader, key, crypto.SHA256, sum[:])
+	if err != nil {
+		t.Fatal(err)
+	}
+	return signingInput + "." + base64.RawURLEncoding.EncodeToString(signature)
+}
+
+func httpTestEncodeJWTPart(t *testing.T, value any) string {
+	t.Helper()
+	raw, err := json.Marshal(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return base64.RawURLEncoding.EncodeToString(raw)
+}
+
+func httpTestRSAJWK(key *rsa.PublicKey, kid string) map[string]any {
+	exponent := big.NewInt(int64(key.E)).Bytes()
+	return map[string]any{
+		"kty": "RSA",
+		"use": "sig",
+		"kid": kid,
+		"alg": "RS256",
+		"n":   base64.RawURLEncoding.EncodeToString(key.N.Bytes()),
+		"e":   base64.RawURLEncoding.EncodeToString(exponent),
+	}
 }
 
 type identityHTTPStore struct {
@@ -459,6 +625,7 @@ type identityHTTPStore struct {
 	gotIdentityTenantID   string
 	gotIdentityProviderID string
 	createdLoginState     domain.OIDCLoginState
+	loginState            domain.OIDCLoginState
 	consumedStateHash     string
 	createdSession        app.OIDCSessionInput
 
@@ -538,6 +705,9 @@ func (s *identityHTTPStore) CreateOIDCLoginState(_ context.Context, state domain
 
 func (s *identityHTTPStore) ConsumeOIDCLoginState(_ context.Context, stateHash string) (domain.OIDCLoginState, domain.IdentityProvider, error) {
 	s.consumedStateHash = stateHash
+	if !s.loginState.ExpiresAt.IsZero() {
+		return s.loginState, s.idp, nil
+	}
 	return domain.OIDCLoginState{TenantID: s.idp.TenantID, IdentityProviderID: s.idp.ID, ExpiresAt: time.Now().Add(time.Hour)}, s.idp, nil
 }
 

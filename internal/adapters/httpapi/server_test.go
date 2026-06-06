@@ -702,6 +702,77 @@ func TestOpsConfigRouteReturnsRedactedRuntimeMetadata(t *testing.T) {
 	}
 }
 
+func TestSignalRoutesReturnSSRFProblemWithoutLeakingCustomerURL(t *testing.T) {
+	server := testServerWithActor(authz.Actor{ID: "usr_secops", TenantID: "ten_1", Role: authz.RoleOwner, Scopes: []string{"*"}})
+	tests := []struct {
+		name     string
+		method   string
+		path     string
+		body     string
+		wantCode string
+	}{
+		{
+			name:     "create notification channel",
+			method:   http.MethodPost,
+			path:     "/v1/notification-channels",
+			body:     `{"name":"ops","url":"https://169.254.169.254/latest?token=secret-token","signing_secret":"0123456789abcdef"}`,
+			wantCode: "notification_channel_url_blocked",
+		},
+		{
+			name:     "update notification channel",
+			method:   http.MethodPatch,
+			path:     "/v1/notification-channels/nch_1",
+			body:     `{"url":"https://169.254.169.254/latest?token=secret-token","reason":"rotate"}`,
+			wantCode: "notification_channel_url_blocked",
+		},
+		{
+			name:     "create siem sink",
+			method:   http.MethodPost,
+			path:     "/v1/siem-sinks",
+			body:     `{"name":"soc","url":"https://169.254.169.254/latest?token=secret-token","signing_secret":"0123456789abcdef"}`,
+			wantCode: "siem_sink_url_blocked",
+		},
+		{
+			name:     "update siem sink",
+			method:   http.MethodPatch,
+			path:     "/v1/siem-sinks/snk_1",
+			body:     `{"url":"https://169.254.169.254/latest?token=secret-token","reason":"rotate"}`,
+			wantCode: "siem_sink_url_blocked",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			req := httptest.NewRequest(tt.method, tt.path, strings.NewReader(tt.body))
+			req.Header.Set("Authorization", "Bearer token")
+			req.Header.Set("Content-Type", "application/json")
+			req.Header.Set("X-Request-ID", "req_signal")
+
+			server.Routes().ServeHTTP(rec, req)
+
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("expected 400, got %d body=%s", rec.Code, rec.Body.String())
+			}
+			body := rec.Body.String()
+			for _, want := range []string{
+				`"code":"` + tt.wantCode + `"`,
+				`"stable_code":"WEBHOOKERY_SSRF_BLOCKED_DESTINATION"`,
+				`"request_id":"req_signal"`,
+				"ip_literal_blocked",
+			} {
+				if !strings.Contains(body, want) {
+					t.Fatalf("blocked URL problem body missing %q: %s", want, body)
+				}
+			}
+			for _, forbidden := range []string{"secret-token", "169.254.169.254", "/latest"} {
+				if strings.Contains(body, forbidden) {
+					t.Fatalf("blocked URL response leaked %q: %s", forbidden, body)
+				}
+			}
+		})
+	}
+}
+
 func TestSlackChallengeExtraction(t *testing.T) {
 	challenge := slackChallenge([]byte(`{"type":"url_verification","challenge":"abc123"}`))
 	if challenge != "abc123" {
