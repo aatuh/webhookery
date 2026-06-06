@@ -2133,6 +2133,28 @@ func TestReadMTLSFilesRequiresBothFiles(t *testing.T) {
 	}
 }
 
+func TestReadMTLSFilesReadsBothFilesAndReportsKeyFailure(t *testing.T) {
+	dir := t.TempDir()
+	certPath := filepath.Join(dir, "client.crt")
+	keyPath := filepath.Join(dir, "client.key")
+	if err := os.WriteFile(certPath, []byte("cert-pem"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(keyPath, []byte("key-pem"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cert, key, err := readMTLSFiles(certPath, keyPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cert != "cert-pem" || key != "key-pem" {
+		t.Fatalf("unexpected mTLS file contents cert=%q key=%q", cert, key)
+	}
+	if _, _, err := readMTLSFiles(certPath, filepath.Join(dir, "missing.key")); err == nil || !strings.Contains(err.Error(), "read mTLS client key") {
+		t.Fatalf("expected key read context, got %v", err)
+	}
+}
+
 func TestReadSmallFileRejectsDirectoryAndLargeFile(t *testing.T) {
 	dir := t.TempDir()
 	if _, err := readSmallFile(dir, 64); err == nil {
@@ -2162,6 +2184,15 @@ func TestReadSmallFileRejectsSymlink(t *testing.T) {
 	}
 }
 
+func TestReadSmallFileRejectsInvalidPath(t *testing.T) {
+	if _, err := readSmallFile(" ", 64); err == nil {
+		t.Fatal("expected blank path rejection")
+	}
+	if _, err := readSmallFile("bad\x00path", 64); err == nil {
+		t.Fatal("expected NUL path rejection")
+	}
+}
+
 func TestSecretBoxFromConfigAcceptsVaultTransit(t *testing.T) {
 	box, err := secretBoxFromConfig(context.Background(), config.Config{
 		SecretBoxMode:   "vault-transit",
@@ -2187,6 +2218,13 @@ func TestSecretBoxFromConfigAcceptsLocalEnvelope(t *testing.T) {
 	}
 	if box == nil {
 		t.Fatal("expected local envelope secret box")
+	}
+}
+
+func TestSecretBoxFromConfigRejectsInvalidLocalEnvelopeKey(t *testing.T) {
+	_, err := secretBoxFromConfig(context.Background(), config.Config{SecretBoxMode: "local", MasterKeyBase64: "not-base64"})
+	if err == nil {
+		t.Fatal("expected invalid local envelope key")
 	}
 }
 

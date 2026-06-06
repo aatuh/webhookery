@@ -601,6 +601,48 @@ func TestControlServiceSchemaLifecycleValidatesReasonAndState(t *testing.T) {
 	}
 }
 
+func TestControlServiceEventTypeUpdateDeleteValidatesAndScopes(t *testing.T) {
+	store := &fakeControlStore{}
+	svc := NewControlService(store, ssrf.Validator{Resolver: ssrf.StaticResolver{}})
+	actor := authz.Actor{ID: "usr_1", TenantID: "ten_a", Role: authz.RoleAdmin, Scopes: []string{"schemas:write"}}
+
+	if _, err := svc.UpdateEventType(context.Background(), actor, "", UpdateEventTypeRequest{Description: ptrString("Invoice paid"), Reason: "describe"}); !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("expected event type id validation, got %v", err)
+	}
+	if _, err := svc.UpdateEventType(context.Background(), actor, "invoice.paid", UpdateEventTypeRequest{Reason: "noop"}); !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("expected event type field validation, got %v", err)
+	}
+	badState := "paused"
+	if _, err := svc.UpdateEventType(context.Background(), actor, "invoice.paid", UpdateEventTypeRequest{State: &badState, Reason: "bad state"}); !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("expected event type state validation, got %v", err)
+	}
+
+	description := "  Invoice paid from Stripe  "
+	disabled := " disabled "
+	updated, err := svc.UpdateEventType(context.Background(), actor, "invoice.paid", UpdateEventTypeRequest{
+		Description: &description,
+		State:       &disabled,
+		Reason:      "describe and pause",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if store.schemaTenantID != "ten_a" || store.schemaReason != "describe and pause" || updated.Description != "Invoice paid from Stripe" || updated.State != domain.StateDisabled {
+		t.Fatalf("event type update was not normalized and tenant scoped: tenant=%q reason=%q updated=%+v", store.schemaTenantID, store.schemaReason, updated)
+	}
+
+	if _, err := svc.DeleteEventType(context.Background(), actor, "", StateChangeRequest{Reason: "retire"}); !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("expected delete event type id validation, got %v", err)
+	}
+	deleted, err := svc.DeleteEventType(context.Background(), actor, "invoice.paid", StateChangeRequest{Reason: "retire old contract"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if deleted.State != domain.StateDisabled || store.schemaTenantID != "ten_a" || store.schemaReason != "retire old contract" {
+		t.Fatalf("event type delete was not scoped with reason: deleted=%+v tenant=%q reason=%q", deleted, store.schemaTenantID, store.schemaReason)
+	}
+}
+
 func TestControlServiceScopesSourceReadsToActorTenant(t *testing.T) {
 	store := &fakeControlStore{}
 	svc := NewControlService(store, ssrf.Validator{Resolver: ssrf.StaticResolver{}})
@@ -730,6 +772,75 @@ func TestControlServiceUpdateEndpointValidatesURL(t *testing.T) {
 	}
 	if store.endpoint.URL != rawURL || store.endpointTenantID != "ten_a" {
 		t.Fatalf("expected endpoint update to reach store, endpoint=%+v tenant=%q", store.endpoint, store.endpointTenantID)
+	}
+}
+
+func TestControlServiceUpdateMutationsValidateTrimAndScope(t *testing.T) {
+	store := &fakeControlStore{}
+	svc := NewControlService(store, ssrf.Validator{Resolver: ssrf.StaticResolver{"receiver.example": []netip.Addr{netip.MustParseAddr("93.184.216.34")}}})
+	actor := authz.Actor{ID: "usr_1", TenantID: "ten_a", Role: authz.RoleAdmin, Scopes: []string{"endpoints:write", "subscriptions:write", "routes:write"}}
+
+	blank := "   "
+	if _, _, err := svc.UpdateEndpoint(context.Background(), actor, "end_123", UpdateEndpointRequest{Name: &blank, Reason: "rename"}); !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("expected blank endpoint name validation, got %v", err)
+	}
+	badEndpointState := "paused"
+	if _, _, err := svc.UpdateEndpoint(context.Background(), actor, "end_123", UpdateEndpointRequest{State: &badEndpointState, Reason: "bad state"}); !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("expected endpoint state validation, got %v", err)
+	}
+	endpointName := " Receiver "
+	endpointState := " disabled "
+	retryPolicyID := " rtp_1 "
+	updatedEndpoint, _, err := svc.UpdateEndpoint(context.Background(), actor, "end_123", UpdateEndpointRequest{Name: &endpointName, State: &endpointState, RetryPolicyID: &retryPolicyID, Reason: "pause receiver"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updatedEndpoint.Name != "Receiver" || updatedEndpoint.State != domain.StateDisabled || updatedEndpoint.RetryPolicyID != "rtp_1" || store.endpointReason != "pause receiver" {
+		t.Fatalf("endpoint update did not trim/scope fields: endpoint=%+v reason=%q", updatedEndpoint, store.endpointReason)
+	}
+
+	emptyEvents := []string{" ", ""}
+	if _, err := svc.UpdateSubscription(context.Background(), actor, "sub_123", UpdateSubscriptionRequest{EventTypes: emptyEvents, Reason: "bad events"}); !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("expected subscription event type validation, got %v", err)
+	}
+	subscriptionEndpoint := " end_2 "
+	payloadFormat := " canonical_json "
+	transformationID := " trn_1 "
+	subscriptionState := " active "
+	updatedSubscription, err := svc.UpdateSubscription(context.Background(), actor, "sub_123", UpdateSubscriptionRequest{
+		EndpointID:       &subscriptionEndpoint,
+		PayloadFormat:    &payloadFormat,
+		TransformationID: &transformationID,
+		State:            &subscriptionState,
+		Reason:           "retarget subscription",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updatedSubscription.EndpointID != "end_2" || updatedSubscription.PayloadFormat != "canonical_json" || updatedSubscription.TransformationID != "trn_1" || updatedSubscription.State != domain.StateActive {
+		t.Fatalf("subscription update did not trim fields: %+v", updatedSubscription)
+	}
+
+	negativePriority := -1
+	if _, err := svc.UpdateRoute(context.Background(), actor, "rte_123", UpdateRouteRequest{Priority: &negativePriority, Reason: "bad priority"}); !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("expected route priority validation, got %v", err)
+	}
+	routeSource := " src_2 "
+	routeName := " Paid invoices "
+	routeEndpoint := " end_2 "
+	routeState := " inactive "
+	updatedRoute, err := svc.UpdateRoute(context.Background(), actor, "rte_123", UpdateRouteRequest{
+		SourceID:   &routeSource,
+		Name:       &routeName,
+		EndpointID: &routeEndpoint,
+		State:      &routeState,
+		Reason:     "retarget route",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updatedRoute.SourceID != "src_2" || updatedRoute.Name != "Paid invoices" || updatedRoute.EndpointID != "end_2" || updatedRoute.State != domain.StateInactive {
+		t.Fatalf("route update did not trim fields: %+v", updatedRoute)
 	}
 }
 

@@ -63,6 +63,37 @@ func TestCreateSCIMTokenPersistsHashOnlyAndReturnsValueOnce(t *testing.T) {
 	}
 }
 
+func TestSCIMTokenListAndRevokeRequireSecurityScopes(t *testing.T) {
+	store := &enterpriseFakeStore{}
+	svc := NewControlService(store, ssrf.Validator{})
+	reader := authz.Actor{ID: "usr_read", TenantID: "ten_1", Role: authz.RoleAuditor, Scopes: []string{"security:read"}}
+	writer := authz.Actor{ID: "usr_write", TenantID: "ten_1", Role: authz.RoleSecurity, Scopes: []string{"security:write"}}
+
+	tokens, err := svc.ListSCIMTokens(context.Background(), reader, 250)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if store.scimListTokenTenantID != "ten_1" || store.scimListTokenLimit != 50 || len(tokens) != 1 || tokens[0].Hash != "" {
+		t.Fatalf("SCIM token list was not scoped/limited or exposed hash: tenant=%q limit=%d tokens=%+v", store.scimListTokenTenantID, store.scimListTokenLimit, tokens)
+	}
+	if _, err := svc.ListSCIMTokens(context.Background(), authz.Actor{ID: "usr_nope", TenantID: "ten_1", Role: authz.RoleAuditor, Scopes: []string{"security:write"}}, 10); !errors.Is(err, ErrForbidden) {
+		t.Fatalf("expected security:read for SCIM token list, got %v", err)
+	}
+	if _, err := svc.RevokeSCIMToken(context.Background(), reader, "sct_1", StateChangeRequest{Reason: "rotate"}); !errors.Is(err, ErrForbidden) {
+		t.Fatalf("expected security:write for SCIM token revoke, got %v", err)
+	}
+	if _, err := svc.RevokeSCIMToken(context.Background(), writer, "sct_1", StateChangeRequest{}); !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("expected SCIM token revoke reason validation, got %v", err)
+	}
+	revoked, err := svc.RevokeSCIMToken(context.Background(), writer, "sct_1", StateChangeRequest{Reason: "rotate identity provider token"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if revoked.ID != "sct_1" || revoked.State != "revoked" || store.scimRevokedTokenTenantID != "ten_1" || store.scimRevokedTokenActorID != "usr_write" || store.scimRevokedTokenReason != "rotate identity provider token" {
+		t.Fatalf("SCIM token revoke was not scoped with reason: revoked=%+v tenant=%q actor=%q reason=%q", revoked, store.scimRevokedTokenTenantID, store.scimRevokedTokenActorID, store.scimRevokedTokenReason)
+	}
+}
+
 func TestEnterpriseIdentityProviderManagementScopesAndValidates(t *testing.T) {
 	issuer := newFakeOIDCIssuer(t, "client", "nonce")
 	store := &enterpriseFakeStore{
@@ -500,6 +531,11 @@ type enterpriseFakeStore struct {
 	currentSessionActorID    string
 	currentSessionHash       string
 	scimAuthTokenHash        string
+	scimListTokenTenantID    string
+	scimListTokenLimit       int
+	scimRevokedTokenTenantID string
+	scimRevokedTokenActorID  string
+	scimRevokedTokenReason   string
 	scimUserTenantID         string
 	scimUserActorID          string
 	scimUserName             string
@@ -605,9 +641,14 @@ func (s *enterpriseFakeStore) CreateSCIMToken(_ context.Context, tenantID, actor
 	return token, nil
 }
 func (s *enterpriseFakeStore) ListSCIMTokens(_ context.Context, tenantID string, limit int) ([]domain.SCIMToken, error) {
+	s.scimListTokenTenantID = tenantID
+	s.scimListTokenLimit = limit
 	return []domain.SCIMToken{{ID: "sct_1", TenantID: tenantID, State: domain.StateActive}}, nil
 }
 func (s *enterpriseFakeStore) RevokeSCIMToken(_ context.Context, tenantID, tokenID, actorID, reason string) (domain.SCIMToken, error) {
+	s.scimRevokedTokenTenantID = tenantID
+	s.scimRevokedTokenActorID = actorID
+	s.scimRevokedTokenReason = reason
 	return domain.SCIMToken{ID: tokenID, TenantID: tenantID, CreatedBy: actorID, State: "revoked"}, nil
 }
 func (s *enterpriseFakeStore) SCIMCreateOrReplaceUser(_ context.Context, tenantID, actorID string, req SCIMUserRequest, replace bool) (SCIMUser, error) {
