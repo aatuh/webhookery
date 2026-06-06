@@ -4,12 +4,19 @@ import (
 	"bytes"
 	"context"
 	"crypto/hmac"
+	"crypto/rand"
+	"crypto/rsa"
 	"crypto/sha256"
+	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"encoding/pem"
 	"errors"
 	"io"
+	"math/big"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -19,6 +26,7 @@ import (
 	"time"
 
 	apppkg "webhookery/internal/app"
+	"webhookery/internal/authz"
 	"webhookery/internal/config"
 	"webhookery/internal/evidence"
 )
@@ -2021,6 +2029,104 @@ func TestSmallCLIValueHelpers(t *testing.T) {
 	}
 }
 
+func TestServerTLSConfigLoadsProducerMTLSClientCA(t *testing.T) {
+	dir := t.TempDir()
+	caPath := filepath.Join(dir, "ca.pem")
+	if err := os.WriteFile(caPath, testCertificatePEM(t, "Webhookery Producer CA"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	tlsConfig, err := serverTLSConfig(config.Config{
+		TLSCertFile:              "server.crt",
+		ProducerMTLSClientCAFile: caPath,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tlsConfig == nil || tlsConfig.MinVersion != tls.VersionTLS12 {
+		t.Fatalf("expected TLS 1.2+ config, got %+v", tlsConfig)
+	}
+	if tlsConfig.ClientAuth != tls.VerifyClientCertIfGiven || tlsConfig.ClientCAs == nil {
+		t.Fatalf("expected producer mTLS client CA verification config, got %+v", tlsConfig)
+	}
+}
+
+func TestServerTLSConfigRejectsInvalidProducerMTLSClientCA(t *testing.T) {
+	dir := t.TempDir()
+	caPath := filepath.Join(dir, "ca.pem")
+	if err := os.WriteFile(caPath, []byte("not a certificate"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := serverTLSConfig(config.Config{ProducerMTLSClientCAFile: caPath}); err == nil || !strings.Contains(err.Error(), "did not contain certificates") {
+		t.Fatalf("expected invalid producer mTLS CA error, got %v", err)
+	}
+}
+
+func TestServerTLSConfigReturnsNilWhenTLSAndProducerMTLSDisabled(t *testing.T) {
+	tlsConfig, err := serverTLSConfig(config.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tlsConfig != nil {
+		t.Fatalf("expected nil TLS config when TLS is disabled, got %+v", tlsConfig)
+	}
+}
+
+func TestOpsRuntimeConfigReflectsRedactedSecurityState(t *testing.T) {
+	cfg := config.Config{
+		Environment:    "production",
+		EnableUI:       true,
+		RawStorageMode: "s3",
+		SecretBoxMode:  "aws-kms",
+		AWSKMSKeyID:    "arn:aws:kms:us-east-1:123456789012:key/secret-key-id",
+	}
+
+	ops := opsRuntimeConfig(cfg)
+	if ops.Environment != "production" || !ops.UIEnabled || ops.RawStorageMode != "s3" || !ops.ObjectStorageConfigured {
+		t.Fatalf("unexpected ops runtime config: %+v", ops)
+	}
+	if !ops.KeyCustodyConfigured || ops.SecretBoxMode != "aws-kms" || !strings.HasPrefix(ops.KeyCustodyKeyRef, "sha256:") {
+		t.Fatalf("expected redacted key custody metadata, got %+v", ops)
+	}
+	for _, forbidden := range []string{"secret-key-id", "123456789012"} {
+		if strings.Contains(ops.KeyCustodyKeyRef, forbidden) {
+			t.Fatalf("key custody ref leaked key material %q in %q", forbidden, ops.KeyCustodyKeyRef)
+		}
+	}
+}
+
+func TestRuntimeAuthFallsBackToBootstrapAfterDatabaseAuthFails(t *testing.T) {
+	lookup := runtimeAPIKeyLookup{err: apppkg.ErrUnauthorized}
+	authn := runtimeAuth(config.Config{
+		BootstrapTenantID:   "ten_bootstrap",
+		BootstrapAPIKeyHash: apppkg.HashToken("bootstrap-secret"),
+	}, &lookup)
+
+	actor, err := authn.Authenticate(context.Background(), "bootstrap-secret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if actor.ID != "bootstrap" || actor.TenantID != "ten_bootstrap" || actor.Role != authz.RoleOwner {
+		t.Fatalf("unexpected bootstrap actor: %+v", actor)
+	}
+}
+
+func TestRuntimeAuthPrefersDatabaseAPIKey(t *testing.T) {
+	lookup := runtimeAPIKeyLookup{actor: authz.Actor{ID: "usr_db", TenantID: "ten_db", Role: authz.RoleOperator}}
+	authn := runtimeAuth(config.Config{
+		BootstrapTenantID:   "ten_bootstrap",
+		BootstrapAPIKeyHash: apppkg.HashToken("bootstrap-secret"),
+	}, &lookup)
+
+	actor, err := authn.Authenticate(context.Background(), "database-token")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if actor.ID != "usr_db" || lookup.hash == "" {
+		t.Fatalf("expected database actor and hashed lookup token, actor=%+v hash=%q", actor, lookup.hash)
+	}
+}
+
 func TestReadMTLSFilesRequiresBothFiles(t *testing.T) {
 	if _, _, err := readMTLSFiles("client.crt", ""); err == nil {
 		t.Fatal("expected mTLS file pair validation")
@@ -2071,6 +2177,26 @@ func TestSecretBoxFromConfigAcceptsVaultTransit(t *testing.T) {
 	}
 }
 
+func TestSecretBoxFromConfigAcceptsLocalEnvelope(t *testing.T) {
+	box, err := secretBoxFromConfig(context.Background(), config.Config{
+		SecretBoxMode:   "local",
+		MasterKeyBase64: base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{7}, 32)),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if box == nil {
+		t.Fatal("expected local envelope secret box")
+	}
+}
+
+func TestSecretBoxFromConfigRejectsUnsupportedMode(t *testing.T) {
+	_, err := secretBoxFromConfig(context.Background(), config.Config{SecretBoxMode: "plaintext"})
+	if err == nil || !strings.Contains(err.Error(), "unsupported secret box mode") {
+		t.Fatalf("expected unsupported secret box mode error, got %v", err)
+	}
+}
+
 func TestKeyCustodyKeyRefRedactsAWSKMSKeyID(t *testing.T) {
 	cfg := config.Config{SecretBoxMode: "aws-kms", AWSKMSKeyID: "arn:aws:kms:us-east-1:123456789012:key/secret-key-id"}
 
@@ -2081,6 +2207,41 @@ func TestKeyCustodyKeyRefRedactsAWSKMSKeyID(t *testing.T) {
 	if bytes.Contains([]byte(ref), []byte("secret-key-id")) || bytes.Contains([]byte(ref), []byte("123456789012")) {
 		t.Fatalf("key reference leaked key id material: %q", ref)
 	}
+}
+
+type runtimeAPIKeyLookup struct {
+	actor authz.Actor
+	err   error
+	hash  string
+}
+
+func (f *runtimeAPIKeyLookup) AuthenticateAPIKey(_ context.Context, hash string) (authz.Actor, error) {
+	f.hash = hash
+	if f.err != nil {
+		return authz.Actor{}, f.err
+	}
+	return f.actor, nil
+}
+
+func testCertificatePEM(t *testing.T, commonName string) []byte {
+	t.Helper()
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	template := &x509.Certificate{
+		SerialNumber: big.NewInt(1),
+		Subject:      pkix.Name{CommonName: commonName},
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(time.Hour),
+		IsCA:         true,
+		KeyUsage:     x509.KeyUsageCertSign,
+	}
+	der, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
 }
 
 func TestRunKeyCustodyTestDoesNotPrintCiphertextOrKeyIDInLocalMode(t *testing.T) {
