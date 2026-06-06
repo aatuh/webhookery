@@ -70,6 +70,9 @@ jobs:
       - name: Local coverage gate
         run: WEBHOOKERY_TEST_DATABASE_URL= make coverage-check
 
+      - name: Non-DB coverage gate
+        run: WEBHOOKERY_TEST_DATABASE_URL= make coverage-non-db-check
+
       - name: DB-backed coverage gate
         run: make coverage-db-check
 
@@ -156,6 +159,7 @@ jobs:
             printf '%s\n' "- make perf-smoke with local Postgres service"
             printf '%s\n' "- make rc-check with local Postgres service"
             printf '%s\n' "- make coverage-check without WEBHOOKERY_TEST_DATABASE_URL"
+            printf '%s\n' "- make coverage-non-db-check without WEBHOOKERY_TEST_DATABASE_URL"
             printf '%s\n' "- make coverage-db-check with local Postgres service"
             printf '%s\n' "- Docker build and push"
             printf '%s\n' "- Cosign keyless image signing"
@@ -163,7 +167,7 @@ jobs:
             printf '%s\n' "- Trivy HIGH/CRITICAL image scan"
             printf '\n'
             printf '%s\n' "## Checksums"
-            sha256sum openapi.yaml sdk/openapi.yaml coverage.out coverage-db.out source.spdx.json image.spdx.json
+            sha256sum openapi.yaml sdk/openapi.yaml coverage.out coverage-non-db.out coverage-db.out source.spdx.json image.spdx.json
             printf '\n'
             printf '%s\n' "## Maturity Evidence"
             printf '%s\n' "- Performance smoke output: tmp/perf-smoke/perf-smoke.json and tmp/perf-smoke/perf-smoke.md"

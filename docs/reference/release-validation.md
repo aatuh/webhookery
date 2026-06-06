@@ -61,6 +61,7 @@ Each tagged release evidence packet should record:
   published;
 - `make release-acceptance`, `make rc-check`, and `make finalize` output;
 - `make coverage-check` output and `coverage.out`;
+- `make coverage-non-db-check` output and `coverage-non-db.out`;
 - `make coverage-db-check` output and `coverage-db.out` when a disposable
   database is available;
 - DB-backed `make rc-check` and `make live-postgres-check` output when a

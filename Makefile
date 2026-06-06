@@ -8,9 +8,11 @@ GOSEC_VERSION ?= v2.25.0
 GOVULNCHECK_VERSION ?= v1.2.0
 FUZZTIME ?= 5s
 COVERAGE_MIN ?= 53.0
+COVERAGE_NON_DB_MIN ?= 81.0
+COVERAGE_NON_DB_EXCLUDE ?= webhookery/internal/adapters/postgres
 COVERAGE_DB_MIN ?= 77.8
 
-.PHONY: help tools fmt lint vuln gosec test test-race coverage coverage-check coverage-db coverage-db-check openapi-check openapi-reference-generate openapi-reference-check test-vectors-check provider-conformance-check provider-proof-check crypto-inventory deployment-profile-check collections-check documentation-structure-check failure-drills-check demo-media-check static-site-check meta-files-check release-assets-check fuzz-smoke perf-smoke demo-media restore-drill sdk-generate sdk-check docs-check release-acceptance rc-check compose-up compose-down migrate live-postgres-check postgres-integration-test redis-integration-test fast-check finalize clean
+.PHONY: help tools fmt lint vuln gosec test test-race coverage coverage-check coverage-non-db coverage-non-db-check coverage-db coverage-db-check openapi-check openapi-reference-generate openapi-reference-check test-vectors-check provider-conformance-check provider-proof-check crypto-inventory deployment-profile-check collections-check documentation-structure-check failure-drills-check demo-media-check static-site-check meta-files-check release-assets-check fuzz-smoke perf-smoke demo-media restore-drill sdk-generate sdk-check docs-check release-acceptance rc-check compose-up compose-down migrate live-postgres-check postgres-integration-test redis-integration-test fast-check finalize clean
 
 help: ## Show help
 	@awk 'BEGIN {FS=":.*## "}; /^[a-zA-Z0-9_.-]+:.*## / { printf "  %-16s %s\n", $$1, $$2 }' $(MAKEFILE_LIST)
@@ -47,6 +49,20 @@ coverage-check: ## Enforce the local coverage floor
 	@total="$$( $(GO) tool cover -func=coverage.out | awk '/^total:/ { gsub("%", "", $$3); print $$3 }' )"; \
 	awk -v total="$$total" -v min="$(COVERAGE_MIN)" 'BEGIN { if ((total + 0) < (min + 0)) { printf "coverage %.1f%% is below %.1f%%\n", total, min > "/dev/stderr"; exit 1 } }'; \
 	printf 'coverage %.1f%% meets %.1f%% floor\n' "$$total" "$(COVERAGE_MIN)"
+
+coverage-non-db: ## Run no-external-service coverage excluding the live Postgres adapter
+	@set -e; \
+	pkgs="$$( $(GO) list ./... | grep -v '^$(COVERAGE_NON_DB_EXCLUDE)$$' )"; \
+	$(GO) test $$pkgs -coverprofile=coverage-non-db.out; \
+	$(GO) tool cover -func=coverage-non-db.out
+
+coverage-non-db-check: ## Enforce the no-external-service coverage floor
+	@set -e; \
+	pkgs="$$( $(GO) list ./... | grep -v '^$(COVERAGE_NON_DB_EXCLUDE)$$' )"; \
+	$(GO) test $$pkgs -coverprofile=coverage-non-db.out >/dev/null; \
+	total="$$( $(GO) tool cover -func=coverage-non-db.out | awk '/^total:/ { gsub("%", "", $$3); print $$3 }' )"; \
+	awk -v total="$$total" -v min="$(COVERAGE_NON_DB_MIN)" 'BEGIN { if ((total + 0) < (min + 0)) { printf "non-DB coverage %.1f%% is below %.1f%%\n", total, min > "/dev/stderr"; exit 1 } }'; \
+	printf 'non-DB coverage %.1f%% meets %.1f%% floor\n' "$$total" "$(COVERAGE_NON_DB_MIN)"
 
 coverage-db: ## Run DB-backed coverage using WEBHOOKERY_TEST_DATABASE_URL
 	@test -n "$$WEBHOOKERY_TEST_DATABASE_URL" || (printf '%s\n' "WEBHOOKERY_TEST_DATABASE_URL is required; start postgres with docker compose up -d postgres" >&2; exit 2)
@@ -388,6 +404,7 @@ meta-files-check: ## Check governance, licensing, and release-evidence metadata
 	@grep -q "actions/workflows/codeql.yml/badge.svg" README.md
 	@grep -q "actions/workflows/scorecard.yml/badge.svg" README.md
 	@grep -q "local%20coverage-53.0%25+" README.md
+	@grep -q "non--DB%20coverage-81.0%25+" README.md
 	@grep -q "db%20coverage-77.8%25+" README.md
 	@op_count="$$(grep -c '^[[:space:]]*operationId:' openapi.yaml)"; grep -q "OpenAPI-$${op_count}%20operations" README.md
 	@grep -q "make live-postgres-check" docs/operations.md
@@ -412,7 +429,9 @@ meta-files-check: ## Check governance, licensing, and release-evidence metadata
 	@grep -q "scripts/release_assets.sh" .github/workflows/release.yml
 	@grep -q "gh release upload" .github/workflows/release.yml
 	@grep -q "make coverage-check" .github/workflows/ci.yml
+	@grep -q "make coverage-non-db-check" .github/workflows/ci.yml
 	@grep -q "make coverage-check" .github/workflows/release.yml
+	@grep -q "make coverage-non-db-check" .github/workflows/release.yml
 	@grep -q "make coverage-db-check" .github/workflows/integration.yml
 	@grep -q "make coverage-db-check" .github/workflows/release.yml
 	@grep -q "webhookery-release-manifest.json" scripts/release_assets.sh
@@ -562,4 +581,4 @@ finalize: ## Thorough validity check
 
 clean: ## Clean local test artifacts
 	@$(GO) clean -testcache
-	@rm -f coverage.out coverage-db.out
+	@rm -f coverage.out coverage-non-db.out coverage-db.out

@@ -41,5 +41,8 @@ jobs:
       - name: Coverage gate
         run: make coverage-check
 
+      - name: Non-DB coverage gate
+        run: make coverage-non-db-check
+
       - name: Final quality gate
         run: make finalize
