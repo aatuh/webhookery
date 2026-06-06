@@ -12,7 +12,7 @@
 ![OpenAPI](https://img.shields.io/badge/OpenAPI-214%20operations-brightgreen.svg)
 ![Coverage Gate](https://img.shields.io/badge/local%20coverage-53.3%25+-yellow.svg)
 ![Non-DB Coverage Gate](https://img.shields.io/badge/non--DB%20coverage-81.6%25+-brightgreen.svg)
-![DB Coverage Gate](https://img.shields.io/badge/db%20coverage-77.8%25+-yellowgreen.svg)
+![DB Coverage Gate](https://img.shields.io/badge/db%20coverage-78.5%25+-yellowgreen.svg)
 
 Audit-grade webhook capture, replay, and evidence -- self-hosted.
 

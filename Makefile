@@ -10,7 +10,7 @@ FUZZTIME ?= 5s
 COVERAGE_MIN ?= 53.3
 COVERAGE_NON_DB_MIN ?= 81.6
 COVERAGE_NON_DB_EXCLUDE ?= webhookery/internal/adapters/postgres
-COVERAGE_DB_MIN ?= 77.8
+COVERAGE_DB_MIN ?= 78.5
 
 .PHONY: help tools fmt lint vuln gosec test test-race coverage coverage-check coverage-non-db coverage-non-db-check coverage-db coverage-db-check openapi-check openapi-reference-generate openapi-reference-check test-vectors-check provider-conformance-check provider-proof-check crypto-inventory deployment-profile-check collections-check documentation-structure-check failure-drills-check demo-media-check static-site-check meta-files-check release-assets-check fuzz-smoke perf-smoke demo-media restore-drill sdk-generate sdk-check docs-check release-acceptance rc-check compose-up compose-down migrate live-postgres-check postgres-integration-test redis-integration-test fast-check finalize clean
 
@@ -405,7 +405,7 @@ meta-files-check: ## Check governance, licensing, and release-evidence metadata
 	@grep -q "actions/workflows/scorecard.yml/badge.svg" README.md
 	@grep -q "local%20coverage-53.3%25+" README.md
 	@grep -q "non--DB%20coverage-81.6%25+" README.md
-	@grep -q "db%20coverage-77.8%25+" README.md
+	@grep -q "db%20coverage-78.5%25+" README.md
 	@op_count="$$(grep -c '^[[:space:]]*operationId:' openapi.yaml)"; grep -q "OpenAPI-$${op_count}%20operations" README.md
 	@grep -q "make live-postgres-check" docs/operations.md
 	@grep -q "make live-postgres-check" docs/release-evidence-template.md
