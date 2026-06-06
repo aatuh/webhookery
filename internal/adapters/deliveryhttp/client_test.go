@@ -2,8 +2,15 @@ package deliveryhttp
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/pem"
 	"errors"
 	"io"
+	"math/big"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
@@ -144,6 +151,38 @@ func TestClientRejectsInvalidMTLSCertificatePair(t *testing.T) {
 	}
 }
 
+func TestHTTPClientAddsMTLSCertificateToPinnedTransport(t *testing.T) {
+	certPEM, keyPEM := testClientCertificatePEM(t)
+	baseTransport := &http.Transport{TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS13}}
+	client := Client{
+		HTTP:              &http.Client{Transport: baseTransport},
+		Secret:            []byte("secret"),
+		MTLSClientCertPEM: certPEM,
+		MTLSClientKeyPEM:  keyPEM,
+		SSRF: ssrf.Validator{Resolver: ssrf.StaticResolver{
+			"example.com": {netip.MustParseAddr("93.184.216.34")},
+		}},
+	}
+
+	httpClient, err := client.httpClient()
+	if err != nil {
+		t.Fatal(err)
+	}
+	transport, ok := httpClient.Transport.(*http.Transport)
+	if !ok {
+		t.Fatalf("expected HTTP transport, got %T", httpClient.Transport)
+	}
+	if transport.TLSClientConfig == nil || len(transport.TLSClientConfig.Certificates) != 1 {
+		t.Fatalf("expected mTLS client certificate in transport, got %+v", transport.TLSClientConfig)
+	}
+	if transport.TLSClientConfig.MinVersion != tls.VersionTLS13 {
+		t.Fatalf("expected existing TLS minimum version to be preserved, got %d", transport.TLSClientConfig.MinVersion)
+	}
+	if baseTransport.TLSClientConfig == transport.TLSClientConfig {
+		t.Fatal("mTLS setup should clone the base TLS config before mutation")
+	}
+}
+
 func TestTruncateResponseBody(t *testing.T) {
 	body, err := readTruncated(io.NopCloser(repeatingReader("x", 20)), 8)
 	if err != nil {
@@ -201,4 +240,26 @@ type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
 	return f(req)
+}
+
+func testClientCertificatePEM(t *testing.T) ([]byte, []byte) {
+	t.Helper()
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	template := &x509.Certificate{
+		SerialNumber: big.NewInt(1),
+		Subject:      pkix.Name{CommonName: "Webhookery Delivery Client"},
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(time.Hour),
+		KeyUsage:     x509.KeyUsageDigitalSignature,
+	}
+	der, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
+	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(key)})
+	return certPEM, keyPEM
 }
