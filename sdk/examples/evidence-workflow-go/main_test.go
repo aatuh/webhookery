@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -14,7 +15,9 @@ import (
 )
 
 func TestRunCompletesEvidenceWorkflowAgainstWebhookeryAPI(t *testing.T) {
-	output := filepath.Join(t.TempDir(), "exports", "bundle.tar.gz")
+	workdir := t.TempDir()
+	t.Chdir(workdir)
+	output := filepath.Join(workdir, "evidence-workflow.tar.gz")
 	var seen []string
 	var createdEventID string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -71,7 +74,7 @@ func TestRunCompletesEvidenceWorkflowAgainstWebhookeryAPI(t *testing.T) {
 	t.Setenv("WEBHOOKERY_BASE_URL", server.URL)
 	t.Setenv("WEBHOOKERY_API_KEY", "whkey_run")
 	t.Setenv("WEBHOOKERY_SOURCE_ID", "src_run")
-	t.Setenv("WEBHOOKERY_EVIDENCE_OUTPUT", output)
+	t.Setenv("WEBHOOKERY_EVIDENCE_OUTPUT", " ")
 
 	if err := run(context.Background()); err != nil {
 		t.Fatal(err)
@@ -94,6 +97,77 @@ func TestRunCompletesEvidenceWorkflowAgainstWebhookeryAPI(t *testing.T) {
 	}
 	if strings.Join(seen, "\n") != strings.Join(want, "\n") {
 		t.Fatalf("workflow requests:\n%s", strings.Join(seen, "\n"))
+	}
+}
+
+func TestRunFailsBeforeNetworkWhenConfigurationIsMissing(t *testing.T) {
+	t.Setenv("WEBHOOKERY_BASE_URL", " ")
+	t.Setenv("WEBHOOKERY_API_KEY", "whkey_missing")
+	t.Setenv("WEBHOOKERY_SOURCE_ID", "src_missing")
+
+	err := run(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "WEBHOOKERY_BASE_URL is required") {
+		t.Fatalf("expected missing base URL error, got %v", err)
+	}
+}
+
+func TestRunSurfacesWorkflowContractFailures(t *testing.T) {
+	tests := []struct {
+		name    string
+		mode    string
+		wantErr string
+	}{
+		{name: "missing incident id", mode: "missing_incident_id", wantErr: "incident response did not include id"},
+		{name: "missing export id", mode: "missing_export_id", wantErr: "evidence export response did not include id"},
+		{name: "invalid audit chain", mode: "invalid_audit_chain", wantErr: "audit chain did not verify"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			output := filepath.Join(t.TempDir(), "bundle.tar.gz")
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Header.Get("Authorization") != "Bearer whkey_contract" {
+					t.Fatalf("authorization header=%q", r.Header.Get("Authorization"))
+				}
+				switch {
+				case r.Method == http.MethodPost && r.URL.Path == "/v1/events":
+					_, _ = w.Write([]byte(`{"Accepted":true,"EventID":"evt_contract"}`))
+				case r.Method == http.MethodPost && r.URL.Path == "/v1/incidents":
+					if tt.mode == "missing_incident_id" {
+						_, _ = w.Write([]byte(`{}`))
+						return
+					}
+					_, _ = w.Write([]byte(`{"id":"inc_1"}`))
+				case r.Method == http.MethodPost && r.URL.Path == "/v1/incidents/inc_1/events":
+					w.WriteHeader(http.StatusNoContent)
+				case r.Method == http.MethodPost && r.URL.Path == "/v1/incidents/inc_1/generate-report":
+					w.WriteHeader(http.StatusNoContent)
+				case r.Method == http.MethodPost && r.URL.Path == "/v1/incidents/inc_1/evidence-export":
+					if tt.mode == "missing_export_id" {
+						_, _ = w.Write([]byte(`{}`))
+						return
+					}
+					_, _ = w.Write([]byte(`{"id":"exp_1"}`))
+				case r.Method == http.MethodGet && r.URL.Path == "/v1/audit-exports/exp_1:download":
+					_, _ = w.Write([]byte("evidence bundle"))
+				case r.Method == http.MethodPost && r.URL.Path == "/v1/audit-chain:verify":
+					valid := tt.mode != "invalid_audit_chain"
+					_, _ = w.Write([]byte(fmt.Sprintf(`{"tenant_id":"ten_1","valid":%t,"from_sequence":1,"to_sequence":1,"failures":[]}`, valid)))
+				default:
+					t.Fatalf("unexpected request %s %s", r.Method, r.URL.Path)
+				}
+			}))
+			defer server.Close()
+
+			t.Setenv("WEBHOOKERY_BASE_URL", server.URL)
+			t.Setenv("WEBHOOKERY_API_KEY", "whkey_contract")
+			t.Setenv("WEBHOOKERY_SOURCE_ID", "src_contract")
+			t.Setenv("WEBHOOKERY_EVIDENCE_OUTPUT", output)
+
+			err := run(context.Background())
+			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("expected %q error, got %v", tt.wantErr, err)
+			}
+		})
 	}
 }
 
