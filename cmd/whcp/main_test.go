@@ -3,7 +3,10 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
@@ -88,6 +91,46 @@ func TestRunDispatchesSubcommandUsage(t *testing.T) {
 				t.Fatalf("expected %s usage, got %v", command, err)
 			}
 		})
+	}
+}
+
+func TestRunSignaturesVerifyGenericHMAC(t *testing.T) {
+	body := []byte(`{"id":"evt_cli_signature"}`)
+	bodyFile := filepath.Join(t.TempDir(), "body.json")
+	if err := os.WriteFile(bodyFile, body, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	mac := hmac.New(sha256.New, []byte("secret"))
+	_, _ = mac.Write(body)
+	signature := "sha256=" + hex.EncodeToString(mac.Sum(nil))
+
+	oldStdout := os.Stdout
+	reader, writer, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Stdout = writer
+	defer func() { os.Stdout = oldStdout }()
+
+	err = run([]string{"signatures", "verify", "--provider", "generic-hmac", "--secret", "secret", "--body", bodyFile, "--header", "Webhook-Signature: " + signature})
+	_ = writer.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err := io.ReadAll(reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var result struct {
+		Verified bool
+		Reason   string
+		Provider string
+	}
+	if err := json.Unmarshal(out, &result); err != nil {
+		t.Fatalf("invalid signature verification JSON %q: %v", out, err)
+	}
+	if !result.Verified || result.Provider != "generic-hmac" || result.Reason != "ok" {
+		t.Fatalf("unexpected signature verification result: %+v", result)
 	}
 }
 
@@ -546,6 +589,30 @@ func TestCLIResourceCommandsSendExpectedRequests(t *testing.T) {
 	if err := os.WriteFile(operationsFile, []byte(`[{"op":"redact","path":"/data/email"}]`), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	schemaFile := filepath.Join(tempDir, "schema.json")
+	if err := os.WriteFile(schemaFile, []byte(`{"type":"object","required":["id"]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	payloadFile := filepath.Join(tempDir, "payload.json")
+	if err := os.WriteFile(payloadFile, []byte(`{"id":"evt_1"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	newSchemaFile := filepath.Join(tempDir, "new-schema.json")
+	if err := os.WriteFile(newSchemaFile, []byte(`{"type":"object","required":["id","type"]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	adapterDefinitionFile := filepath.Join(tempDir, "adapter-definition.json")
+	if err := os.WriteFile(adapterDefinitionFile, []byte(`{"name":"acme","provider":"generic-hmac"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	vectorRequestFile := filepath.Join(tempDir, "vector-request.json")
+	if err := os.WriteFile(vectorRequestFile, []byte(`{"headers":{"webhook-signature":"sha256:test"},"body":"{}"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	vectorExpectedFile := filepath.Join(tempDir, "vector-expected.json")
+	if err := os.WriteFile(vectorExpectedFile, []byte(`{"verified":false,"reason":"invalid_signature"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
 
 	common := []string{"--base-url", server.URL, "--api-key", "whkey_cli"}
 	cases := []struct {
@@ -679,6 +746,46 @@ func TestCLIResourceCommandsSendExpectedRequests(t *testing.T) {
 			wantPath:   "/v1/alert-firings?state=open",
 		},
 		{
+			name:         "alert create",
+			args:         append([]string{"alerts", "create", "--name", "DLQ backlog", "--rule-type", "dead_letter_open", "--metric-name", "dead_letter.open", "--threshold", "5", "--comparator", ">=", "--window-seconds", "600", "--state", "active", "--channel-ids", "nch_1,nch_2"}, common...),
+			wantMethod:   http.MethodPost,
+			wantPath:     "/v1/alerts",
+			bodyContains: []string{`"name":"DLQ backlog"`, `"rule_type":"dead_letter_open"`, `"metric_name":"dead_letter.open"`, `"threshold":5`, `"comparator":"\u003e="`, `"window_seconds":600`, `"channel_ids":["nch_1","nch_2"]`},
+		},
+		{
+			name:         "alert update",
+			args:         append([]string{"alerts", "update", "--alert-id", "alr_1", "--name", "DLQ urgent", "--threshold", "10", "--comparator", ">", "--window-seconds", "300", "--state", "active", "--channel-ids", "nch_1", "--reason", "tune alert"}, common...),
+			wantMethod:   http.MethodPatch,
+			wantPath:     "/v1/alerts/alr_1",
+			bodyContains: []string{`"name":"DLQ urgent"`, `"threshold":10`, `"comparator":"\u003e"`, `"window_seconds":300`, `"state":"active"`, `"channel_ids":["nch_1"]`, `"reason":"tune alert"`},
+		},
+		{
+			name:         "alert disable",
+			args:         append([]string{"alerts", "disable", "--alert-id", "alr_1", "--reason", "retired"}, common...),
+			wantMethod:   http.MethodDelete,
+			wantPath:     "/v1/alerts/alr_1",
+			bodyContains: []string{`"reason":"retired"`},
+		},
+		{
+			name:         "alert acknowledge",
+			args:         append([]string{"alerts", "ack", "--firing-id", "alf_1", "--reason", "investigating"}, common...),
+			wantMethod:   http.MethodPost,
+			wantPath:     "/v1/alert-firings/alf_1:acknowledge",
+			bodyContains: []string{`"reason":"investigating"`},
+		},
+		{
+			name:       "ops metrics",
+			args:       append([]string{"ops", "metrics"}, common...),
+			wantMethod: http.MethodGet,
+			wantPath:   "/v1/ops/metrics",
+		},
+		{
+			name:       "ops rollups",
+			args:       append([]string{"ops", "rollups"}, common...),
+			wantMethod: http.MethodGet,
+			wantPath:   "/v1/ops/metrics/rollups",
+		},
+		{
 			name:       "ops storage",
 			args:       append([]string{"ops", "storage"}, common...),
 			wantMethod: http.MethodGet,
@@ -703,6 +810,39 @@ func TestCLIResourceCommandsSendExpectedRequests(t *testing.T) {
 			wantPath:   "/v1/ops/config",
 		},
 		{
+			name:       "ops endpoint health",
+			args:       append([]string{"ops", "endpoint-health"}, common...),
+			wantMethod: http.MethodGet,
+			wantPath:   "/v1/endpoint-health",
+		},
+		{
+			name:       "ops workers",
+			args:       append([]string{"ops", "workers"}, common...),
+			wantMethod: http.MethodGet,
+			wantPath:   "/v1/ops/workers",
+		},
+		{
+			name:         "notification channel create",
+			args:         append([]string{"notification-channels", "create", "--name", "PagerDuty", "--url", "https://signals.example.com/notify", "--signing-secret", "notify-secret"}, common...),
+			wantMethod:   http.MethodPost,
+			wantPath:     "/v1/notification-channels",
+			bodyContains: []string{`"name":"PagerDuty"`, `"channel_type":"webhook"`, `"url":"https://signals.example.com/notify"`, `"signing_secret":"notify-secret"`},
+		},
+		{
+			name:         "notification channel update",
+			args:         append([]string{"notification-channels", "update", "--channel-id", "nch_1", "--name", "Ops", "--url", "https://signals.example.com/ops", "--signing-secret", "next-secret", "--state", "active", "--reason", "rotate"}, common...),
+			wantMethod:   http.MethodPatch,
+			wantPath:     "/v1/notification-channels/nch_1",
+			bodyContains: []string{`"name":"Ops"`, `"url":"https://signals.example.com/ops"`, `"signing_secret":"next-secret"`, `"state":"active"`, `"reason":"rotate"`},
+		},
+		{
+			name:         "notification channel disable",
+			args:         append([]string{"notification-channels", "disable", "--channel-id", "nch_1", "--reason", "retired"}, common...),
+			wantMethod:   http.MethodDelete,
+			wantPath:     "/v1/notification-channels/nch_1",
+			bodyContains: []string{`"reason":"retired"`},
+		},
+		{
 			name:         "notification channel test",
 			args:         append([]string{"notification-channels", "test", "--channel-id", "nch_1", "--reason", "probe"}, common...),
 			wantMethod:   http.MethodPost,
@@ -710,11 +850,142 @@ func TestCLIResourceCommandsSendExpectedRequests(t *testing.T) {
 			bodyContains: []string{`"reason":"probe"`},
 		},
 		{
+			name:       "notification deliveries list",
+			args:       append([]string{"notification-deliveries", "list", "--state", "scheduled"}, common...),
+			wantMethod: http.MethodGet,
+			wantPath:   "/v1/notification-deliveries?state=scheduled",
+		},
+		{
+			name:       "notification delivery attempts",
+			args:       append([]string{"notification-deliveries", "attempts", "--delivery-id", "ndl_1"}, common...),
+			wantMethod: http.MethodGet,
+			wantPath:   "/v1/notification-deliveries/ndl_1/attempts",
+		},
+		{
+			name:         "notification delivery retry",
+			args:         append([]string{"notification-deliveries", "retry", "--delivery-id", "ndl_1", "--reason", "receiver fixed"}, common...),
+			wantMethod:   http.MethodPost,
+			wantPath:     "/v1/notification-deliveries/ndl_1:retry",
+			bodyContains: []string{`"reason":"receiver fixed"`},
+		},
+		{
 			name:         "schema event type update",
 			args:         append([]string{"schemas", "event-type-update", "--name", "invoice.created", "--description", "updated", "--state", "active", "--reason", "docs"}, common...),
 			wantMethod:   http.MethodPatch,
 			wantPath:     "/v1/event-types/invoice.created",
 			bodyContains: []string{`"description":"updated"`, `"state":"active"`, `"reason":"docs"`},
+		},
+		{
+			name:         "schema event type create",
+			args:         append([]string{"schemas", "event-type-create", "--name", "invoice.created", "--description", "Invoice created"}, common...),
+			wantMethod:   http.MethodPost,
+			wantPath:     "/v1/event-types",
+			bodyContains: []string{`"name":"invoice.created"`, `"description":"Invoice created"`},
+		},
+		{
+			name:       "schema event type list",
+			args:       append([]string{"schemas", "event-type-list"}, common...),
+			wantMethod: http.MethodGet,
+			wantPath:   "/v1/event-types",
+		},
+		{
+			name:       "schema event type get",
+			args:       append([]string{"schemas", "event-type-get", "--name", "invoice.created"}, common...),
+			wantMethod: http.MethodGet,
+			wantPath:   "/v1/event-types/invoice.created",
+		},
+		{
+			name:         "schema event type delete",
+			args:         append([]string{"schemas", "event-type-delete", "--name", "invoice.created", "--reason", "retired"}, common...),
+			wantMethod:   http.MethodDelete,
+			wantPath:     "/v1/event-types/invoice.created",
+			bodyContains: []string{`"reason":"retired"`},
+		},
+		{
+			name:         "schema create",
+			args:         append([]string{"schemas", "schema-create", "--name", "invoice.created", "--version", "2026-06-01", "--schema-file", schemaFile}, common...),
+			wantMethod:   http.MethodPost,
+			wantPath:     "/v1/event-types/invoice.created/schemas",
+			bodyContains: []string{`"version":"2026-06-01"`, `"schema":"{\"type\":\"object\",\"required\":[\"id\"]}"`},
+		},
+		{
+			name:       "schema list",
+			args:       append([]string{"schemas", "schema-list", "--name", "invoice.created"}, common...),
+			wantMethod: http.MethodGet,
+			wantPath:   "/v1/event-types/invoice.created/schemas",
+		},
+		{
+			name:       "schema get",
+			args:       append([]string{"schemas", "schema-get", "--name", "invoice.created", "--version", "2026-06-01"}, common...),
+			wantMethod: http.MethodGet,
+			wantPath:   "/v1/event-types/invoice.created/schemas/2026-06-01",
+		},
+		{
+			name:         "schema update",
+			args:         append([]string{"schemas", "schema-update", "--name", "invoice.created", "--version", "2026-06-01", "--state", "deprecated", "--reason", "superseded"}, common...),
+			wantMethod:   http.MethodPatch,
+			wantPath:     "/v1/event-types/invoice.created/schemas/2026-06-01",
+			bodyContains: []string{`"state":"deprecated"`, `"reason":"superseded"`},
+		},
+		{
+			name:         "schema delete",
+			args:         append([]string{"schemas", "schema-delete", "--name", "invoice.created", "--version", "2026-06-01", "--reason", "retired"}, common...),
+			wantMethod:   http.MethodDelete,
+			wantPath:     "/v1/event-types/invoice.created/schemas/2026-06-01",
+			bodyContains: []string{`"reason":"retired"`},
+		},
+		{
+			name:         "schema validate payload",
+			args:         append([]string{"schemas", "validate", "--name", "invoice.created", "--version", "2026-06-01", "--payload-file", payloadFile}, common...),
+			wantMethod:   http.MethodPost,
+			wantPath:     "/v1/event-types/invoice.created/schemas/2026-06-01:validate",
+			bodyContains: []string{`"payload":"{\"id\":\"evt_1\"}"`},
+		},
+		{
+			name:         "schema compatibility check",
+			args:         append([]string{"schemas", "check-compat", "--name", "invoice.created", "--version", "2026-06-01", "--new-schema-file", newSchemaFile}, common...),
+			wantMethod:   http.MethodPost,
+			wantPath:     "/v1/event-types/invoice.created/schemas/2026-06-01:check-compatibility",
+			bodyContains: []string{`"new_schema":"{\"type\":\"object\",\"required\":[\"id\",\"type\"]}"`},
+		},
+		{
+			name:       "adapter list",
+			args:       append([]string{"adapters", "list"}, common...),
+			wantMethod: http.MethodGet,
+			wantPath:   "/v1/adapters",
+		},
+		{
+			name:       "adapter get",
+			args:       append([]string{"adapters", "get", "--adapter-id", "adp_1"}, common...),
+			wantMethod: http.MethodGet,
+			wantPath:   "/v1/adapters/adp_1",
+		},
+		{
+			name:         "adapter create",
+			args:         append([]string{"adapters", "create", "--name", "acme", "--kind", "declarative", "--description", "ACME adapter", "--risk-level", "medium", "--provenance-url", "https://example.com/provenance"}, common...),
+			wantMethod:   http.MethodPost,
+			wantPath:     "/v1/adapters",
+			bodyContains: []string{`"name":"acme"`, `"kind":"declarative"`, `"description":"ACME adapter"`, `"risk_level":"medium"`, `"provenance_url":"https://example.com/provenance"`},
+		},
+		{
+			name:       "adapter versions",
+			args:       append([]string{"adapters", "versions", "--adapter-id", "adp_1"}, common...),
+			wantMethod: http.MethodGet,
+			wantPath:   "/v1/adapters/adp_1/versions",
+		},
+		{
+			name:         "adapter version create",
+			args:         append([]string{"adapters", "version-create", "--adapter-id", "adp_1", "--version", "2026-06-01", "--definition-file", adapterDefinitionFile, "--package-sha256", "sha256:pkg", "--package-signature", "sig", "--sbom-sha256", "sha256:sbom", "--provenance-url", "https://example.com/prov", "--risk-level", "high", "--reason", "upload"}, common...),
+			wantMethod:   http.MethodPost,
+			wantPath:     "/v1/adapters/adp_1/versions",
+			bodyContains: []string{`"version":"2026-06-01"`, `"definition":{"name":"acme","provider":"generic-hmac"}`, `"package_sha256":"sha256:pkg"`, `"package_signature":"sig"`, `"sbom_sha256":"sha256:sbom"`, `"risk_level":"high"`, `"reason":"upload"`},
+		},
+		{
+			name:         "adapter vector create",
+			args:         append([]string{"adapters", "vector-create", "--adapter-id", "adp_1", "--version-id", "adv_1", "--name", "invalid signature", "--request-file", vectorRequestFile, "--expected-file", vectorExpectedFile}, common...),
+			wantMethod:   http.MethodPost,
+			wantPath:     "/v1/adapters/adp_1/versions/adv_1/test-vectors",
+			bodyContains: []string{`"name":"invalid signature"`, `"request":{"headers":{"webhook-signature":"sha256:test"},"body":"{}"}`, `"expected":{"verified":false,"reason":"invalid_signature"}`},
 		},
 		{
 			name:         "adapter transition",
@@ -833,6 +1104,46 @@ func TestCLIResourceCommandsSendExpectedRequests(t *testing.T) {
 			wantMethod:   http.MethodPost,
 			wantPath:     "/v1/siem-sinks/snk_1:test",
 			bodyContains: []string{`"reason":"probe"`},
+		},
+		{
+			name:         "siem sink create",
+			args:         append([]string{"siem-sinks", "create", "--name", "Splunk", "--url", "https://signals.example.com/siem", "--signing-secret", "siem-secret"}, common...),
+			wantMethod:   http.MethodPost,
+			wantPath:     "/v1/siem-sinks",
+			bodyContains: []string{`"name":"Splunk"`, `"sink_type":"webhook"`, `"url":"https://signals.example.com/siem"`, `"signing_secret":"siem-secret"`},
+		},
+		{
+			name:         "siem sink update",
+			args:         append([]string{"siem-sinks", "update", "--sink-id", "snk_1", "--name", "Splunk prod", "--url", "https://signals.example.com/siem-prod", "--signing-secret", "next-siem-secret", "--state", "active", "--reason", "rotate"}, common...),
+			wantMethod:   http.MethodPatch,
+			wantPath:     "/v1/siem-sinks/snk_1",
+			bodyContains: []string{`"name":"Splunk prod"`, `"url":"https://signals.example.com/siem-prod"`, `"signing_secret":"next-siem-secret"`, `"state":"active"`, `"reason":"rotate"`},
+		},
+		{
+			name:         "siem sink disable",
+			args:         append([]string{"siem-sinks", "disable", "--sink-id", "snk_1", "--reason", "retired"}, common...),
+			wantMethod:   http.MethodDelete,
+			wantPath:     "/v1/siem-sinks/snk_1",
+			bodyContains: []string{`"reason":"retired"`},
+		},
+		{
+			name:       "siem deliveries list",
+			args:       append([]string{"siem-deliveries", "list", "--state", "scheduled"}, common...),
+			wantMethod: http.MethodGet,
+			wantPath:   "/v1/siem-deliveries?state=scheduled",
+		},
+		{
+			name:       "siem delivery attempts",
+			args:       append([]string{"siem-deliveries", "attempts", "--delivery-id", "sdl_1"}, common...),
+			wantMethod: http.MethodGet,
+			wantPath:   "/v1/siem-deliveries/sdl_1/attempts",
+		},
+		{
+			name:         "siem delivery retry",
+			args:         append([]string{"siem-deliveries", "retry", "--delivery-id", "sdl_1", "--reason", "receiver fixed"}, common...),
+			wantMethod:   http.MethodPost,
+			wantPath:     "/v1/siem-deliveries/sdl_1:retry",
+			bodyContains: []string{`"reason":"receiver fixed"`},
 		},
 		{
 			name:         "audit export",
