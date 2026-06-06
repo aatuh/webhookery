@@ -1048,6 +1048,91 @@ func TestPostgresReplayApprovalAndFanoutControls(t *testing.T) {
 	assertPostgresAuditEvent(t, ctx, store, actor.TenantID, "replay.canceled", "replay_job", directReplay.ID)
 }
 
+func TestPostgresCurrentDeliveryFanoutTargetResolvesScopedConfig(t *testing.T) {
+	ctx, store, actor := openPostgresIntegrationStore(t)
+	defer store.Close()
+
+	control := app.NewControlService(store, ssrf.Validator{Resolver: ssrf.StaticResolver{"receiver.example.com": {netip.MustParseAddr("93.184.216.34")}}})
+	source, err := control.CreateSource(ctx, actor, app.CreateSourceRequest{Name: "fanout target source", Provider: "stripe", Adapter: "stripe", VerificationSecret: "whsec_it"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	endpointPolicy, err := control.CreateRetryPolicy(ctx, actor, app.CreateRetryPolicyRequest{
+		Name:                "endpoint fanout retry",
+		MaxAttempts:         3,
+		MaxDurationSeconds:  120,
+		InitialDelaySeconds: 1,
+		MaxDelaySeconds:     10,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	routePolicy, err := control.CreateRetryPolicy(ctx, actor, app.CreateRetryPolicyRequest{
+		Name:                "route fanout retry",
+		MaxAttempts:         5,
+		MaxDurationSeconds:  300,
+		InitialDelaySeconds: 2,
+		MaxDelaySeconds:     30,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	endpoint, _, err := control.CreateEndpoint(ctx, actor, app.CreateEndpointRequest{Name: "fanout target endpoint", URL: "https://receiver.example.com/fanout", RetryPolicyID: endpointPolicy.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	route, err := control.CreateRoute(ctx, actor, app.CreateRouteRequest{
+		SourceID:      source.ID,
+		Name:          "fanout target route",
+		Priority:      1,
+		EventTypes:    []string{"invoice.fanout_target"},
+		EndpointID:    endpoint.ID,
+		RetryPolicyID: routePolicy.ID,
+		State:         domain.StateActive,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	subscription, err := control.CreateSubscription(ctx, actor, app.CreateSubscriptionRequest{
+		EndpointID:    endpoint.ID,
+		EventTypes:    []string{"invoice.fanout_target"},
+		PayloadFormat: "canonical_json",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	routeTarget, ok, err := store.GetCurrentDeliveryFanoutTarget(ctx, actor.TenantID, route.ID, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok || routeTarget.RouteID != route.ID || routeTarget.EndpointID != endpoint.ID || routeTarget.RouteVersionID != route.ActiveVersionID || routeTarget.RouteRetryPolicyID != routePolicy.ID || routeTarget.EndpointRetryPolicyID != endpointPolicy.ID {
+		t.Fatalf("route fanout target lost current config: ok=%v target=%+v route=%+v endpointPolicy=%s routePolicy=%s", ok, routeTarget, route, endpointPolicy.ID, routePolicy.ID)
+	}
+	if _, ok, err := store.GetCurrentDeliveryFanoutTarget(ctx, "ten_it_wrong_fanout_target", route.ID, ""); err != nil || ok {
+		t.Fatalf("wrong-tenant route target must be hidden, ok=%v err=%v", ok, err)
+	}
+
+	subscriptionTarget, ok, err := store.GetCurrentDeliveryFanoutTarget(ctx, actor.TenantID, "", subscription.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok || subscriptionTarget.SubscriptionID != subscription.ID || subscriptionTarget.EndpointID != endpoint.ID || subscriptionTarget.SubscriptionVersionID != subscription.ActiveVersionID || subscriptionTarget.EndpointRetryPolicyID != endpointPolicy.ID {
+		t.Fatalf("subscription fanout target lost current config: ok=%v target=%+v subscription=%+v endpointPolicy=%s", ok, subscriptionTarget, subscription, endpointPolicy.ID)
+	}
+	if _, ok, err := store.GetCurrentDeliveryFanoutTarget(ctx, actor.TenantID, "", "sub_missing"); err != nil || ok {
+		t.Fatalf("missing subscription target must be absent, ok=%v err=%v", ok, err)
+	}
+
+	fallback, ok, err := store.GetCurrentDeliveryFanoutTarget(ctx, actor.TenantID, "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok || fallback.EndpointID != "" || fallback.RouteID != "" || fallback.SubscriptionID != "" {
+		t.Fatalf("empty replay source should keep fallback target empty and present, ok=%v target=%+v", ok, fallback)
+	}
+}
+
 func TestPostgresReplayCurrentDeliveryAndNoopEvidence(t *testing.T) {
 	ctx, store, actor := openPostgresIntegrationStore(t)
 	defer store.Close()
