@@ -1387,6 +1387,103 @@ func TestPostgresMetricsRollupsAndAlertFiringLifecycle(t *testing.T) {
 	}
 }
 
+func TestPostgresAuditChainAndRetentionEvidenceLifecycle(t *testing.T) {
+	ctx, store, actor := openPostgresIntegrationStore(t)
+	defer store.Close()
+
+	control := app.NewControlService(store, ssrf.Validator{})
+	auditEvents, err := control.ListAuditEvents(ctx, actor, 20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !containsPostgresAuditAction(auditEvents, "api_key.created") {
+		t.Fatalf("expected API key creation audit evidence, got %+v", auditEvents)
+	}
+	head, err := control.GetAuditChainHead(ctx, actor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if head.Sequence == 0 && head.UnchainedEvents > 0 {
+		if _, err := store.BackfillAuditChain(ctx, "it-audit-backfill", 100); err != nil {
+			t.Fatal(err)
+		}
+		head, err = control.GetAuditChainHead(ctx, actor)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if head.Sequence == 0 || head.ChainHash == "" {
+		t.Fatalf("expected chained audit evidence for tenant, got %+v", head)
+	}
+	verification, err := control.VerifyAuditChain(ctx, actor, app.AuditChainVerifyRequest{FromSequence: 1, ToSequence: head.Sequence})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !verification.Valid || verification.CheckedEntries == 0 || verification.EndChainHash != head.ChainHash {
+		t.Fatalf("audit chain verification mismatch: head=%+v verification=%+v", head, verification)
+	}
+	anchor, err := control.CreateAuditChainAnchor(ctx, actor, app.AuditChainAnchorRequest{FromSequence: 1, ToSequence: head.Sequence, Reason: "integration audit checkpoint"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if anchor.TenantID != actor.TenantID || anchor.ToSequence != head.Sequence || anchor.ManifestSHA256 == "" || anchor.CreatedBy != actor.ID {
+		t.Fatalf("audit chain anchor did not preserve checkpoint evidence: %+v", anchor)
+	}
+	anchors, err := control.ListAuditChainAnchors(ctx, actor, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !containsPostgresAuditChainAnchor(anchors, anchor.ID, head.Sequence) {
+		t.Fatalf("expected audit chain anchor in tenant list, got %+v", anchors)
+	}
+	fetchedAnchor, err := control.GetAuditChainAnchor(ctx, actor, anchor.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fetchedAnchor.ID != anchor.ID || fetchedAnchor.ChainHash != anchor.ChainHash {
+		t.Fatalf("audit chain anchor lookup mismatch: got %+v want %+v", fetchedAnchor, anchor)
+	}
+	refreshedHead, err := control.GetAuditChainHead(ctx, actor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if refreshedHead.LastAnchorID != anchor.ID || refreshedHead.LastAnchorSequence != head.Sequence {
+		t.Fatalf("audit chain head did not expose latest anchor: %+v", refreshedHead)
+	}
+
+	policy, err := control.CreateRetentionPolicy(ctx, actor, app.CreateRetentionPolicyRequest{
+		ResourceType:  domain.RetentionResourceAuditEvent,
+		RetentionDays: 3650,
+		State:         domain.StateActive,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	policies, err := control.ListRetentionPolicies(ctx, actor, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !containsPostgresRetentionPolicy(policies, policy.ID, domain.RetentionResourceAuditEvent, domain.StateActive) {
+		t.Fatalf("expected retention policy in tenant list, got %+v", policies)
+	}
+	retentionDays := 3650
+	hold := false
+	updated, err := control.UpdateRetentionPolicy(ctx, actor, policy.ID, app.UpdateRetentionPolicyRequest{
+		RetentionDays: &retentionDays,
+		LegalHold:     &hold,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.ID != policy.ID || updated.RetentionDays != 3650 || updated.LegalHold {
+		t.Fatalf("retention policy update mismatch: %+v", updated)
+	}
+	if err := store.ApplyRetentionPolicies(ctx, "it-retention-worker", 1000); err != nil {
+		t.Fatal(err)
+	}
+	assertPostgresAuditEvent(t, ctx, store, actor.TenantID, "retention_policy.updated", "retention_policy", policy.ID)
+}
+
 func TestPostgresIncidentLifecycleReportAndEvidenceExport(t *testing.T) {
 	ctx, store, actor := openPostgresIntegrationStore(t)
 	defer store.Close()
@@ -2472,6 +2569,33 @@ func findPostgresDeadLetterEntry(entries []map[string]any, deliveryID string) st
 		}
 	}
 	return ""
+}
+
+func containsPostgresAuditAction(events []domain.AuditEvent, action string) bool {
+	for _, event := range events {
+		if event.Action == action {
+			return true
+		}
+	}
+	return false
+}
+
+func containsPostgresAuditChainAnchor(anchors []domain.AuditChainAnchor, id string, toSequence int64) bool {
+	for _, anchor := range anchors {
+		if anchor.ID == id && anchor.ToSequence == toSequence {
+			return true
+		}
+	}
+	return false
+}
+
+func containsPostgresRetentionPolicy(policies []domain.RetentionPolicy, id, resourceType, state string) bool {
+	for _, policy := range policies {
+		if policy.ID == id && policy.ResourceType == resourceType && policy.State == state {
+			return true
+		}
+	}
+	return false
 }
 
 func containsPostgresProducerClient(clients []domain.ProducerClient, id, state string) bool {

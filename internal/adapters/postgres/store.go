@@ -5340,16 +5340,24 @@ func (s *Store) ApplyRetentionPolicies(ctx context.Context, workerID string, lim
 		return err
 	}
 	defer rows.Close()
+	var policies []domain.RetentionPolicy
 	for rows.Next() {
 		policy, err := scanRetentionPolicy(rows)
 		if err != nil {
 			return err
 		}
+		policies = append(policies, policy)
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	rows.Close()
+	for _, policy := range policies {
 		if err := s.applyRetentionPolicy(ctx, workerID, policy); err != nil {
 			return err
 		}
 	}
-	return rows.Err()
+	return nil
 }
 
 func (s *Store) ListDeadLetter(ctx context.Context, tenantID string, limit int) ([]map[string]any, error) {
