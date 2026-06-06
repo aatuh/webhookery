@@ -176,6 +176,70 @@ func TestProviderRejectsMissingSignature(t *testing.T) {
 	}
 }
 
+func TestBuiltInProviderAdapterNamesAndUnsafeAdapter(t *testing.T) {
+	registry := BuiltInRegistry()
+	tests := []string{
+		"stripe",
+		"github",
+		"shopify",
+		"slack",
+		"generic-hmac",
+		"generic-jwt",
+		"cloudevents",
+		"internal",
+		"generic-unsafe",
+	}
+	for _, name := range tests {
+		t.Run(name, func(t *testing.T) {
+			adapter, ok := registry.Adapter(strings.ToUpper(name))
+			if !ok {
+				t.Fatalf("missing adapter %s", name)
+			}
+			if adapter.Name() != name {
+				t.Fatalf("adapter name=%q want %q", adapter.Name(), name)
+			}
+		})
+	}
+	if _, ok := registry.Adapter("unknown"); ok {
+		t.Fatal("unknown adapter should not resolve")
+	}
+
+	unsafe, _ := registry.Adapter("generic-unsafe")
+	result := unsafe.Verify(VerifyInput{RawBody: []byte(`{"id":"evt_1"}`)})
+	if result.Verified || result.Reason != "unsafe_adapter_disabled" {
+		t.Fatalf("unsafe adapter should fail closed, got %+v", result)
+	}
+}
+
+func TestGenericHMACAdapterVerifiesBareAndPrefixedSHA256(t *testing.T) {
+	adapter := GenericHMACAdapter{}
+	body := []byte(`{"id":"evt_1"}`)
+	signature := hmacSHA256Hex([]byte("secret"), body)
+
+	for _, header := range []string{signature, "sha256=" + signature} {
+		result := adapter.Verify(VerifyInput{
+			RawBody: body,
+			Headers: map[string][]string{"webhook-signature": {header}},
+			Secret:  []byte("secret"),
+		})
+		if !result.Verified || result.Reason != "ok" {
+			t.Fatalf("expected generic HMAC success for %q, got %+v", header, result)
+		}
+	}
+	missing := adapter.Verify(VerifyInput{RawBody: body, Secret: []byte("secret")})
+	if missing.Verified || missing.Reason != "missing_signature" {
+		t.Fatalf("expected missing signature rejection, got %+v", missing)
+	}
+	invalid := adapter.Verify(VerifyInput{
+		RawBody: []byte(`{"id":"evt_changed"}`),
+		Headers: map[string][]string{"webhook-signature": {signature}},
+		Secret:  []byte("secret"),
+	})
+	if invalid.Verified || invalid.Reason != "invalid_signature" {
+		t.Fatalf("expected invalid signature rejection, got %+v", invalid)
+	}
+}
+
 func TestInternalTrustedProducerAdapter(t *testing.T) {
 	adapter, ok := BuiltInRegistry().Adapter("internal")
 	if !ok {
@@ -249,6 +313,104 @@ func TestGenericJWTAdapterRejectsAlgNone(t *testing.T) {
 	}
 }
 
+func TestGenericJWTAdapterRejectsMalformedExpiredAndMismatchedTokens(t *testing.T) {
+	adapter := GenericJWTAdapter{}
+	now := time.Unix(1_700_000_000, 0)
+	body := []byte(`{"id":"evt_jwt"}`)
+	validClaims := map[string]any{
+		"iat":         now.Unix(),
+		"exp":         now.Add(time.Minute).Unix(),
+		"body_sha256": sha256Hex(body),
+	}
+
+	tests := []struct {
+		name    string
+		headers map[string][]string
+		want    string
+	}{
+		{name: "missing token", headers: nil, want: "missing_signature"},
+		{name: "wrong bearer scheme", headers: map[string][]string{"authorization": {"Basic abc"}}, want: "missing_signature"},
+		{name: "malformed segments", headers: map[string][]string{"webhook-jwt": {"a.b"}}, want: "malformed_header"},
+		{name: "malformed header json", headers: map[string][]string{"webhook-jwt": {"bm90LWpzb24." + base64.RawURLEncoding.EncodeToString(mustJSON(t, validClaims)) + ".sig"}}, want: "malformed_header"},
+		{name: "malformed claims json", headers: map[string][]string{"webhook-jwt": {base64.RawURLEncoding.EncodeToString(mustJSON(t, map[string]any{"alg": "HS256"})) + ".bm90LWpzb24.sig"}}, want: "malformed_header"},
+		{name: "malformed signature encoding", headers: map[string][]string{"webhook-jwt": {base64.RawURLEncoding.EncodeToString(mustJSON(t, map[string]any{"alg": "HS256"})) + "." + base64.RawURLEncoding.EncodeToString(mustJSON(t, validClaims)) + ".@@@"}}, want: "malformed_header"},
+		{name: "invalid signature", headers: map[string][]string{"webhook-jwt": {jwtHS256(t, []byte("wrong-secret"), validClaims)}}, want: "invalid_signature"},
+		{name: "missing exp", headers: map[string][]string{"webhook-jwt": {jwtHS256(t, []byte("secret"), map[string]any{"body_sha256": sha256Hex(body)})}}, want: "malformed_header"},
+		{name: "expired exp", headers: map[string][]string{"webhook-jwt": {jwtHS256(t, []byte("secret"), map[string]any{"exp": now.Add(-time.Second).Unix(), "body_sha256": sha256Hex(body)})}}, want: "expired_timestamp"},
+		{name: "future nbf", headers: map[string][]string{"webhook-jwt": {jwtHS256(t, []byte("secret"), map[string]any{"exp": now.Add(time.Minute).Unix(), "nbf": now.Add(time.Second).Unix(), "body_sha256": sha256Hex(body)})}}, want: "expired_timestamp"},
+		{name: "future iat", headers: map[string][]string{"webhook-jwt": {jwtHS256(t, []byte("secret"), map[string]any{"exp": now.Add(10 * time.Minute).Unix(), "iat": now.Add(6 * time.Minute).Unix(), "body_sha256": sha256Hex(body)})}}, want: "expired_timestamp"},
+		{name: "body hash mismatch", headers: map[string][]string{"webhook-jwt": {jwtHS256(t, []byte("secret"), map[string]any{"exp": now.Add(time.Minute).Unix(), "body_sha256": sha256Hex([]byte(`{"other":true}`))})}}, want: "invalid_signature"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := adapter.Verify(VerifyInput{
+				RawBody: body,
+				Headers: tt.headers,
+				Secret:  []byte("secret"),
+				Now:     now,
+			})
+			if result.Verified || result.Reason != tt.want {
+				t.Fatalf("expected %s, got %+v", tt.want, result)
+			}
+		})
+	}
+}
+
+func TestGenericJWTAdapterAcceptsWebhookJWTHeaderAndPaddedEncoding(t *testing.T) {
+	adapter := GenericJWTAdapter{}
+	now := time.Unix(1_700_000_000, 0)
+	body := []byte(`{"id":"evt_jwt"}`)
+	token := jwtHS256Padded(t, []byte("secret"), map[string]any{
+		"exp":         now.Add(time.Minute).Unix(),
+		"body_sha256": sha256Hex(body),
+	})
+
+	result := adapter.Verify(VerifyInput{
+		RawBody: body,
+		Headers: map[string][]string{"webhook-jwt": {token}},
+		Secret:  []byte("secret"),
+		Now:     now,
+	})
+	if !result.Verified || result.Reason != "ok" {
+		t.Fatalf("expected padded generic JWT to verify, got %+v", result)
+	}
+}
+
+func TestCloudEventsAdapterRejectsMalformedAndIncompleteStructuredMode(t *testing.T) {
+	adapter := CloudEventsAdapter{}
+	malformed := adapter.Verify(VerifyInput{
+		Headers: map[string][]string{"content-type": {"application/cloudevents+json"}},
+		RawBody: []byte(`{`),
+	})
+	if malformed.Verified || malformed.Reason != "malformed_header" {
+		t.Fatalf("expected malformed CloudEvents JSON rejection, got %+v", malformed)
+	}
+	missing := adapter.Verify(VerifyInput{
+		Headers: map[string][]string{"content-type": {"application/cloudevents+json; charset=utf-8"}},
+		RawBody: []byte(`{"specversion":"1.0","id":"evt_1"}`),
+	})
+	if missing.Verified || missing.Reason != "missing_cloudevents_headers" {
+		t.Fatalf("expected incomplete structured CloudEvents rejection, got %+v", missing)
+	}
+}
+
+func TestProviderInternalHelpers(t *testing.T) {
+	if bearerToken("bearer token") != "token" || bearerToken("Basic token") != "" || bearerToken("Bearer ") != "" {
+		t.Fatal("unexpected bearer token parsing")
+	}
+	var decoded map[string]any
+	if !decodeJWTPart(base64.URLEncoding.EncodeToString(mustJSON(t, map[string]any{"ok": true})), &decoded) || decoded["ok"] != true {
+		t.Fatal("expected padded base64url JWT part to decode")
+	}
+	if decodeJWTPart("@@@", &decoded) {
+		t.Fatal("malformed JWT part should not decode")
+	}
+	if jwtNumericClaim(map[string]any{"n": json.Number("42")}, "n") != 42 || jwtNumericClaim(map[string]any{"n": "42"}, "n") != 0 {
+		t.Fatal("unexpected JWT numeric claim behavior")
+	}
+}
+
 func jwtHS256(t *testing.T, secret []byte, claims map[string]any) string {
 	t.Helper()
 	header := base64.RawURLEncoding.EncodeToString(mustJSON(t, map[string]any{"alg": "HS256", "typ": "JWT"}))
@@ -257,6 +419,32 @@ func jwtHS256(t *testing.T, secret []byte, claims map[string]any) string {
 	mac := hmac.New(sha256.New, secret)
 	_, _ = mac.Write([]byte(signingInput))
 	return signingInput + "." + base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
+}
+
+func jwtHS256Padded(t *testing.T, secret []byte, claims map[string]any) string {
+	t.Helper()
+	header := base64.URLEncoding.EncodeToString(mustJSON(t, map[string]any{"alg": "HS256", "typ": "JWT"}))
+	payload := base64.URLEncoding.EncodeToString(mustJSON(t, claims))
+	signingInput := header + "." + payload
+	mac := hmac.New(sha256.New, secret)
+	_, _ = mac.Write([]byte(signingInput))
+	return signingInput + "." + base64.URLEncoding.EncodeToString(mac.Sum(nil))
+}
+
+func hmacSHA256Hex(secret, body []byte) string {
+	mac := hmac.New(sha256.New, secret)
+	_, _ = mac.Write(body)
+	return base64ToHex(mac.Sum(nil))
+}
+
+func base64ToHex(raw []byte) string {
+	const hex = "0123456789abcdef"
+	out := make([]byte, len(raw)*2)
+	for i, b := range raw {
+		out[i*2] = hex[b>>4]
+		out[i*2+1] = hex[b&0x0f]
+	}
+	return string(out)
 }
 
 func mustJSON(t *testing.T, value any) []byte {
