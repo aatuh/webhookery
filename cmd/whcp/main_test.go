@@ -29,6 +29,7 @@ import (
 	"webhookery/internal/authz"
 	"webhookery/internal/config"
 	"webhookery/internal/evidence"
+	"webhookery/internal/ssrf"
 )
 
 func TestWritePrivateFileUsesPrivatePermissions(t *testing.T) {
@@ -99,6 +100,41 @@ func TestRunDispatchesSubcommandUsage(t *testing.T) {
 				t.Fatalf("expected %s usage, got %v", command, err)
 			}
 		})
+	}
+}
+
+func TestRuntimeDeliveryAdaptersBlockUnsafeURLsWithoutLeakingSecrets(t *testing.T) {
+	deliveryResult, err := (deliveryAdapter{}).Deliver(context.Background(), "http://169.254.169.254/latest?token=secret-token", []byte(`{"ok":true}`), []byte("delivery-secret"), "key_1", 1, nil, nil)
+	if err == nil || deliveryResult.FailureClass != "policy_blocked" {
+		t.Fatalf("expected blocked delivery adapter result, got result=%+v err=%v", deliveryResult, err)
+	}
+	if strings.Contains(err.Error(), "secret-token") || strings.Contains(err.Error(), "delivery-secret") {
+		t.Fatalf("delivery adapter error leaked secret material: %v", err)
+	}
+
+	signalResult, err := (signalAdapter{}).Deliver(context.Background(), "http://169.254.169.254/latest?token=secret-token", []byte(`{"ok":true}`), []byte("signal-secret"))
+	if err == nil || signalResult.FailureClass != "policy_blocked" {
+		t.Fatalf("expected blocked signal adapter result, got result=%+v err=%v", signalResult, err)
+	}
+	if strings.Contains(err.Error(), "secret-token") || strings.Contains(err.Error(), "signal-secret") {
+		t.Fatalf("signal adapter error leaked secret material: %v", err)
+	}
+}
+
+func TestRuntimeCommandsValidateUsageBeforeOpeningStore(t *testing.T) {
+	for _, args := range [][]string{
+		nil,
+		{"up", "extra"},
+	} {
+		if err := runMigrate(args); err == nil || !strings.Contains(err.Error(), "usage: whcp migrate") {
+			t.Fatalf("expected migrate usage for args %+v, got %v", args, err)
+		}
+	}
+	if err := runMigrate([]string{"--not-a-real-flag"}); err == nil {
+		t.Fatal("expected migrate flag parse error")
+	}
+	if err := runWorker([]string{"--not-a-real-flag"}); err == nil {
+		t.Fatal("expected worker flag parse error")
 	}
 }
 
@@ -2346,6 +2382,23 @@ func TestSecretBoxFromConfigAcceptsLocalEnvelope(t *testing.T) {
 	}
 }
 
+func TestSecretBoxFromConfigAcceptsAWSKMSWithoutPrintingKeyMaterial(t *testing.T) {
+	t.Setenv("AWS_EC2_METADATA_DISABLED", "true")
+	box, err := secretBoxFromConfig(context.Background(), config.Config{
+		SecretBoxMode:   "aws-kms",
+		AWSRegion:       "us-east-1",
+		AWSKMSKeyID:     "arn:aws:kms:us-east-1:123456789012:key/secret-key-id",
+		AWSKMSEndpoint:  "http://localhost:4566",
+		MasterKeyBase64: "ignored",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if box == nil {
+		t.Fatal("expected aws kms envelope secret box")
+	}
+}
+
 func TestSecretBoxFromConfigRejectsInvalidLocalEnvelopeKey(t *testing.T) {
 	_, err := secretBoxFromConfig(context.Background(), config.Config{SecretBoxMode: "local", MasterKeyBase64: "not-base64"})
 	if err == nil {
@@ -2492,6 +2545,270 @@ func TestProductionDoctorAcceptsHardenedVaultS3Config(t *testing.T) {
 	}
 }
 
+func TestDoctorSecretBoxFindingsCoverCustodyModes(t *testing.T) {
+	validLocalKey := base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{9}, 32))
+	tests := []struct {
+		name       string
+		env        map[string]string
+		production bool
+		want       doctorFinding
+	}{
+		{
+			name: "local missing key",
+			env:  map[string]string{"WEBHOOKERY_SECRET_BOX_MODE": "local"},
+			want: doctorFinding{Severity: "blocker", Check: "secret-box", Message: "requires WEBHOOKERY_MASTER_KEY_BASE64"},
+		},
+		{
+			name: "local production warning",
+			env: map[string]string{
+				"WEBHOOKERY_SECRET_BOX_MODE":   "local",
+				"WEBHOOKERY_MASTER_KEY_BASE64": validLocalKey,
+			},
+			production: true,
+			want:       doctorFinding{Severity: "warning", Check: "secret-box", Message: "prefer Vault Transit"},
+		},
+		{
+			name: "vault missing config",
+			env:  map[string]string{"WEBHOOKERY_SECRET_BOX_MODE": "vault-transit", "WEBHOOKERY_VAULT_ADDR": "https://vault.internal"},
+			want: doctorFinding{Severity: "blocker", Check: "secret-box", Message: "Vault Transit mode requires"},
+		},
+		{
+			name: "aws missing config",
+			env:  map[string]string{"WEBHOOKERY_SECRET_BOX_MODE": "aws-kms", "WEBHOOKERY_AWS_REGION": "us-east-1"},
+			want: doctorFinding{Severity: "blocker", Check: "secret-box", Message: "AWS KMS mode requires"},
+		},
+		{
+			name: "aws local endpoint warning plus ok",
+			env: map[string]string{
+				"WEBHOOKERY_SECRET_BOX_MODE":    "aws-kms",
+				"WEBHOOKERY_AWS_REGION":         "us-east-1",
+				"WEBHOOKERY_AWS_KMS_KEY_ID":     "arn:aws:kms:us-east-1:123456789012:key/secret-key-id",
+				"WEBHOOKERY_AWS_KMS_ENDPOINT":   "http://localhost:4566",
+				"WEBHOOKERY_MASTER_KEY_BASE64":  "ignored",
+				"WEBHOOKERY_DATABASE_URL":       "postgres://ignored",
+				"WEBHOOKERY_OBJECT_STORAGE_KEY": "ignored",
+			},
+			want: doctorFinding{Severity: "ok", Check: "secret-box", Message: "AWS KMS secret box"},
+		},
+		{
+			name: "unsupported mode",
+			env:  map[string]string{"WEBHOOKERY_SECRET_BOX_MODE": "plaintext"},
+			want: doctorFinding{Severity: "blocker", Check: "secret-box", Message: "must be local, vault-transit, or aws-kms"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var findings []doctorFinding
+			addSecretBoxFindings(func(severity, check, message string) {
+				findings = append(findings, doctorFinding{Severity: severity, Check: check, Message: message})
+			}, func(name string) string {
+				return tt.env[name]
+			}, tt.production)
+			finding := requireDoctorFinding(t, findings, tt.want.Check)
+			if finding.Severity != tt.want.Severity || !strings.Contains(finding.Message, tt.want.Message) {
+				t.Fatalf("unexpected secret box finding: %+v want %+v all=%+v", finding, tt.want, findings)
+			}
+			var out bytes.Buffer
+			writeDoctorFindings(&out, findings)
+			for _, forbidden := range []string{"secret-key-id", "123456789012", validLocalKey} {
+				if strings.Contains(out.String(), forbidden) {
+					t.Fatalf("secret box finding leaked sensitive value %q in %s", forbidden, out.String())
+				}
+			}
+		})
+	}
+}
+
+func TestDoctorRawStorageFindingsCoverObjectStorageModes(t *testing.T) {
+	tests := []struct {
+		name       string
+		env        map[string]string
+		production bool
+		want       doctorFinding
+	}{
+		{
+			name: "postgres default",
+			env:  map[string]string{},
+			want: doctorFinding{Severity: "ok", Check: "raw-storage", Message: "PostgreSQL raw payload storage"},
+		},
+		{
+			name: "s3 missing config",
+			env:  map[string]string{"WEBHOOKERY_RAW_STORAGE_MODE": "s3", "WEBHOOKERY_OBJECT_STORAGE_ENDPOINT": "s3.internal"},
+			want: doctorFinding{Severity: "blocker", Check: "raw-storage", Message: "S3 raw storage requires"},
+		},
+		{
+			name: "s3 placeholder credentials",
+			env: map[string]string{
+				"WEBHOOKERY_RAW_STORAGE_MODE":          "s3",
+				"WEBHOOKERY_OBJECT_STORAGE_ENDPOINT":   "s3.internal",
+				"WEBHOOKERY_OBJECT_STORAGE_BUCKET":     "webhookery",
+				"WEBHOOKERY_OBJECT_STORAGE_ACCESS_KEY": "change-me",
+				"WEBHOOKERY_OBJECT_STORAGE_SECRET_KEY": "secret",
+			},
+			want: doctorFinding{Severity: "blocker", Check: "raw-storage", Message: "placeholder"},
+		},
+		{
+			name: "s3 production tls disabled",
+			env: map[string]string{
+				"WEBHOOKERY_RAW_STORAGE_MODE":          "s3",
+				"WEBHOOKERY_OBJECT_STORAGE_ENDPOINT":   "s3.internal",
+				"WEBHOOKERY_OBJECT_STORAGE_BUCKET":     "webhookery",
+				"WEBHOOKERY_OBJECT_STORAGE_ACCESS_KEY": "access",
+				"WEBHOOKERY_OBJECT_STORAGE_SECRET_KEY": "secret",
+				"WEBHOOKERY_OBJECT_STORAGE_USE_SSL":    "false",
+			},
+			production: true,
+			want:       doctorFinding{Severity: "blocker", Check: "raw-storage", Message: "must use TLS"},
+		},
+		{
+			name: "s3 pilot tls disabled warning",
+			env: map[string]string{
+				"WEBHOOKERY_RAW_STORAGE_MODE":          "s3",
+				"WEBHOOKERY_OBJECT_STORAGE_ENDPOINT":   "s3.internal",
+				"WEBHOOKERY_OBJECT_STORAGE_BUCKET":     "webhookery",
+				"WEBHOOKERY_OBJECT_STORAGE_ACCESS_KEY": "access",
+				"WEBHOOKERY_OBJECT_STORAGE_SECRET_KEY": "secret",
+				"WEBHOOKERY_OBJECT_STORAGE_USE_SSL":    "false",
+			},
+			want: doctorFinding{Severity: "warning", Check: "raw-storage", Message: "TLS disabled"},
+		},
+		{
+			name: "unsupported mode",
+			env:  map[string]string{"WEBHOOKERY_RAW_STORAGE_MODE": "filesystem"},
+			want: doctorFinding{Severity: "blocker", Check: "raw-storage", Message: "must be postgres or s3"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var findings []doctorFinding
+			addRawStorageFindings(func(severity, check, message string) {
+				findings = append(findings, doctorFinding{Severity: severity, Check: check, Message: message})
+			}, func(name string) string {
+				return tt.env[name]
+			}, tt.production)
+			finding := requireDoctorFinding(t, findings, tt.want.Check)
+			if finding.Severity != tt.want.Severity || !strings.Contains(finding.Message, tt.want.Message) {
+				t.Fatalf("unexpected raw storage finding: %+v want %+v all=%+v", finding, tt.want, findings)
+			}
+			var out bytes.Buffer
+			writeDoctorFindings(&out, findings)
+			for _, forbidden := range []string{
+				tt.env["WEBHOOKERY_OBJECT_STORAGE_ACCESS_KEY"],
+				tt.env["WEBHOOKERY_OBJECT_STORAGE_SECRET_KEY"],
+			} {
+				if forbidden != "" && strings.Contains(out.String(), forbidden) {
+					t.Fatalf("raw storage finding leaked object storage credential value %q in %s", forbidden, out.String())
+				}
+			}
+		})
+	}
+}
+
+func TestProviderProofFindingCoversManifestStates(t *testing.T) {
+	dir := t.TempDir()
+	missing := filepath.Join(dir, "missing.json")
+	invalid := filepath.Join(dir, "invalid.json")
+	empty := filepath.Join(dir, "empty.json")
+	valid := filepath.Join(dir, "valid.json")
+	if err := os.WriteFile(invalid, []byte(`{"schema_version":"wrong"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(empty, []byte(`{"schema_version":"provider-proof-v1","no_live_provider_calls":true,"proofs":[]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(valid, []byte(`{"schema_version":"provider-proof-v1","no_live_provider_calls":true,"proofs":[{"provider":"stripe"}]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	tests := []struct {
+		name     string
+		path     string
+		severity string
+		message  string
+	}{
+		{name: "missing", path: missing, severity: "warning", message: "not found"},
+		{name: "invalid", path: invalid, severity: "warning", message: "not valid"},
+		{name: "empty", path: empty, severity: "warning", message: "no provider proof entries"},
+		{name: "valid", path: valid, severity: "ok", message: "metadata is present"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var findings []doctorFinding
+			addProviderProofFinding(func(severity, check, message string) {
+				findings = append(findings, doctorFinding{Severity: severity, Check: check, Message: message})
+			}, func(name string) string {
+				if name == "WEBHOOKERY_PROVIDER_PROOF_MANIFEST_PATH" {
+					return tt.path
+				}
+				return ""
+			})
+			finding := requireDoctorFinding(t, findings, "provider-proof")
+			if finding.Severity != tt.severity || !strings.Contains(finding.Message, tt.message) {
+				t.Fatalf("unexpected finding for %s: %+v", tt.name, finding)
+			}
+		})
+	}
+}
+
+func TestPilotDatabaseFindingsCoverReadinessBranches(t *testing.T) {
+	tests := []struct {
+		name   string
+		status pilotDatabaseStatus
+		want   []string
+	}{
+		{
+			name: "empty repository metadata and work warnings",
+			status: pilotDatabaseStatus{
+				ExpectedMigrations: 0,
+				PendingOutbox:      2,
+				InProgressOutbox:   1,
+			},
+			want: []string{
+				"ok:database-connectivity",
+				"warning:migrations",
+				"warning:queue",
+				"warning:retention",
+				"warning:audit-chain",
+			},
+		},
+		{
+			name: "database behind repository",
+			status: pilotDatabaseStatus{
+				AppliedMigrations:  2,
+				ExpectedMigrations: 3,
+				RetentionPolicies:  1,
+				AuditChainEntries:  1,
+			},
+			want: []string{"blocker:migrations", "ok:queue", "ok:retention", "ok:audit-chain"},
+		},
+		{
+			name: "database ahead of repository",
+			status: pilotDatabaseStatus{
+				AppliedMigrations:  4,
+				ExpectedMigrations: 3,
+				RetentionPolicies:  1,
+				AuditChainEntries:  1,
+			},
+			want: []string{"blocker:migrations", "ok:queue", "ok:retention", "ok:audit-chain"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var findings []doctorFinding
+			addPilotDatabaseFindings(func(severity, check, message string) {
+				findings = append(findings, doctorFinding{Severity: severity, Check: check, Message: message})
+			}, tt.status)
+			for _, want := range tt.want {
+				parts := strings.SplitN(want, ":", 2)
+				finding := requireDoctorFinding(t, findings, parts[1])
+				if finding.Severity != parts[0] {
+					t.Fatalf("finding %s severity=%s want %s in %+v", parts[1], finding.Severity, parts[0], findings)
+				}
+			}
+		})
+	}
+}
+
 func TestRunDoctorProductionReturnsNonZeroOnBlockers(t *testing.T) {
 	t.Setenv("WEBHOOKERY_ENVIRONMENT", "production")
 	t.Setenv("WEBHOOKERY_DATABASE_URL", "postgres://webhookery:secret@db/webhookery?sslmode=require")
@@ -2516,6 +2833,56 @@ func TestRunDoctorProductionReturnsNonZeroOnBlockers(t *testing.T) {
 	}
 	if bytes.Contains(body, []byte("webhookery:secret")) || bytes.Contains(body, []byte("secret@db")) {
 		t.Fatalf("doctor output leaked database password: %s", body)
+	}
+}
+
+func TestRunDoctorUsageAndProductionSuccess(t *testing.T) {
+	for _, args := range [][]string{
+		nil,
+		{"production", "extra"},
+		{"unknown"},
+	} {
+		if err := runDoctor(args); err == nil || !strings.Contains(err.Error(), "usage: whcp doctor") {
+			t.Fatalf("expected doctor usage for args %+v, got %v", args, err)
+		}
+	}
+	if err := runPilotDoctor([]string{"extra"}); err == nil || !strings.Contains(err.Error(), "usage: whcp doctor pilot") {
+		t.Fatalf("expected pilot usage, got %v", err)
+	}
+
+	t.Setenv("WEBHOOKERY_ENVIRONMENT", "production")
+	t.Setenv("WEBHOOKERY_DATABASE_URL", "postgres://webhookery@db.internal/webhookery?sslmode=require")
+	t.Setenv("WEBHOOKERY_TLS_CERT_FILE", "/etc/webhookery/tls.crt")
+	t.Setenv("WEBHOOKERY_TLS_KEY_FILE", "/etc/webhookery/tls.key")
+	t.Setenv("WEBHOOKERY_SECRET_BOX_MODE", "local")
+	t.Setenv("WEBHOOKERY_MASTER_KEY_BASE64", base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{8}, 32)))
+	t.Setenv("WEBHOOKERY_RAW_STORAGE_MODE", "postgres")
+
+	oldStdout := os.Stdout
+	reader, writer, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Stdout = writer
+	defer func() { os.Stdout = oldStdout }()
+
+	err = runDoctor([]string{"production"})
+	_ = writer.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := io.ReadAll(reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	output := string(body)
+	for _, want := range []string{"ok: environment", "ok: database", "ok: tls", "ok: raw-storage"} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("expected %q in production doctor output:\n%s", want, output)
+		}
+	}
+	if strings.Contains(output, os.Getenv("WEBHOOKERY_DATABASE_URL")) || strings.Contains(output, os.Getenv("WEBHOOKERY_MASTER_KEY_BASE64")) {
+		t.Fatalf("production doctor success leaked configured secret material: %s", output)
 	}
 }
 
@@ -2607,6 +2974,102 @@ func TestPilotDoctorReportsDatabaseReadiness(t *testing.T) {
 	}
 }
 
+func TestReceiverConnectivityFindingCoversNetworkOutcomesAndRedactsErrors(t *testing.T) {
+	baseEnv := map[string]string{
+		"WEBHOOKERY_PILOT_RECEIVER_CHECK_URL":   "https://receiver.example.test/webhook?token=secret-token",
+		"WEBHOOKERY_PILOT_ALLOW_RECEIVER_CHECK": "true",
+	}
+	tests := []struct {
+		name     string
+		env      map[string]string
+		network  bool
+		checkErr error
+		want     doctorFinding
+	}{
+		{
+			name:    "missing url",
+			env:     map[string]string{},
+			network: true,
+			want:    doctorFinding{Severity: "warning", Check: "receiver-connectivity", Message: "not configured"},
+		},
+		{
+			name:    "allow flag missing",
+			env:     map[string]string{"WEBHOOKERY_PILOT_RECEIVER_CHECK_URL": baseEnv["WEBHOOKERY_PILOT_RECEIVER_CHECK_URL"]},
+			network: true,
+			want:    doctorFinding{Severity: "warning", Check: "receiver-connectivity", Message: "WEBHOOKERY_PILOT_ALLOW_RECEIVER_CHECK=true is required"},
+		},
+		{
+			name:    "network skipped",
+			env:     baseEnv,
+			network: false,
+			want:    doctorFinding{Severity: "warning", Check: "receiver-connectivity", Message: "skipped"},
+		},
+		{
+			name:     "ssrf policy failure",
+			env:      baseEnv,
+			network:  true,
+			checkErr: ssrf.PolicyError{Reasons: []string{"loopback address blocked"}},
+			want:     doctorFinding{Severity: "blocker", Check: "receiver-connectivity", Message: "SSRF policy"},
+		},
+		{
+			name:     "generic receiver failure",
+			env:      baseEnv,
+			network:  true,
+			checkErr: errors.New("dial failed with secret-token"),
+			want:     doctorFinding{Severity: "warning", Check: "receiver-connectivity", Message: "connectivity check failed"},
+		},
+		{
+			name:    "success",
+			env:     baseEnv,
+			network: true,
+			want:    doctorFinding{Severity: "ok", Check: "receiver-connectivity", Message: "succeeded"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var findings []doctorFinding
+			called := false
+			addReceiverConnectivityFinding(func(severity, check, message string) {
+				findings = append(findings, doctorFinding{Severity: severity, Check: check, Message: message})
+			}, func(name string) string {
+				return tt.env[name]
+			}, pilotDoctorOptions{
+				Network: tt.network,
+				Timeout: time.Millisecond,
+				ReceiverCheck: func(_ context.Context, rawURL string, _ time.Duration) error {
+					called = true
+					if rawURL != baseEnv["WEBHOOKERY_PILOT_RECEIVER_CHECK_URL"] {
+						t.Fatalf("unexpected receiver url %q", rawURL)
+					}
+					return tt.checkErr
+				},
+			})
+			finding := requireDoctorFinding(t, findings, tt.want.Check)
+			if finding.Severity != tt.want.Severity || !strings.Contains(finding.Message, tt.want.Message) {
+				t.Fatalf("unexpected receiver finding: %+v want %+v", finding, tt.want)
+			}
+			if strings.Contains(finding.Message, "secret-token") {
+				t.Fatalf("receiver finding leaked URL secret: %+v", finding)
+			}
+			if tt.network && tt.env["WEBHOOKERY_PILOT_ALLOW_RECEIVER_CHECK"] == "true" && tt.env["WEBHOOKERY_PILOT_RECEIVER_CHECK_URL"] != "" {
+				if !called {
+					t.Fatal("expected receiver check call")
+				}
+			} else if called {
+				t.Fatal("receiver check should not have been called")
+			}
+		})
+	}
+}
+
+func TestCheckPilotReceiverRejectsUnsafeURLBeforeNetwork(t *testing.T) {
+	err := checkPilotReceiver(context.Background(), "http://127.0.0.1:1/health", time.Millisecond)
+	var policyErr ssrf.PolicyError
+	if !errors.As(err, &policyErr) {
+		t.Fatalf("expected SSRF policy error, got %v", err)
+	}
+}
+
 func TestRunPilotDoctorNoNetworkUsesEnvironmentAndRedactsStdout(t *testing.T) {
 	t.Setenv("WEBHOOKERY_ENVIRONMENT", "production")
 	t.Setenv("WEBHOOKERY_DATABASE_URL", "postgres://webhookery:secret-db-password@db.internal/webhookery?sslmode=require")
@@ -2645,4 +3108,15 @@ func TestRunPilotDoctorNoNetworkUsesEnvironmentAndRedactsStdout(t *testing.T) {
 			t.Fatalf("pilot doctor stdout leaked sensitive value %q in %s", forbidden, output)
 		}
 	}
+}
+
+func requireDoctorFinding(t *testing.T, findings []doctorFinding, check string) doctorFinding {
+	t.Helper()
+	for _, finding := range findings {
+		if finding.Check == check {
+			return finding
+		}
+	}
+	t.Fatalf("missing doctor finding %q in %+v", check, findings)
+	return doctorFinding{}
 }
