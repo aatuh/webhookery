@@ -792,6 +792,179 @@ func TestPostgresReplayApprovalAndFanoutControls(t *testing.T) {
 	assertPostgresAuditEvent(t, ctx, store, actor.TenantID, "replay.canceled", "replay_job", directReplay.ID)
 }
 
+func TestPostgresSecretRotationAndOpsVisibility(t *testing.T) {
+	ctx, store, actor := openPostgresIntegrationStore(t)
+	defer store.Close()
+
+	if err := store.Health(ctx); err != nil {
+		t.Fatal(err)
+	}
+	control := app.NewControlService(store, ssrf.Validator{Resolver: ssrf.StaticResolver{"receiver.example.com": {netip.MustParseAddr("93.184.216.34")}}})
+	source, err := control.CreateSource(ctx, actor, app.CreateSourceRequest{Name: "rotation source", Provider: "stripe", Adapter: "stripe", VerificationSecret: "whsec_rotation_old"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	endpoint, _, err := control.CreateEndpoint(ctx, actor, app.CreateEndpointRequest{Name: "rotation endpoint", URL: "https://receiver.example.com/webhook"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	sourceSecret, err := control.RotateSourceSecret(ctx, actor, source.ID, app.RotateSourceSecretRequest{
+		NewSecret:        "whsec_rotation_new",
+		GracePeriodHours: 1,
+		Reason:           "integration source secret rotation",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sourceSecret.TenantID != actor.TenantID || sourceSecret.SourceID != source.ID || sourceSecret.Version != 2 || sourceSecret.State != domain.StateActive || sourceSecret.CreatedBy != actor.ID {
+		t.Fatalf("source secret rotation did not preserve version evidence: %+v", sourceSecret)
+	}
+	var encryptedSourceSecret []byte
+	if err := store.pool.QueryRow(ctx, `SELECT encrypted_secret FROM sources WHERE tenant_id=$1 AND id=$2`, actor.TenantID, source.ID).Scan(&encryptedSourceSecret); err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(encryptedSourceSecret, []byte("whsec_rotation_new")) {
+		t.Fatal("rotated source secret was stored in plaintext")
+	}
+	var activeSourceVersions, previousSourceVersions int
+	var previousSourceExpiresAt time.Time
+	if err := store.pool.QueryRow(ctx, `
+		SELECT count(*) FILTER (WHERE state='active'), count(*) FILTER (WHERE state='previous'), max(expires_at) FILTER (WHERE state='previous')
+		FROM source_secret_versions
+		WHERE tenant_id=$1 AND source_id=$2`,
+		actor.TenantID, source.ID,
+	).Scan(&activeSourceVersions, &previousSourceVersions, &previousSourceExpiresAt); err != nil {
+		t.Fatal(err)
+	}
+	if activeSourceVersions != 1 || previousSourceVersions != 1 || !previousSourceExpiresAt.After(time.Now().UTC()) {
+		t.Fatalf("source secret grace window mismatch: active=%d previous=%d expires_at=%s", activeSourceVersions, previousSourceVersions, previousSourceExpiresAt)
+	}
+
+	oldBody := []byte(`{"id":"evt_it_rotation_old","type":"invoice.rotation","account":"acct_it"}`)
+	oldResult, err := app.NewIngestService(store, fixedIntegrationClock{now: time.Now().UTC()}).Ingest(ctx, app.IngestRequest{
+		TenantID:    actor.TenantID,
+		SourceID:    source.ID,
+		Provider:    "stripe",
+		RawBody:     oldBody,
+		Headers:     []domain.HeaderPair{{Name: "Stripe-Signature", Value: verifier.TimestampedHeader("v1", time.Now().UTC(), []byte("whsec_rotation_old"), oldBody)}},
+		ContentType: "application/json",
+		RemoteIP:    "198.51.100.40",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !oldResult.Accepted || oldResult.VerifyReason != "ok" {
+		t.Fatalf("previous source secret should remain valid during grace window, got %+v", oldResult)
+	}
+	newNow := time.Now().UTC()
+	newBody := []byte(`{"id":"evt_it_rotation_new","type":"invoice.rotation","account":"acct_it"}`)
+	newResult, err := app.NewIngestService(store, fixedIntegrationClock{now: newNow}).Ingest(ctx, app.IngestRequest{
+		TenantID:    actor.TenantID,
+		SourceID:    source.ID,
+		Provider:    "stripe",
+		RawBody:     newBody,
+		Headers:     []domain.HeaderPair{{Name: "Stripe-Signature", Value: verifier.TimestampedHeader("v1", newNow, []byte("whsec_rotation_new"), newBody)}},
+		ContentType: "application/json",
+		RemoteIP:    "198.51.100.41",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !newResult.Accepted || newResult.VerifyReason != "ok" {
+		t.Fatalf("active source secret should verify after rotation, got %+v", newResult)
+	}
+
+	endpointSecret, err := control.RotateEndpointSecret(ctx, actor, endpoint.ID, app.RotateEndpointSecretRequest{
+		GracePeriodHours: 1,
+		Reason:           "integration endpoint signing secret rotation",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if endpointSecret.TenantID != actor.TenantID || endpointSecret.EndpointID != endpoint.ID || endpointSecret.Version != 2 || endpointSecret.State != domain.StateActive || endpointSecret.Algorithm != "hmac_sha256" {
+		t.Fatalf("endpoint secret rotation did not preserve version evidence: %+v", endpointSecret)
+	}
+	var activeEndpointVersions, previousEndpointVersions int
+	if err := store.pool.QueryRow(ctx, `
+		SELECT count(*) FILTER (WHERE state='active'), count(*) FILTER (WHERE state='previous')
+		FROM endpoint_secrets
+		WHERE tenant_id=$1 AND endpoint_id=$2`,
+		actor.TenantID, endpoint.ID,
+	).Scan(&activeEndpointVersions, &previousEndpointVersions); err != nil {
+		t.Fatal(err)
+	}
+	var activeEndpointCiphertext []byte
+	if err := store.pool.QueryRow(ctx, `SELECT encrypted_secret FROM endpoint_secrets WHERE tenant_id=$1 AND endpoint_id=$2 AND state='active'`, actor.TenantID, endpoint.ID).Scan(&activeEndpointCiphertext); err != nil {
+		t.Fatal(err)
+	}
+	if activeEndpointVersions != 1 || previousEndpointVersions != 1 || !bytes.HasPrefix(activeEndpointCiphertext, []byte("v1:")) {
+		t.Fatalf("endpoint secret rotation mismatch: active=%d previous=%d ciphertext_prefix=%q", activeEndpointVersions, previousEndpointVersions, string(activeEndpointCiphertext[:min(len(activeEndpointCiphertext), 3)]))
+	}
+	assertPostgresConfigVersion(t, ctx, store, actor.TenantID, domain.ConfigResourceSource, source.ID)
+	assertPostgresConfigVersion(t, ctx, store, actor.TenantID, domain.ConfigResourceEndpoint, endpoint.ID)
+
+	keys, err := control.ListAPIKeys(ctx, actor, 20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(keys) == 0 {
+		t.Fatal("expected tenant API keys")
+	}
+	for _, key := range keys {
+		if key.TenantID != actor.TenantID || key.Hash != "" {
+			t.Fatalf("listed API key must be tenant-scoped and hash-redacted: %+v", key)
+		}
+	}
+
+	outboxItems, err := store.ClaimOutbox(ctx, "it-secret-ops-worker", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, item := range outboxItems {
+		if err := store.CompleteOutbox(ctx, item.ID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	workerStatus, err := control.GetWorker(ctx, actor, "it-secret-ops-worker")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if workerStatus.WorkerID != "it-secret-ops-worker" || workerStatus.State != "active" {
+		t.Fatalf("worker lease was not visible through ops API: %+v", workerStatus)
+	}
+	workers, err := control.ListWorkers(ctx, actor, 20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !containsPostgresWorker(workers, "it-secret-ops-worker", "active") {
+		t.Fatalf("expected worker in ops worker list, got %+v", workers)
+	}
+	queues, err := control.ListQueues(ctx, actor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !containsPostgresQueue(queues, "deliveries") {
+		t.Fatalf("expected deliveries queue stats, got %+v", queues)
+	}
+	storage, err := control.OpsStorage(ctx, actor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if storage.TenantID != actor.TenantID || storage.RawStorageMode != domain.RawStoragePostgres || storage.RawPayloadsByStatus[domain.StorageStatusStored] < 2 || storage.RawPayloadsByBackend[domain.RawStoragePostgres] < 2 {
+		t.Fatalf("ops storage did not expose tenant raw evidence counts: %+v", storage)
+	}
+	metrics, err := control.OpsMetrics(ctx, actor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if metrics.EventsTotal < 2 {
+		t.Fatalf("ops metrics did not expose captured events: %+v", metrics)
+	}
+	assertPostgresAuditEvent(t, ctx, store, actor.TenantID, "source_secret.rotated", "source", source.ID)
+	assertPostgresAuditEvent(t, ctx, store, actor.TenantID, "endpoint_secret.rotated", "endpoint", endpoint.ID)
+}
+
 func TestPostgresConcurrentDuplicateCapturePreservesEvidence(t *testing.T) {
 	ctx, store, actor := openPostgresIntegrationStore(t)
 	defer store.Close()
@@ -3181,6 +3354,24 @@ func containsPostgresProviderConnection(connections []domain.ProviderConnection,
 func containsPostgresReconciliationJob(jobs []domain.ReconciliationJob, id, state string) bool {
 	for _, job := range jobs {
 		if job.ID == id && job.State == state {
+			return true
+		}
+	}
+	return false
+}
+
+func containsPostgresWorker(workers []domain.WorkerStatus, id, state string) bool {
+	for _, worker := range workers {
+		if worker.WorkerID == id && worker.State == state {
+			return true
+		}
+	}
+	return false
+}
+
+func containsPostgresQueue(queues []domain.QueueStats, name string) bool {
+	for _, queue := range queues {
+		if queue.Name == name {
 			return true
 		}
 	}
