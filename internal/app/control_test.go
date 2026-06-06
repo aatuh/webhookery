@@ -298,10 +298,25 @@ func TestControlServiceOwnerHappyPathSurface(t *testing.T) {
 			if _, err := svc.PublicOpsMetrics(ctx); err != nil {
 				return err
 			}
+			if _, err := svc.ListQueues(ctx, actor); err != nil {
+				return err
+			}
+			if _, err := svc.OpsStorage(ctx, actor); err != nil {
+				return err
+			}
+			if _, err := svc.OpsConfig(ctx, actor); err != nil {
+				return err
+			}
+			if _, err := svc.ListMetricRollups(ctx, actor, "deliveries.scheduled", 10); err != nil {
+				return err
+			}
 			if _, err := svc.ListWorkers(ctx, actor, 10); err != nil {
 				return err
 			}
 			if _, err := svc.GetWorker(ctx, actor, "wrk_1"); err != nil {
+				return err
+			}
+			if _, err := svc.CreateAlertRule(ctx, actor, CreateAlertRuleRequest{Name: "delivery backlog", RuleType: domain.AlertRuleDeadLetterOpen, Threshold: 10}); err != nil {
 				return err
 			}
 			if _, err := svc.ListAlertRules(ctx, actor, 10); err != nil {
@@ -313,10 +328,16 @@ func TestControlServiceOwnerHappyPathSurface(t *testing.T) {
 			if _, err := svc.UpdateAlertRule(ctx, actor, "alr_1", UpdateAlertRuleRequest{Name: ptrString("latency"), State: &active, Reason: "tune"}); err != nil {
 				return err
 			}
+			if _, err := svc.DeleteAlertRule(ctx, actor, "alr_1", StateChangeRequest{Reason: "retire"}); err != nil {
+				return err
+			}
 			if _, err := svc.ListAlertFirings(ctx, actor, domain.AlertFiringOpen, 10); err != nil {
 				return err
 			}
 			if _, err := svc.GetAlertFiring(ctx, actor, "afr_1"); err != nil {
+				return err
+			}
+			if _, err := svc.AcknowledgeAlertFiring(ctx, actor, "afr_1", StateChangeRequest{Reason: "investigating"}); err != nil {
 				return err
 			}
 			if _, _, err := svc.CreateNotificationChannel(ctx, actor, CreateNotificationChannelRequest{Name: "pager", ChannelType: domain.NotificationChannelWebhook, URL: "https://signals.example/hook", SigningSecret: "0123456789abcdef"}); err != nil {
@@ -331,6 +352,18 @@ func TestControlServiceOwnerHappyPathSurface(t *testing.T) {
 			if _, _, err := svc.UpdateNotificationChannel(ctx, actor, "nch_1", UpdateNotificationChannelRequest{State: &disabled, Reason: "pause"}); err != nil {
 				return err
 			}
+			if _, err := svc.TestNotificationChannel(ctx, actor, "nch_1", StateChangeRequest{Reason: "verify route"}); err != nil {
+				return err
+			}
+			if _, err := svc.ListNotificationDeliveries(ctx, actor, domain.SignalDeliveryScheduled, 10); err != nil {
+				return err
+			}
+			if _, err := svc.ListNotificationDeliveryAttempts(ctx, actor, "ndel_1", 10); err != nil {
+				return err
+			}
+			if _, err := svc.RetryNotificationDelivery(ctx, actor, "ndel_1", StateChangeRequest{Reason: "retry"}); err != nil {
+				return err
+			}
 			if _, err := svc.DeleteNotificationChannel(ctx, actor, "nch_1", StateChangeRequest{Reason: "retire"}); err != nil {
 				return err
 			}
@@ -343,7 +376,22 @@ func TestControlServiceOwnerHappyPathSurface(t *testing.T) {
 			if _, err := svc.GetSIEMSink(ctx, actor, "snk_1"); err != nil {
 				return err
 			}
-			_, _, err := svc.UpdateSIEMSink(ctx, actor, "snk_1", UpdateSIEMSinkRequest{State: &disabled, Reason: "pause"})
+			if _, _, err := svc.UpdateSIEMSink(ctx, actor, "snk_1", UpdateSIEMSinkRequest{State: &disabled, Reason: "pause"}); err != nil {
+				return err
+			}
+			if _, err := svc.TestSIEMSink(ctx, actor, "snk_1", StateChangeRequest{Reason: "verify route"}); err != nil {
+				return err
+			}
+			if _, err := svc.ListSIEMDeliveries(ctx, actor, domain.SignalDeliveryScheduled, 10); err != nil {
+				return err
+			}
+			if _, err := svc.ListSIEMDeliveryAttempts(ctx, actor, "sdel_1", 10); err != nil {
+				return err
+			}
+			if _, err := svc.RetrySIEMDelivery(ctx, actor, "sdel_1", StateChangeRequest{Reason: "retry"}); err != nil {
+				return err
+			}
+			_, err := svc.DeleteSIEMSink(ctx, actor, "snk_1", StateChangeRequest{Reason: "retire"})
 			return err
 		}},
 		{name: "audit and replay", run: func(ctx context.Context) error {
@@ -353,6 +401,12 @@ func TestControlServiceOwnerHappyPathSurface(t *testing.T) {
 			if _, err := svc.GetAuditChainHead(ctx, actor); err != nil {
 				return err
 			}
+			if _, err := svc.VerifyAuditChain(ctx, actor, AuditChainVerifyRequest{}); err != nil {
+				return err
+			}
+			if _, err := svc.CreateAuditChainAnchor(ctx, actor, AuditChainAnchorRequest{Reason: "publish checkpoint"}); err != nil {
+				return err
+			}
 			if _, err := svc.ListAuditChainAnchors(ctx, actor, 10); err != nil {
 				return err
 			}
@@ -360,6 +414,12 @@ func TestControlServiceOwnerHappyPathSurface(t *testing.T) {
 				return err
 			}
 			if _, err := svc.ListRetentionPolicies(ctx, actor, 10); err != nil {
+				return err
+			}
+			if _, err := svc.CreateRetentionPolicy(ctx, actor, CreateRetentionPolicyRequest{ResourceType: domain.RetentionResourceRawPayload, RetentionDays: 30}); err != nil {
+				return err
+			}
+			if _, err := svc.UpdateRetentionPolicy(ctx, actor, "ret_1", UpdateRetentionPolicyRequest{RetentionDays: ptrInt(45)}); err != nil {
 				return err
 			}
 			if _, err := svc.ListReplayJobs(ctx, actor, 10); err != nil {
@@ -375,6 +435,77 @@ func TestControlServiceOwnerHappyPathSurface(t *testing.T) {
 				return err
 			}
 			_, err := svc.CancelReplayJob(ctx, actor, "rpl_1", StateChangeRequest{Reason: "cancel"})
+			return err
+		}},
+		{name: "provider reconciliation and recovery controls", run: func(ctx context.Context) error {
+			if _, err := svc.CreateProviderConnection(ctx, actor, CreateProviderConnectionRequest{Name: "Stripe", Provider: "stripe", Credential: "sk_test_secret"}); err != nil {
+				return err
+			}
+			if _, err := svc.ListProviderConnections(ctx, actor, 10); err != nil {
+				return err
+			}
+			if _, err := svc.GetProviderConnection(ctx, actor, "pcn_1"); err != nil {
+				return err
+			}
+			if _, err := svc.VerifyProviderConnection(ctx, actor, "pcn_1", ProviderConnectionStateRequest{Reason: "validated"}); err != nil {
+				return err
+			}
+			if _, err := svc.RevokeProviderConnection(ctx, actor, "pcn_1", ProviderConnectionStateRequest{Reason: "rotate"}); err != nil {
+				return err
+			}
+			if _, err := svc.DryRunReconciliation(ctx, actor, ReconciliationJobRequest{ConnectionID: "pcn_1", Reason: "inspect window"}); err != nil {
+				return err
+			}
+			if _, err := svc.CreateReconciliationJob(ctx, actor, ReconciliationJobRequest{ConnectionID: "pcn_1", CaptureMissing: true, RouteRecovered: true, Reason: "recover"}); err != nil {
+				return err
+			}
+			if _, err := svc.ListReconciliationJobs(ctx, actor, 10); err != nil {
+				return err
+			}
+			if _, err := svc.GetReconciliationJob(ctx, actor, "rec_1"); err != nil {
+				return err
+			}
+			if _, err := svc.ListReconciliationItems(ctx, actor, "rec_1", 10); err != nil {
+				return err
+			}
+			_, err := svc.CancelReconciliationJob(ctx, actor, "rec_1", ProviderConnectionStateRequest{Reason: "stop"})
+			return err
+		}},
+		{name: "transformations dead letter and quarantine", run: func(ctx context.Context) error {
+			if _, err := svc.CreateTransformation(ctx, actor, CreateTransformationRequest{Name: "redact", Operations: json.RawMessage(`[{"op":"redact","path":"/data/email"}]`)}); err != nil {
+				return err
+			}
+			if _, err := svc.ListTransformations(ctx, actor, 10); err != nil {
+				return err
+			}
+			if _, err := svc.GetTransformation(ctx, actor, "trn_1"); err != nil {
+				return err
+			}
+			if _, err := svc.CreateTransformationVersion(ctx, actor, "trn_1", CreateTransformationVersionRequest{Operations: json.RawMessage(`[{"op":"set","path":"/data/source","value":"webhookery"}]`)}); err != nil {
+				return err
+			}
+			if _, err := svc.ListTransformationVersions(ctx, actor, "trn_1", 10); err != nil {
+				return err
+			}
+			if _, err := svc.ActivateTransformationVersion(ctx, actor, "trn_1", "trv_1", ActivateTransformationVersionRequest{Reason: "publish"}); err != nil {
+				return err
+			}
+			if _, err := svc.ListDeadLetter(ctx, actor, 10); err != nil {
+				return err
+			}
+			if _, err := svc.ReleaseDeadLetter(ctx, actor, "dlq_1", DeadLetterReleaseRequest{ReasonCode: ReplayReasonReceiverFixed, Reason: "receiver fixed"}); err != nil {
+				return err
+			}
+			if _, err := svc.BulkReleaseDeadLetter(ctx, actor, DeadLetterBulkReleaseRequest{EntryIDs: []string{"dlq_1", "dlq_2"}, ReasonCode: ReplayReasonIncidentRecovery, Reason: "incident recovery"}); err != nil {
+				return err
+			}
+			if _, err := svc.ListQuarantine(ctx, actor, 10); err != nil {
+				return err
+			}
+			if _, err := svc.ApproveQuarantine(ctx, actor, "qua_1", QuarantineDecisionRequest{Reason: "trusted after review", RouteAfterRelease: true}); err != nil {
+				return err
+			}
+			_, err := svc.RejectQuarantine(ctx, actor, "qua_2", QuarantineDecisionRequest{Reason: "unsafe"})
 			return err
 		}},
 	}
@@ -2837,5 +2968,9 @@ func (f *fakeControlStore) ActivateTransformationVersion(context.Context, string
 }
 
 func ptrString(v string) *string {
+	return &v
+}
+
+func ptrInt(v int) *int {
 	return &v
 }

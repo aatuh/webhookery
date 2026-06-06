@@ -283,6 +283,140 @@ func TestSCIMCreateUserUsesActorTenantAndID(t *testing.T) {
 	}
 }
 
+func TestSCIMUserRoutesUseActorTenantAndResourceIDs(t *testing.T) {
+	store := &identityHTTPStore{
+		scimActor: authz.Actor{ID: "scim_sync", TenantID: "ten_scim", Role: authz.RoleDeveloper, Scopes: []string{"*"}},
+	}
+	server := NewServer(ServerConfig{Control: app.NewControlService(store, ssrf.Validator{})})
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/scim/v2/Users/usr_1", nil)
+	req.Header.Set("Authorization", "Bearer raw-scim-token")
+	rec := httptest.NewRecorder()
+	server.Routes().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected SCIM get 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if store.scimUserTenantID != "ten_scim" || store.scimUserID != "usr_1" {
+		t.Fatalf("unexpected SCIM get fields tenant=%q user=%q", store.scimUserTenantID, store.scimUserID)
+	}
+
+	req = httptest.NewRequest(http.MethodPut, "/v1/scim/v2/Users/usr_1", strings.NewReader(`{"userName":"updated@example.com","active":false}`))
+	req.Header.Set("Authorization", "Bearer raw-scim-token")
+	req.Header.Set("Content-Type", "application/json")
+	rec = httptest.NewRecorder()
+	server.Routes().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected SCIM replace 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if store.scimCreatedTenantID != "ten_scim" || store.scimCreatedActorID != "scim_sync" || store.scimCreatedReq.ID != "usr_1" || store.scimCreatedReq.UserName != "updated@example.com" || !store.scimReplace {
+		t.Fatalf("unexpected SCIM replace fields tenant=%q actor=%q req=%+v replace=%v", store.scimCreatedTenantID, store.scimCreatedActorID, store.scimCreatedReq, store.scimReplace)
+	}
+
+	req = httptest.NewRequest(http.MethodPatch, "/v1/scim/v2/Users/usr_1", strings.NewReader(`{"Operations":[{"op":"replace","path":"active","value":true}]}`))
+	req.Header.Set("Authorization", "Bearer raw-scim-token")
+	req.Header.Set("Content-Type", "application/json")
+	rec = httptest.NewRecorder()
+	server.Routes().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected SCIM patch 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if store.scimUserTenantID != "ten_scim" || store.scimUserActorID != "scim_sync" || store.scimUserID != "usr_1" || len(store.scimUserPatchReq.Operations) != 1 {
+		t.Fatalf("unexpected SCIM patch fields tenant=%q actor=%q user=%q req=%+v", store.scimUserTenantID, store.scimUserActorID, store.scimUserID, store.scimUserPatchReq)
+	}
+
+	req = httptest.NewRequest(http.MethodDelete, "/v1/scim/v2/Users/usr_1", nil)
+	req.Header.Set("Authorization", "Bearer raw-scim-token")
+	rec = httptest.NewRecorder()
+	server.Routes().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected SCIM delete 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if store.scimUserTenantID != "ten_scim" || store.scimUserActorID != "scim_sync" || store.scimUserID != "usr_1" || !store.scimUserDeactivated {
+		t.Fatalf("unexpected SCIM delete fields tenant=%q actor=%q user=%q deactivated=%v", store.scimUserTenantID, store.scimUserActorID, store.scimUserID, store.scimUserDeactivated)
+	}
+}
+
+func TestSCIMGroupRoutesUseActorTenantAndResourceIDs(t *testing.T) {
+	store := &identityHTTPStore{
+		scimActor: authz.Actor{ID: "scim_sync", TenantID: "ten_scim", Role: authz.RoleDeveloper, Scopes: []string{"*"}},
+		scimGroups: []app.SCIMGroup{{
+			ID:          "grp_1",
+			DisplayName: "Finance",
+			Active:      true,
+		}},
+	}
+	server := NewServer(ServerConfig{Control: app.NewControlService(store, ssrf.Validator{})})
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/scim/v2/Groups?limit=3", nil)
+	req.Header.Set("Authorization", "Bearer raw-scim-token")
+	rec := httptest.NewRecorder()
+	server.Routes().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected SCIM groups list 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if store.scimGroupListTenantID != "ten_scim" || store.scimGroupListLimit != 3 {
+		t.Fatalf("unexpected SCIM groups list fields tenant=%q limit=%d", store.scimGroupListTenantID, store.scimGroupListLimit)
+	}
+
+	req = httptest.NewRequest(http.MethodPost, "/v1/scim/v2/Groups", strings.NewReader(`{"displayName":"Support","members":[{"value":"usr_1"}]}`))
+	req.Header.Set("Authorization", "Bearer raw-scim-token")
+	req.Header.Set("Content-Type", "application/json")
+	rec = httptest.NewRecorder()
+	server.Routes().ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected SCIM group create 201, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if store.scimGroupTenantID != "ten_scim" || store.scimGroupActorID != "scim_sync" || store.scimGroupReq.DisplayName != "Support" || store.scimGroupReplace {
+		t.Fatalf("unexpected SCIM group create fields tenant=%q actor=%q req=%+v replace=%v", store.scimGroupTenantID, store.scimGroupActorID, store.scimGroupReq, store.scimGroupReplace)
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/v1/scim/v2/Groups/grp_1", nil)
+	req.Header.Set("Authorization", "Bearer raw-scim-token")
+	rec = httptest.NewRecorder()
+	server.Routes().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected SCIM group get 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if store.scimGroupTenantID != "ten_scim" || store.scimGroupID != "grp_1" {
+		t.Fatalf("unexpected SCIM group get fields tenant=%q group=%q", store.scimGroupTenantID, store.scimGroupID)
+	}
+
+	req = httptest.NewRequest(http.MethodPut, "/v1/scim/v2/Groups/grp_1", strings.NewReader(`{"displayName":"Support Updated"}`))
+	req.Header.Set("Authorization", "Bearer raw-scim-token")
+	req.Header.Set("Content-Type", "application/json")
+	rec = httptest.NewRecorder()
+	server.Routes().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected SCIM group replace 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if store.scimGroupTenantID != "ten_scim" || store.scimGroupActorID != "scim_sync" || store.scimGroupReq.ID != "grp_1" || store.scimGroupReq.DisplayName != "Support Updated" || !store.scimGroupReplace {
+		t.Fatalf("unexpected SCIM group replace fields tenant=%q actor=%q req=%+v replace=%v", store.scimGroupTenantID, store.scimGroupActorID, store.scimGroupReq, store.scimGroupReplace)
+	}
+
+	req = httptest.NewRequest(http.MethodPatch, "/v1/scim/v2/Groups/grp_1", strings.NewReader(`{"Operations":[{"op":"add","path":"members","value":[{"value":"usr_2"}]}]}`))
+	req.Header.Set("Authorization", "Bearer raw-scim-token")
+	req.Header.Set("Content-Type", "application/json")
+	rec = httptest.NewRecorder()
+	server.Routes().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected SCIM group patch 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if store.scimGroupTenantID != "ten_scim" || store.scimGroupActorID != "scim_sync" || store.scimGroupID != "grp_1" || len(store.scimGroupPatchReq.Operations) != 1 {
+		t.Fatalf("unexpected SCIM group patch fields tenant=%q actor=%q group=%q req=%+v", store.scimGroupTenantID, store.scimGroupActorID, store.scimGroupID, store.scimGroupPatchReq)
+	}
+
+	req = httptest.NewRequest(http.MethodDelete, "/v1/scim/v2/Groups/grp_1", nil)
+	req.Header.Set("Authorization", "Bearer raw-scim-token")
+	rec = httptest.NewRecorder()
+	server.Routes().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected SCIM group delete 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if store.scimGroupTenantID != "ten_scim" || store.scimGroupActorID != "scim_sync" || store.scimGroupID != "grp_1" || !store.scimGroupDeactivated {
+		t.Fatalf("unexpected SCIM group delete fields tenant=%q actor=%q group=%q deactivated=%v", store.scimGroupTenantID, store.scimGroupActorID, store.scimGroupID, store.scimGroupDeactivated)
+	}
+}
+
 type sessionLookupFunc func(context.Context, string) (authz.Actor, error)
 
 func (f sessionLookupFunc) AuthenticateSession(ctx context.Context, hash string) (authz.Actor, error) {
@@ -351,6 +485,22 @@ type identityHTTPStore struct {
 	scimCreatedActorID  string
 	scimCreatedReq      app.SCIMUserRequest
 	scimReplace         bool
+	scimUserTenantID    string
+	scimUserActorID     string
+	scimUserID          string
+	scimUserPatchReq    app.SCIMPatchRequest
+	scimUserDeactivated bool
+
+	scimGroups            []app.SCIMGroup
+	scimGroupListTenantID string
+	scimGroupListLimit    int
+	scimGroupTenantID     string
+	scimGroupActorID      string
+	scimGroupID           string
+	scimGroupReq          app.SCIMGroupRequest
+	scimGroupReplace      bool
+	scimGroupPatchReq     app.SCIMPatchRequest
+	scimGroupDeactivated  bool
 }
 
 var _ app.EnterpriseIdentityStore = (*identityHTTPStore)(nil)
@@ -468,36 +618,66 @@ func (s *identityHTTPStore) SCIMListUsers(_ context.Context, tenantID string, li
 	return s.scimUsers, nil
 }
 
-func (s *identityHTTPStore) SCIMGetUser(context.Context, string, string) (app.SCIMUser, error) {
-	return app.SCIMUser{}, nil
+func (s *identityHTTPStore) SCIMGetUser(_ context.Context, tenantID, userID string) (app.SCIMUser, error) {
+	s.scimUserTenantID = tenantID
+	s.scimUserID = userID
+	return app.SCIMUser{ID: userID, UserName: "person@example.com", Active: true}, nil
 }
 
-func (s *identityHTTPStore) SCIMPatchUser(context.Context, string, string, string, app.SCIMPatchRequest) (app.SCIMUser, error) {
-	return app.SCIMUser{}, nil
+func (s *identityHTTPStore) SCIMPatchUser(_ context.Context, tenantID, actorID, userID string, req app.SCIMPatchRequest) (app.SCIMUser, error) {
+	s.scimUserTenantID = tenantID
+	s.scimUserActorID = actorID
+	s.scimUserID = userID
+	s.scimUserPatchReq = req
+	return app.SCIMUser{ID: userID, UserName: "person@example.com", Active: true}, nil
 }
 
-func (s *identityHTTPStore) SCIMDeactivateUser(context.Context, string, string, string) (app.SCIMUser, error) {
-	return app.SCIMUser{}, nil
+func (s *identityHTTPStore) SCIMDeactivateUser(_ context.Context, tenantID, actorID, userID string) (app.SCIMUser, error) {
+	s.scimUserTenantID = tenantID
+	s.scimUserActorID = actorID
+	s.scimUserID = userID
+	s.scimUserDeactivated = true
+	return app.SCIMUser{ID: userID, UserName: "person@example.com", Active: false}, nil
 }
 
-func (s *identityHTTPStore) SCIMCreateOrReplaceGroup(context.Context, string, string, app.SCIMGroupRequest, bool) (app.SCIMGroup, error) {
-	return app.SCIMGroup{}, nil
+func (s *identityHTTPStore) SCIMCreateOrReplaceGroup(_ context.Context, tenantID, actorID string, req app.SCIMGroupRequest, replace bool) (app.SCIMGroup, error) {
+	s.scimGroupTenantID = tenantID
+	s.scimGroupActorID = actorID
+	s.scimGroupReq = req
+	s.scimGroupReplace = replace
+	id := req.ID
+	if id == "" {
+		id = "grp_created"
+	}
+	return app.SCIMGroup{ID: id, DisplayName: req.DisplayName, Members: req.Members, Active: true}, nil
 }
 
-func (s *identityHTTPStore) SCIMListGroups(context.Context, string, int) ([]app.SCIMGroup, error) {
-	return nil, nil
+func (s *identityHTTPStore) SCIMListGroups(_ context.Context, tenantID string, limit int) ([]app.SCIMGroup, error) {
+	s.scimGroupListTenantID = tenantID
+	s.scimGroupListLimit = limit
+	return s.scimGroups, nil
 }
 
-func (s *identityHTTPStore) SCIMGetGroup(context.Context, string, string) (app.SCIMGroup, error) {
-	return app.SCIMGroup{}, nil
+func (s *identityHTTPStore) SCIMGetGroup(_ context.Context, tenantID, groupID string) (app.SCIMGroup, error) {
+	s.scimGroupTenantID = tenantID
+	s.scimGroupID = groupID
+	return app.SCIMGroup{ID: groupID, DisplayName: "Finance", Active: true}, nil
 }
 
-func (s *identityHTTPStore) SCIMPatchGroup(context.Context, string, string, string, app.SCIMPatchRequest) (app.SCIMGroup, error) {
-	return app.SCIMGroup{}, nil
+func (s *identityHTTPStore) SCIMPatchGroup(_ context.Context, tenantID, actorID, groupID string, req app.SCIMPatchRequest) (app.SCIMGroup, error) {
+	s.scimGroupTenantID = tenantID
+	s.scimGroupActorID = actorID
+	s.scimGroupID = groupID
+	s.scimGroupPatchReq = req
+	return app.SCIMGroup{ID: groupID, DisplayName: "Finance", Active: true}, nil
 }
 
-func (s *identityHTTPStore) SCIMDeactivateGroup(context.Context, string, string, string) (app.SCIMGroup, error) {
-	return app.SCIMGroup{}, nil
+func (s *identityHTTPStore) SCIMDeactivateGroup(_ context.Context, tenantID, actorID, groupID string) (app.SCIMGroup, error) {
+	s.scimGroupTenantID = tenantID
+	s.scimGroupActorID = actorID
+	s.scimGroupID = groupID
+	s.scimGroupDeactivated = true
+	return app.SCIMGroup{ID: groupID, DisplayName: "Finance", Active: false}, nil
 }
 
 func (s *identityHTTPStore) CreateRoleBinding(context.Context, string, string, app.CreateRoleBindingRequest) (domain.RoleBinding, error) {

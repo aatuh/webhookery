@@ -7,8 +7,8 @@ GOLANGCI_LINT_VERSION ?= v2.11.4
 GOSEC_VERSION ?= v2.25.0
 GOVULNCHECK_VERSION ?= v1.2.0
 FUZZTIME ?= 5s
-COVERAGE_MIN ?= 40.0
-COVERAGE_DB_MIN ?= 50.0
+COVERAGE_MIN ?= 41.0
+COVERAGE_DB_MIN ?= 56.0
 
 .PHONY: help tools fmt lint vuln gosec test test-race coverage coverage-check coverage-db coverage-db-check openapi-check openapi-reference-generate openapi-reference-check test-vectors-check provider-conformance-check provider-proof-check crypto-inventory deployment-profile-check collections-check documentation-structure-check failure-drills-check demo-media-check static-site-check meta-files-check release-assets-check fuzz-smoke perf-smoke demo-media restore-drill sdk-generate sdk-check docs-check release-acceptance rc-check compose-up compose-down migrate live-postgres-check postgres-integration-test redis-integration-test fast-check finalize clean
 
@@ -50,12 +50,12 @@ coverage-check: ## Enforce the local coverage floor
 
 coverage-db: ## Run DB-backed coverage using WEBHOOKERY_TEST_DATABASE_URL
 	@test -n "$$WEBHOOKERY_TEST_DATABASE_URL" || (printf '%s\n' "WEBHOOKERY_TEST_DATABASE_URL is required; start postgres with docker compose up -d postgres" >&2; exit 2)
-	@$(GO) test ./... -coverprofile=coverage-db.out
+	@$(GO) test -p 1 ./... -coverprofile=coverage-db.out
 	@$(GO) tool cover -func=coverage-db.out
 
 coverage-db-check: ## Enforce the DB-backed coverage floor
 	@test -n "$$WEBHOOKERY_TEST_DATABASE_URL" || (printf '%s\n' "WEBHOOKERY_TEST_DATABASE_URL is required; start postgres with docker compose up -d postgres" >&2; exit 2)
-	@$(GO) test ./... -coverprofile=coverage-db.out >/dev/null
+	@$(GO) test -p 1 ./... -coverprofile=coverage-db.out >/dev/null
 	@total="$$( $(GO) tool cover -func=coverage-db.out | awk '/^total:/ { gsub("%", "", $$3); print $$3 }' )"; \
 	awk -v total="$$total" -v min="$(COVERAGE_DB_MIN)" 'BEGIN { if ((total + 0) < (min + 0)) { printf "DB-backed coverage %.1f%% is below %.1f%%\n", total, min > "/dev/stderr"; exit 1 } }'; \
 	printf 'DB-backed coverage %.1f%% meets %.1f%% floor\n' "$$total" "$(COVERAGE_DB_MIN)"
@@ -387,8 +387,8 @@ meta-files-check: ## Check governance, licensing, and release-evidence metadata
 	@grep -q "actions/workflows/fuzz.yml/badge.svg" README.md
 	@grep -q "actions/workflows/codeql.yml/badge.svg" README.md
 	@grep -q "actions/workflows/scorecard.yml/badge.svg" README.md
-	@grep -q "local%20coverage-40%25+" README.md
-	@grep -q "db%20coverage-50%25+" README.md
+	@grep -q "local%20coverage-41%25+" README.md
+	@grep -q "db%20coverage-56%25+" README.md
 	@op_count="$$(grep -c '^[[:space:]]*operationId:' openapi.yaml)"; grep -q "OpenAPI-$${op_count}%20operations" README.md
 	@grep -q "make live-postgres-check" docs/operations.md
 	@grep -q "make live-postgres-check" docs/release-evidence-template.md
