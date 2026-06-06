@@ -1143,6 +1143,132 @@ func TestPostgresControlResourcesTenantIsolationAndEvidence(t *testing.T) {
 	}
 }
 
+func TestPostgresSignalDeliveryAttemptLifecycle(t *testing.T) {
+	ctx, store, actor := openPostgresIntegrationStore(t)
+	defer store.Close()
+
+	if _, err := store.pool.Exec(ctx, `UPDATE notification_deliveries SET state='succeeded', worker_id='' WHERE tenant_id LIKE 'ten_it_%' AND state IN ('scheduled','in_progress')`); err != nil {
+		t.Fatalf("clear prior integration notification work: %v", err)
+	}
+	if _, err := store.pool.Exec(ctx, `UPDATE siem_deliveries SET state='succeeded', worker_id='' WHERE tenant_id LIKE 'ten_it_%' AND state IN ('scheduled','in_progress')`); err != nil {
+		t.Fatalf("clear prior integration SIEM work: %v", err)
+	}
+	if _, err := store.pool.Exec(ctx, `UPDATE notification_channels SET state='disabled' WHERE tenant_id LIKE 'ten_it_%' AND state='active'`); err != nil {
+		t.Fatalf("disable prior integration notification channels: %v", err)
+	}
+	if _, err := store.pool.Exec(ctx, `UPDATE siem_sinks SET state='disabled' WHERE tenant_id LIKE 'ten_it_%' AND state='active'`); err != nil {
+		t.Fatalf("disable prior integration SIEM sinks: %v", err)
+	}
+
+	control := app.NewControlService(store, ssrf.Validator{Resolver: ssrf.StaticResolver{
+		"signals.example.com": {netip.MustParseAddr("93.184.216.34")},
+	}})
+	channel, _, err := control.CreateNotificationChannel(ctx, actor, app.CreateNotificationChannelRequest{Name: "signal lifecycle notification", URL: "https://signals.example.com/notify", SigningSecret: "notify-secret-value"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	notificationDelivery, err := control.TestNotificationChannel(ctx, actor, channel.ID, app.StateChangeRequest{Reason: "integration notification lifecycle"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	notificationItems, err := store.ClaimNotificationDeliveries(ctx, "it-notification-worker", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	notificationItem := findPostgresSignalDeliveryItem(t, notificationItems, notificationDelivery.ID)
+	if notificationItem.URL != channel.URL || string(notificationItem.Secret) != "notify-secret-value" || !bytes.Contains(notificationItem.Body, []byte(`"notification_channel.test"`)) {
+		t.Fatalf("claimed notification item mismatch: id=%s tenant=%s url=%q secret_len=%d body=%s", notificationItem.ID, notificationItem.TenantID, notificationItem.URL, len(notificationItem.Secret), string(notificationItem.Body))
+	}
+	longResponse := bytes.Repeat([]byte("x"), 20<<10)
+	if err := store.RecordNotificationDeliveryAttempt(ctx, notificationItem, worker.SignalDeliveryResult{StatusCode: 503, FailureClass: "upstream_5xx", ResponseBody: longResponse, ResponseTruncated: true}, errors.New("network unavailable")); err != nil {
+		t.Fatal(err)
+	}
+	if retried, err := control.RetryNotificationDelivery(ctx, actor, notificationDelivery.ID, app.StateChangeRequest{Reason: "integration notification retry"}); err != nil || retried.State != domain.SignalDeliveryScheduled {
+		t.Fatalf("expected scheduled notification retry, got %+v err=%v", retried, err)
+	}
+	notificationItems, err = store.ClaimNotificationDeliveries(ctx, "it-notification-worker-success", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	notificationItem = findPostgresSignalDeliveryItem(t, notificationItems, notificationDelivery.ID)
+	if err := store.RecordNotificationDeliveryAttempt(ctx, notificationItem, worker.SignalDeliveryResult{StatusCode: 202, FailureClass: "success", ResponseBody: []byte("accepted")}, nil); err != nil {
+		t.Fatal(err)
+	}
+	notificationAttempts, err := control.ListNotificationDeliveryAttempts(ctx, actor, notificationDelivery.ID, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(notificationAttempts) != 2 {
+		t.Fatalf("expected failed and succeeded notification attempts, got %+v", notificationAttempts)
+	}
+	if notificationAttempts[0].StatusCode != 202 || notificationAttempts[0].FailureClass != "success" {
+		t.Fatalf("latest notification attempt did not record success: %+v", notificationAttempts[0])
+	}
+	if notificationAttempts[1].StatusCode != 503 || !notificationAttempts[1].ResponseTruncated || len(notificationAttempts[1].ResponseBody) != 16<<10 {
+		t.Fatalf("failed notification attempt did not retain truncated evidence: %+v", notificationAttempts[1])
+	}
+	notificationDeliveries, err := control.ListNotificationDeliveries(ctx, actor, domain.SignalDeliverySucceeded, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !containsPostgresNotificationDelivery(notificationDeliveries, notificationDelivery.ID, domain.SignalDeliverySucceeded) {
+		t.Fatalf("expected succeeded notification delivery in tenant list, got %+v", notificationDeliveries)
+	}
+	assertPostgresAuditEvent(t, ctx, store, actor.TenantID, "notification_delivery.retry_requested", "notification_delivery", notificationDelivery.ID)
+
+	sink, _, err := control.CreateSIEMSink(ctx, actor, app.CreateSIEMSinkRequest{Name: "signal lifecycle siem", URL: "https://signals.example.com/siem", SigningSecret: "siem-secret-value"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.EnqueueSIEMDeliveries(ctx, "it-siem-enqueue", 10); err != nil {
+		t.Fatal(err)
+	}
+	siemItems, err := store.ClaimSIEMDeliveries(ctx, "it-siem-worker", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	siemItem := findPostgresSignalDeliveryForTenant(t, siemItems, actor.TenantID)
+	if siemItem.URL != sink.URL || string(siemItem.Secret) != "siem-secret-value" || !bytes.Contains(siemItem.Body, []byte(`"tenant_id":"`+actor.TenantID+`"`)) {
+		t.Fatalf("claimed SIEM item mismatch: id=%s tenant=%s url=%q secret_len=%d body=%s", siemItem.ID, siemItem.TenantID, siemItem.URL, len(siemItem.Secret), string(siemItem.Body))
+	}
+	if err := store.RecordSIEMDeliveryAttempt(ctx, siemItem, worker.SignalDeliveryResult{StatusCode: 500, FailureClass: "siem_5xx", ResponseBody: []byte("temporarily failed")}, errors.New("temporary SIEM outage")); err != nil {
+		t.Fatal(err)
+	}
+	if retried, err := control.RetrySIEMDelivery(ctx, actor, siemItem.ID, app.StateChangeRequest{Reason: "integration siem retry"}); err != nil || retried.State != domain.SignalDeliveryScheduled {
+		t.Fatalf("expected scheduled SIEM retry, got %+v err=%v", retried, err)
+	}
+	siemItems, err = store.ClaimSIEMDeliveries(ctx, "it-siem-worker-success", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	siemItem = findPostgresSignalDeliveryItem(t, siemItems, siemItem.ID)
+	if err := store.RecordSIEMDeliveryAttempt(ctx, siemItem, worker.SignalDeliveryResult{StatusCode: 204, FailureClass: "success", ResponseBody: []byte("ok")}, nil); err != nil {
+		t.Fatal(err)
+	}
+	siemAttempts, err := control.ListSIEMDeliveryAttempts(ctx, actor, siemItem.ID, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(siemAttempts) != 2 || siemAttempts[0].StatusCode != 204 || siemAttempts[1].StatusCode != 500 {
+		t.Fatalf("expected failed and succeeded SIEM attempts, got %+v", siemAttempts)
+	}
+	siemDeliveries, err := control.ListSIEMDeliveries(ctx, actor, domain.SignalDeliverySucceeded, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !containsPostgresSIEMDelivery(siemDeliveries, siemItem.ID, domain.SignalDeliverySucceeded) {
+		t.Fatalf("expected succeeded SIEM delivery in tenant list, got %+v", siemDeliveries)
+	}
+	refreshedSink, err := control.GetSIEMSink(ctx, actor, sink.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if refreshedSink.CursorSequence == 0 {
+		t.Fatalf("SIEM cursor did not advance after successful delivery: %+v", refreshedSink)
+	}
+	assertPostgresAuditEvent(t, ctx, store, actor.TenantID, "siem_delivery.retry_requested", "siem_delivery", siemItem.ID)
+}
+
 func TestPostgresIncidentLifecycleReportAndEvidenceExport(t *testing.T) {
 	ctx, store, actor := openPostgresIntegrationStore(t)
 	defer store.Close()
@@ -2311,6 +2437,15 @@ func containsPostgresNotificationChannel(channels []domain.NotificationChannel, 
 	return false
 }
 
+func containsPostgresNotificationDelivery(deliveries []domain.NotificationDelivery, id, state string) bool {
+	for _, delivery := range deliveries {
+		if delivery.ID == id && delivery.State == state {
+			return true
+		}
+	}
+	return false
+}
+
 func containsPostgresSIEMSink(sinks []domain.SIEMSink, id, state string) bool {
 	for _, sink := range sinks {
 		if sink.ID == id && sink.State == state {
@@ -2318,6 +2453,45 @@ func containsPostgresSIEMSink(sinks []domain.SIEMSink, id, state string) bool {
 		}
 	}
 	return false
+}
+
+func containsPostgresSIEMDelivery(deliveries []domain.SIEMDelivery, id, state string) bool {
+	for _, delivery := range deliveries {
+		if delivery.ID == id && delivery.State == state {
+			return true
+		}
+	}
+	return false
+}
+
+func findPostgresSignalDeliveryItem(t *testing.T, items []worker.SignalDeliveryItem, id string) worker.SignalDeliveryItem {
+	t.Helper()
+	for _, item := range items {
+		if item.ID == id {
+			return item
+		}
+	}
+	t.Fatalf("expected claimed signal delivery %s, got %s", id, postgresSignalDeliveryIDs(items))
+	return worker.SignalDeliveryItem{}
+}
+
+func findPostgresSignalDeliveryForTenant(t *testing.T, items []worker.SignalDeliveryItem, tenantID string) worker.SignalDeliveryItem {
+	t.Helper()
+	for _, item := range items {
+		if item.TenantID == tenantID {
+			return item
+		}
+	}
+	t.Fatalf("expected claimed signal delivery for tenant %s, got %s", tenantID, postgresSignalDeliveryIDs(items))
+	return worker.SignalDeliveryItem{}
+}
+
+func postgresSignalDeliveryIDs(items []worker.SignalDeliveryItem) string {
+	ids := make([]string, 0, len(items))
+	for _, item := range items {
+		ids = append(ids, item.ID+"@"+item.TenantID)
+	}
+	return strings.Join(ids, ",")
 }
 
 func containsPostgresEventType(types []domain.EventType, name, state string) bool {
