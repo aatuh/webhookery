@@ -543,6 +543,172 @@ func TestPostgresEventSearchDeliveryControlAndDeadLetterLifecycle(t *testing.T) 
 	assertPostgresAuditEvent(t, ctx, store, actor.TenantID, "replay.created", "replay_job", replayJob.ID)
 }
 
+func TestPostgresBulkDeadLetterAndQuarantineControls(t *testing.T) {
+	ctx, store, actor := openPostgresIntegrationStore(t)
+	defer store.Close()
+
+	if _, err := store.pool.Exec(ctx, `UPDATE outbox SET state='completed', locked_by=NULL, lock_expires_at=NULL WHERE (tenant_id LIKE 'ten_it_%' OR tenant_id LIKE 'ten_rc_%') AND state <> 'completed'`); err != nil {
+		t.Fatalf("clear prior integration outbox work: %v", err)
+	}
+	if _, err := store.pool.Exec(ctx, `UPDATE deliveries SET state='succeeded', locked_by=NULL, lock_expires_at=NULL WHERE (tenant_id LIKE 'ten_it_%' OR tenant_id LIKE 'ten_rc_%') AND state IN ('scheduled','in_progress')`); err != nil {
+		t.Fatalf("clear prior integration delivery work: %v", err)
+	}
+
+	now := time.Now().UTC().Truncate(time.Second)
+	eventType := "invoice.recovery_controls"
+	control := app.NewControlService(store, ssrf.Validator{Resolver: ssrf.StaticResolver{"receiver.example.com": {netip.MustParseAddr("93.184.216.34")}}})
+	fanout := app.NewDeliveryFanoutService(store, app.SystemClock{})
+	source, err := control.CreateSource(ctx, actor, app.CreateSourceRequest{Name: "recovery controls source", Provider: "stripe", Adapter: "stripe", VerificationSecret: "whsec_it"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	endpoint, _, err := control.CreateEndpoint(ctx, actor, app.CreateEndpointRequest{Name: "recovery controls endpoint", URL: "https://receiver.example.com/webhook"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	retryPolicy, err := control.CreateRetryPolicy(ctx, actor, app.CreateRetryPolicyRequest{
+		Name:                "bulk dead letter single attempt",
+		MaxAttempts:         1,
+		MaxDurationSeconds:  60,
+		InitialDelaySeconds: 1,
+		MaxDelaySeconds:     1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := control.CreateRoute(ctx, actor, app.CreateRouteRequest{SourceID: source.ID, Name: "recovery controls route", Priority: 4, EventTypes: []string{eventType}, EndpointID: endpoint.ID, RetryPolicyID: retryPolicy.ID, State: domain.StateActive}); err != nil {
+		t.Fatal(err)
+	}
+
+	eventIDs := make([]string, 0, 2)
+	for i := 0; i < 2; i++ {
+		result := ingestPostgresIntegrationEvent(t, ctx, store, actor, source.ID, eventType, "evt_it_bulk_dead_letter_"+now.Add(time.Duration(i)*time.Second).Format("150405.000000000"), now.Add(time.Duration(i)*time.Second))
+		eventIDs = append(eventIDs, result.EventID)
+	}
+	outboxItems, err := store.ClaimOutbox(ctx, "it-bulk-dead-letter-outbox", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, eventID := range eventIDs {
+		item := findPostgresOutboxItem(t, outboxItems, app.OutboxKindRouteEvent, eventID)
+		if err := fanout.ProcessOutbox(ctx, item); err != nil {
+			t.Fatal(err)
+		}
+		if err := store.CompleteOutbox(ctx, item.ID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	claimed, err := store.ClaimDueDeliveries(ctx, "it-bulk-dead-letter-delivery", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deliveryIDs := make([]string, 0, len(eventIDs))
+	for _, eventID := range eventIDs {
+		item := findPostgresDeliveryItemForEvent(t, claimed, eventID)
+		deliveryIDs = append(deliveryIDs, item.ID)
+		if err := store.RecordDeliveryAttempt(ctx, item, worker.DeliveryResult{StatusCode: 503, ResponseBody: []byte("bulk release receiver outage")}, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	deadLetters, err := control.ListDeadLetter(ctx, actor, 20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	entryIDs := findPostgresDeadLetterEntries(t, deadLetters, deliveryIDs)
+	jobs, err := control.BulkReleaseDeadLetter(ctx, actor, app.DeadLetterBulkReleaseRequest{
+		ReasonCode: app.ReplayReasonReceiverFixed,
+		Reason:     "bulk receiver recovery",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(jobs) != len(entryIDs) {
+		t.Fatalf("expected one replay per dead-letter release, jobs=%+v entries=%+v", jobs, entryIDs)
+	}
+	for _, job := range jobs {
+		if job.State != "scheduled" || job.ReasonCode != app.ReplayReasonReceiverFixed || job.TotalItems != 1 {
+			t.Fatalf("bulk dead-letter release produced unexpected replay job: %+v", job)
+		}
+		assertPostgresAuditEvent(t, ctx, store, actor.TenantID, "replay.created", "replay_job", job.ID)
+	}
+	for _, entryID := range entryIDs {
+		assertPostgresAuditEvent(t, ctx, store, actor.TenantID, "dead_letter.released", "dead_letter_entry", entryID)
+	}
+
+	badNow := now.Add(10 * time.Second)
+	badBody := []byte(`{"id":"evt_it_quarantine_approved","type":"` + eventType + `","account":"acct_it"}`)
+	quarantined, err := app.NewIngestService(store, fixedIntegrationClock{now: badNow}).Ingest(ctx, app.IngestRequest{
+		TenantID:    actor.TenantID,
+		SourceID:    source.ID,
+		Provider:    "stripe",
+		RawBody:     badBody,
+		Headers:     []domain.HeaderPair{{Name: "Stripe-Signature", Value: verifier.TimestampedHeader("v1", badNow, []byte("wrong_secret"), badBody)}},
+		ContentType: "application/json",
+		RemoteIP:    "198.51.100.60",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if quarantined.Accepted || quarantined.EventID == "" {
+		t.Fatalf("invalid signature should be stored as quarantined evidence without acceptance, got %+v", quarantined)
+	}
+	quarantineEntries, err := control.ListQuarantine(ctx, actor, 20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	approvedEntryID := findPostgresQuarantineEntryForEvent(t, quarantineEntries, quarantined.EventID, "open")
+	var quarantineOutboxRowsBefore int
+	if err := store.pool.QueryRow(ctx, `SELECT count(*) FROM outbox WHERE tenant_id=$1 AND kind=$2 AND resource_id=$3 AND state='pending'`, actor.TenantID, app.OutboxKindRouteEvent, quarantined.EventID).Scan(&quarantineOutboxRowsBefore); err != nil {
+		t.Fatal(err)
+	}
+	approved, err := control.ApproveQuarantine(ctx, actor, approvedEntryID, app.QuarantineDecisionRequest{Reason: "reviewed as safe evidence", RouteAfterRelease: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if approved["state"] != "approved" || approved["event_id"] != quarantined.EventID {
+		t.Fatalf("quarantine approval mismatch: %+v", approved)
+	}
+	var quarantineOutboxRows int
+	if err := store.pool.QueryRow(ctx, `SELECT count(*) FROM outbox WHERE tenant_id=$1 AND kind=$2 AND resource_id=$3 AND state='pending'`, actor.TenantID, app.OutboxKindRouteEvent, quarantined.EventID).Scan(&quarantineOutboxRows); err != nil {
+		t.Fatal(err)
+	}
+	if quarantineOutboxRows != quarantineOutboxRowsBefore+1 {
+		t.Fatalf("quarantine approval with route_after_release should enqueue one additional route item, before=%d after=%d", quarantineOutboxRowsBefore, quarantineOutboxRows)
+	}
+
+	rejectedNow := now.Add(11 * time.Second)
+	rejectedBody := []byte(`{"id":"evt_it_quarantine_rejected","type":"` + eventType + `","account":"acct_it"}`)
+	rejectedResult, err := app.NewIngestService(store, fixedIntegrationClock{now: rejectedNow}).Ingest(ctx, app.IngestRequest{
+		TenantID:    actor.TenantID,
+		SourceID:    source.ID,
+		Provider:    "stripe",
+		RawBody:     rejectedBody,
+		Headers:     []domain.HeaderPair{{Name: "Stripe-Signature", Value: verifier.TimestampedHeader("v1", rejectedNow, []byte("wrong_secret"), rejectedBody)}},
+		ContentType: "application/json",
+		RemoteIP:    "198.51.100.61",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	quarantineEntries, err = control.ListQuarantine(ctx, actor, 20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rejectedEntryID := findPostgresQuarantineEntryForEvent(t, quarantineEntries, rejectedResult.EventID, "open")
+	rejected, err := control.RejectQuarantine(ctx, actor, rejectedEntryID, app.QuarantineDecisionRequest{Reason: "signature could not be trusted"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rejected["state"] != "rejected" || rejected["event_id"] != rejectedResult.EventID {
+		t.Fatalf("quarantine rejection mismatch: %+v", rejected)
+	}
+	if _, err := control.RejectQuarantine(ctx, actor, rejectedEntryID, app.QuarantineDecisionRequest{Reason: "already rejected"}); !errors.Is(err, app.ErrNotFound) {
+		t.Fatalf("rejected quarantine entry must not be reusable, got %v", err)
+	}
+	assertPostgresAuditEvent(t, ctx, store, actor.TenantID, "quarantine.approved", "quarantine_entry", approvedEntryID)
+	assertPostgresAuditEvent(t, ctx, store, actor.TenantID, "quarantine.rejected", "quarantine_entry", rejectedEntryID)
+}
+
 func TestPostgresReplayApprovalAndFanoutControls(t *testing.T) {
 	ctx, store, actor := openPostgresIntegrationStore(t)
 	defer store.Close()
@@ -3247,6 +3413,17 @@ func findPostgresDeliveryForEvent(t *testing.T, deliveries []domain.Delivery, ev
 	return domain.Delivery{}
 }
 
+func findPostgresDeliveryItemForEvent(t *testing.T, deliveries []worker.DeliveryItem, eventID string) worker.DeliveryItem {
+	t.Helper()
+	for _, delivery := range deliveries {
+		if delivery.EventID == eventID {
+			return delivery
+		}
+	}
+	t.Fatalf("expected claimed delivery for event %s, got %+v", eventID, deliveries)
+	return worker.DeliveryItem{}
+}
+
 func findPostgresOutboxItem(t *testing.T, items []worker.OutboxItem, kind, resourceID string) worker.OutboxItem {
 	t.Helper()
 	for _, item := range items {
@@ -3276,6 +3453,33 @@ func findPostgresDeadLetterEntry(entries []map[string]any, deliveryID string) st
 			return id
 		}
 	}
+	return ""
+}
+
+func findPostgresDeadLetterEntries(t *testing.T, entries []map[string]any, deliveryIDs []string) []string {
+	t.Helper()
+	out := make([]string, 0, len(deliveryIDs))
+	for _, deliveryID := range deliveryIDs {
+		entryID := findPostgresDeadLetterEntry(entries, deliveryID)
+		if entryID == "" {
+			t.Fatalf("dead-letter entry for delivery %s not listed: %+v", deliveryID, entries)
+		}
+		out = append(out, entryID)
+	}
+	return out
+}
+
+func findPostgresQuarantineEntryForEvent(t *testing.T, entries []map[string]any, eventID, state string) string {
+	t.Helper()
+	for _, entry := range entries {
+		id, _ := entry["id"].(string)
+		entryEventID, _ := entry["event_id"].(string)
+		entryState, _ := entry["state"].(string)
+		if id != "" && entryEventID == eventID && entryState == state {
+			return id
+		}
+	}
+	t.Fatalf("quarantine entry for event %s state %s not listed: %+v", eventID, state, entries)
 	return ""
 }
 
