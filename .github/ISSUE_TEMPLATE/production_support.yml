@@ -1,0 +1,51 @@
+name: Production support question
+description: Ask about controlled self-hosted production or pilot operation without exposing sensitive data.
+title: "[support]: "
+labels:
+  - support
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Public support issues must be sanitized. Do not include API keys, webhook secrets, bearer tokens, session cookies, private keys, provider credentials, database URLs with passwords, raw signatures, raw payload bodies, customer data, or private live-provider proof artifacts.
+  - type: input
+    id: version
+    attributes:
+      label: Webhookery version or commit
+      placeholder: v0.1.0-rc1 or c43dc1d
+    validations:
+      required: true
+  - type: dropdown
+    id: deployment
+    attributes:
+      label: Deployment profile
+      options:
+        - docker compose
+        - kubernetes manifests
+        - helm
+        - terraform helm profile
+        - custom self-hosted
+    validations:
+      required: true
+  - type: textarea
+    id: question
+    attributes:
+      label: Question
+      description: Include sanitized topology, checks run, and current blocker.
+    validations:
+      required: true
+  - type: textarea
+    id: checks
+    attributes:
+      label: Checks run
+      placeholder: |
+        go run ./cmd/whcp doctor pilot --no-network: ...
+        make rc-check: ...
+        make live-postgres-check: ...
+  - type: checkboxes
+    id: no_secrets
+    attributes:
+      label: No-secrets confirmation
+      options:
+        - label: I confirm this public support issue contains no secrets, raw payload bodies, raw signatures, private customer data, or production database URLs.
+          required: true

@@ -11,6 +11,9 @@ owner document for a topic and linking to it from secondary docs.
 | `.initial_design.md` | Maintainers, architects, agents | Historical design input, product framing, architecture rationale, and intended direction. | Not proof of implemented behavior. Current code, contracts, migrations, and maintained docs override it. |
 | `openapi.yaml` | API consumers, SDK maintainers, reviewers | Canonical REST API contract. | API paths, schemas, status codes, auth schemes, and examples. |
 | `sdk/openapi.yaml` | SDK maintainers | SDK-ready OpenAPI copy. | Derived from `openapi.yaml`; keep aligned with `make sdk-generate` and `make sdk-check`. |
+| `docs/reference/openapi.md` | API consumers, SDK maintainers, reviewers | Rendered OpenAPI reference pointers, operation count, and generation rule. | Derived documentation. Regenerate with `make openapi-reference-generate` after `openapi.yaml` changes. |
+| `docs/openapi/index.html` | API consumers, evaluators | Static rendered API reference generated from `openapi.yaml`. | Derived documentation. Do not edit manually. |
+| `docs/reference/api-contract-matrix.md` | API consumers, SDK maintainers, reviewers | Generated operation matrix with method, path, operation ID, auth, request, and response metadata. | Derived documentation. `openapi.yaml` remains canonical. |
 | `cmd/`, `internal/`, `pkg/` | Developers, reviewers | Go implementation for processes, app logic, adapters, and public helpers. | Implemented behavior. Docs must not claim behavior not supported by these files. |
 | `migrations/` | DB reviewers, operators, developers | PostgreSQL schema evolution. | Database schema history and migration ordering. |
 | `docs/schema-migrations.md` | DB reviewers, operators, release managers | Migration runner behavior, ordering, evidence-authority tables, rollback stance, and restore compatibility review. | Human operations guide for schema changes. Exact DDL remains in `migrations/`. |
@@ -59,6 +62,10 @@ owner document for a topic and linking to it from secondary docs.
 | `docs/external-review-findings-template.md` | External reviewers, maintainers, release managers | Finding tracker template with severity, ownership, release-blocking decision, and closure fields. | Finding tracking template. Do not store exploit material or secrets. |
 | `docs/external-review-accepted-risks.md` | Maintainers, release managers | Accepted-risk registry and status vocabulary for release decisions. | Public sanitized registry. Release-specific evidence owns exact decision copies. |
 | `docs/release-evidence-template.md` | Release managers, security reviewers | Canonical release evidence checklist and template. | Release evidence requirements. Other docs should link here instead of duplicating gates. |
+| `docs/reference/release-evidence-index.md` | Release managers, evaluators, security reviewers | Public release artifact map, current release-candidate evidence, and verification notes. | Public release metadata. GitHub Releases remains external source of truth. |
+| `docs/reference/release-validation.md` | Release managers, maintainers, security reviewers | Release validation commands, metadata gates, and evidence to record. | Validation guide. Exact command composition remains in `Makefile`. |
+| `release/current.json` | Release managers, evaluators, security reviewers | Machine-readable pointer to the current public release candidate and next pilot package. | Public metadata pointer. It is not a release artifact itself. |
+| `docs/reference/source-of-truth.md` | Maintainers, reviewers, evaluators | Public source-of-truth map for release, API, workflow, deployment, and documentation artifacts. | Metadata index. It should link to canonical sources instead of replacing them. |
 | `docs/release-evidence-sample.md` | Release managers, evaluators, security reviewers | Public example of a completed release evidence packet. | Reader aid only. Keep required fields in `docs/release-evidence-template.md`. |
 | `docs/production-rc-checklist.md` | Release managers, operators | Ordered release-candidate readiness checklist for controlled self-hosted adoption. | RC checklist. Link to canonical operations docs instead of duplicating runbooks. |
 | `docs/releases/v0.1.0-rc1.md` | Evaluators, release managers, commercial reviewers | First release-candidate notes, implemented behavior, limitations, and validation commands. | Release-specific narrative. Keep canonical release gates in `docs/release-evidence-template.md`. |
@@ -66,6 +73,9 @@ owner document for a topic and linking to it from secondary docs.
 | `RELEASE_EVIDENCE.md` | Release readers | Short router to the release evidence template. | Current release evidence pointer, not a parallel checklist. |
 | `SECURITY.md` | Security researchers | Vulnerability reporting policy and sensitive-data handling. | Reporting process. Keep project architecture details elsewhere. |
 | `CONTRIBUTING.md` | Contributors | Contribution policy, checks, and sensitive-data rules. | Contribution entry point. Link to canonical docs for details. |
+| `CODE_OF_CONDUCT.md` | Contributors, issue reporters, maintainers | Public conduct baseline and reporting route. | Conduct policy. Security-sensitive reports still go through `SECURITY.md`. |
+| `CODEOWNERS` | Maintainers, reviewers | GitHub review ownership hints for sensitive repo areas. | Review routing metadata. It does not replace branch protection. |
+| `.github/pull_request_template.md` | Contributors and reviewers | PR checklist for security context, validation, and sensitive-data checks. | GitHub intake metadata. |
 | `GOVERNANCE.md` | Maintainers, contributors, commercial users | Decision model, maintainer role, and invariant governance. | Governance policy, not operations reference. |
 | `SUPPORT.md` | Users and customers | Public and private support paths. | Support policy and sensitive-data warning. |
 | `COMMERCIAL.md` | Commercial users | AGPL and commercial licensing boundary. | Business and licensing information. |

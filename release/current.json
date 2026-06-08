@@ -1,0 +1,26 @@
+{
+  "schema": "webhookery-current-release.v1",
+  "repository": "aatuh/webhookery",
+  "current_public_release": {
+    "tag": "v0.1.0-rc1",
+    "name": "Webhookery v0.1.0-rc1",
+    "status": "controlled self-hosted release candidate",
+    "published_at": "2026-05-27T13:51:41Z",
+    "release_date": "2026-05-27",
+    "release_url": "https://github.com/aatuh/webhookery/releases/tag/v0.1.0-rc1",
+    "source_commit": "51b455378b307914c71fff8b2e0bba81b9c6d435",
+    "release_workflow_run": "26996295151",
+    "release_notes_path": "docs/releases/v0.1.0-rc1.md",
+    "release_evidence_asset": "webhookery-v0.1.0-rc1-release-evidence.zip"
+  },
+  "next_pilot_package": {
+    "target": "v0.2.0-pilot",
+    "status": "repo-ready checklist; external pilot evidence still manual",
+    "checklist_path": "docs/releases/v0.2.0-pilot.md"
+  },
+  "notes": [
+    "GitHub Releases remains the external source of truth for published tags and assets.",
+    "Current release evidence uses local/fake provider and receiver acceptance gates unless separate live-provider proof records say otherwise.",
+    "Release evidence is not exactly-once delivery proof, provider-side event completeness proof, compliance certification, legal evidentiary certification, external timestamping, or live-provider acceptance."
+  ]
+}
