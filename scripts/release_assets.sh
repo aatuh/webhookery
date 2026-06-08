@@ -88,6 +88,9 @@ fi
 if [ -f image.spdx.json ]; then
   cp image.spdx.json "$out_dir/image.spdx.json"
 fi
+if [ -f coverage.out ]; then
+  cp coverage.out "$out_dir/coverage.out"
+fi
 if [ -f release-evidence/release-evidence.md ]; then
   cp release-evidence/release-evidence.md "$out_dir/release-evidence.md"
 fi
