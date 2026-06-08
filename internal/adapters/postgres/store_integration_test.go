@@ -4818,15 +4818,6 @@ func containsPostgresAlertRule(rules []domain.AlertRule, id, state string) bool 
 	return false
 }
 
-func containsPostgresMetricRollup(rollups []domain.MetricRollup, tenantID, metricName string) bool {
-	for _, rollup := range rollups {
-		if rollup.TenantID == tenantID && rollup.MetricName == metricName {
-			return true
-		}
-	}
-	return false
-}
-
 func containsPostgresMetricRollupValue(rollups []domain.MetricRollup, tenantID, metricName string, value float64) bool {
 	for _, rollup := range rollups {
 		if rollup.TenantID == tenantID && rollup.MetricName == metricName && rollup.Value == value {

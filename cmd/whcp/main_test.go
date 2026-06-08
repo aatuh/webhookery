@@ -508,43 +508,59 @@ func TestCLICommandValidationRejectsMissingRequiredArgsBeforeRequest(t *testing.
 			wantErr: "incident-id is required",
 		},
 		{
-			name:    "incident add-event missing event id",
-			run:     func() error { return runIncidents(append([]string{"add-event", "--incident-id", "inc_1", "--reason", "attach"}, common...)) },
+			name: "incident add-event missing event id",
+			run: func() error {
+				return runIncidents(append([]string{"add-event", "--incident-id", "inc_1", "--reason", "attach"}, common...))
+			},
 			wantErr: "incident-id and event-id are required",
 		},
 		{
-			name:    "incident remove-event missing event id",
-			run:     func() error { return runIncidents(append([]string{"remove-event", "--incident-id", "inc_1", "--reason", "detach"}, common...)) },
+			name: "incident remove-event missing event id",
+			run: func() error {
+				return runIncidents(append([]string{"remove-event", "--incident-id", "inc_1", "--reason", "detach"}, common...))
+			},
 			wantErr: "incident-id and event-id are required",
 		},
 		{
-			name:    "dead-letter release missing entry id",
-			run:     func() error { return runDeadLetter(append([]string{"release", "--reason-code", "incident_recovery", "--reason", "receiver fixed"}, common...)) },
+			name: "dead-letter release missing entry id",
+			run: func() error {
+				return runDeadLetter(append([]string{"release", "--reason-code", "incident_recovery", "--reason", "receiver fixed"}, common...))
+			},
 			wantErr: "entry-id is required",
 		},
 		{
-			name:    "dead-letter release missing reason code",
-			run:     func() error { return runDeadLetter(append([]string{"release", "--entry-id", "dlq_1", "--reason", "receiver fixed"}, common...)) },
+			name: "dead-letter release missing reason code",
+			run: func() error {
+				return runDeadLetter(append([]string{"release", "--entry-id", "dlq_1", "--reason", "receiver fixed"}, common...))
+			},
 			wantErr: "reason-code is required",
 		},
 		{
-			name:    "dead-letter bulk missing entry ids",
-			run:     func() error { return runDeadLetter(append([]string{"bulk-release", "--reason-code", "incident_recovery", "--reason", "receiver fixed"}, common...)) },
+			name: "dead-letter bulk missing entry ids",
+			run: func() error {
+				return runDeadLetter(append([]string{"bulk-release", "--reason-code", "incident_recovery", "--reason", "receiver fixed"}, common...))
+			},
 			wantErr: "entry-ids is required",
 		},
 		{
-			name:    "transformation version missing id",
-			run:     func() error { return runTransformations(append([]string{"version", "--operations-file", "ops.json"}, common...)) },
+			name: "transformation version missing id",
+			run: func() error {
+				return runTransformations(append([]string{"version", "--operations-file", "ops.json"}, common...))
+			},
 			wantErr: "transformation-id is required",
 		},
 		{
-			name:    "transformation activate missing version",
-			run:     func() error { return runTransformations(append([]string{"activate", "--transformation-id", "trn_1", "--reason", "publish"}, common...)) },
+			name: "transformation activate missing version",
+			run: func() error {
+				return runTransformations(append([]string{"activate", "--transformation-id", "trn_1", "--reason", "publish"}, common...))
+			},
 			wantErr: "transformation-id and version-id are required",
 		},
 		{
-			name:    "transformation dry run missing payload file",
-			run:     func() error { return runTransformations(append([]string{"dry-run", "--operations-file", "ops.json"}, common...)) },
+			name: "transformation dry run missing payload file",
+			run: func() error {
+				return runTransformations(append([]string{"dry-run", "--operations-file", "ops.json"}, common...))
+			},
 			wantErr: "payload-file is required",
 		},
 	}

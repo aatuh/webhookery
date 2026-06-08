@@ -151,7 +151,7 @@ func TestRunSurfacesWorkflowContractFailures(t *testing.T) {
 					_, _ = w.Write([]byte("evidence bundle"))
 				case r.Method == http.MethodPost && r.URL.Path == "/v1/audit-chain:verify":
 					valid := tt.mode != "invalid_audit_chain"
-					_, _ = w.Write([]byte(fmt.Sprintf(`{"tenant_id":"ten_1","valid":%t,"from_sequence":1,"to_sequence":1,"failures":[]}`, valid)))
+					_, _ = fmt.Fprintf(w, `{"tenant_id":"ten_1","valid":%t,"from_sequence":1,"to_sequence":1,"failures":[]}`, valid)
 				default:
 					t.Fatalf("unexpected request %s %s", r.Method, r.URL.Path)
 				}
