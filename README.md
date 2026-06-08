@@ -37,10 +37,10 @@ Start here if you are evaluating Webhookery:
 - Static product page: `site/index.html`
 - Rendered OpenAPI reference: `docs/openapi/index.html`
 - API contract matrix: `docs/reference/api-contract-matrix.md`
-- Release notes: `docs/releases/v0.1.0-rc1.md`
+- Release notes: `docs/releases/v0.2.0-pilot.md`
 - Release evidence index: `docs/reference/release-evidence-index.md`
 - Current public release metadata: `release/current.json`
-- v0.2 pilot checklist: `docs/releases/v0.2.0-pilot.md`
+- Previous release notes: `docs/releases/v0.1.0-rc1.md`
 - Pilot topology: `docs/pilot-topology.md`
 - Commercial evaluation: `docs/commercial-evaluation.md`
 
@@ -132,7 +132,7 @@ rc-check`, and restore drills when migrations or evidence storage are touched.
 Use `docs/observability.md` for starter Prometheus rules and dashboards. Do
 not use live provider or customer credentials for local acceptance gates.
 
-Release-candidate details live in `docs/releases/v0.1.0-rc1.md`. Release
+Pilot release details live in `docs/releases/v0.2.0-pilot.md`. Release
 evidence requirements live in `docs/release-evidence-template.md`, with a
 reader-facing example in `docs/release-evidence-sample.md`, the current public
 artifact map in `docs/reference/release-evidence-index.md`, and a concise
@@ -215,8 +215,8 @@ reviews, and support package boundaries are described in `COMMERCIAL.md`,
 - `docs/external-review-package.md`: external review package index.
 - `docs/release-evidence-template.md`: canonical release evidence template.
 - `docs/production-rc-checklist.md`: release-candidate readiness checklist.
+- `docs/releases/v0.2.0-pilot.md`: pilot prerelease notes.
 - `docs/releases/v0.1.0-rc1.md`: first release-candidate notes.
-- `docs/releases/v0.2.0-pilot.md`: pilot-readiness launch checklist.
 - `docs/demo-media-checklist.md`: safe screenshots/video checklist.
 - `docs/customer-discovery-notes-template.md`,
   `docs/pilot-feedback-template.md`, `docs/roadmap-intake-policy.md`, and
