@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
   id-token: write
   packages: write
 
@@ -169,12 +169,28 @@ jobs:
             printf '%s\n' "This evidence does not claim exactly-once delivery, provider-side event completeness, compliance certification, external timestamping, live-provider acceptance, or legal evidentiary certification."
           } > release-evidence/release-evidence.md
 
+      - name: Prepare release assets
+        run: scripts/release_assets.sh "${GITHUB_REF_NAME}" release-assets "${GITHUB_SHA}"
+
+      - name: Publish GitHub release assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if ! gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1; then
+            gh release create "${GITHUB_REF_NAME}" \
+              --title "Webhookery ${GITHUB_REF_NAME}" \
+              --notes-file release-assets/release-notes.md \
+              --prerelease
+          fi
+          gh release upload "${GITHUB_REF_NAME}" release-assets/* --clobber
+
       - name: Upload release evidence
         uses: actions/upload-artifact@v4
         with:
           name: release-evidence
           path: |
             release-evidence/
+            release-assets/
             tmp/perf-smoke/
             source.spdx.json
             image.spdx.json

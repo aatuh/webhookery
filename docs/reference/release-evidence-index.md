@@ -30,6 +30,32 @@ Current release metadata is tracked in `release/current.json`.
 | Provider proof manifest | `docs/provider-proof-manifest.json` | Freshness metadata for external/manual live-provider proof guides. |
 | Pilot checklist | `docs/releases/v0.2.0-pilot.md` | Next pilot-readiness checklist and remaining external/manual proof boundaries. |
 
+## Release Asset Set For New Tags
+
+The current release workflow prepares and uploads a fuller asset set for new
+`v*` tags through `scripts/release_assets.sh`.
+
+| Artifact | Created By | Verification Use |
+| --- | --- | --- |
+| `webhookery_<tag>_linux_amd64.tar.gz` | `scripts/release_assets.sh` | Operator install archive for Linux amd64. |
+| `webhookery_<tag>_linux_arm64.tar.gz` | `scripts/release_assets.sh` | Operator install archive for Linux arm64. |
+| `webhookery_<tag>_darwin_amd64.tar.gz` | `scripts/release_assets.sh` | Operator install archive for macOS amd64. |
+| `webhookery_<tag>_darwin_arm64.tar.gz` | `scripts/release_assets.sh` | Operator install archive for macOS arm64. |
+| `webhookery_<tag>_windows_amd64.zip` | `scripts/release_assets.sh` | Operator install archive for Windows amd64. |
+| `SHA256SUMS` | `scripts/release_assets.sh` | Verify every file in the release asset set. |
+| `openapi.yaml` | `scripts/release_assets.sh` | Preserve the exact public API contract shipped with the release. |
+| `openapi.sha256` | `scripts/release_assets.sh` | Verify the shipped OpenAPI contract. |
+| `migrations.sha256` | `scripts/release_assets.sh` | Verify migration files used for release review. |
+| `release-notes.md` | `scripts/release_assets.sh` | Preserve tag-specific release notes when available. |
+| `release-check-summary.txt` | `scripts/release_assets.sh` | Record the completed release gate family and non-claims. |
+| `webhookery-release-manifest.json` | `scripts/release_assets.sh` | List release files, hashes, sizes, source commit, and non-claims. |
+| `webhookery-release-provenance.json` | `scripts/release_assets.sh` | Record project release provenance metadata. It is not a SLSA level claim. |
+| `webhookery-release-provenance.intoto.jsonl` | `scripts/release_assets.sh` | In-toto-shaped metadata for release artifact review. It is not certification. |
+| `source.spdx.json` | release workflow, when available | Source SBOM from the release workflow. |
+| `image.spdx.json` | release workflow, when available | Image SBOM from the release workflow. |
+| `release-evidence.md` | release workflow, when available | Human release evidence summary. |
+| `perf-smoke/` | release workflow, when available | Sanitized local performance smoke evidence. |
+
 ## Public Verification
 
 To inspect the current public release asset from a clean checkout:
@@ -65,3 +91,13 @@ The release workflow records:
 Branch protection status, external review status, accepted-risk decisions,
 completed live-provider proof, and customer pilot outcomes are manual evidence
 items. Record them in the release evidence packet when they exist.
+
+To smoke-test the release asset script locally without cross-building every
+platform:
+
+```sh
+tmp_dir="$(mktemp -d)"
+WEBHOOKERY_RELEASE_ASSET_PLATFORMS=linux/amd64 \
+  scripts/release_assets.sh v0.0.0-local "$tmp_dir" "$(git rev-parse HEAD)"
+(cd "$tmp_dir" && sha256sum -c SHA256SUMS)
+```
