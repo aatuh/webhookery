@@ -186,7 +186,12 @@ jobs:
               --notes-file release-assets/release-notes.md \
               --prerelease
           fi
-          gh release upload "${GITHUB_REF_NAME}" release-assets/* --clobber
+          mapfile -d '' release_asset_files < <(find release-assets -maxdepth 1 -type f -print0 | sort -z)
+          if [ "${#release_asset_files[@]}" -eq 0 ]; then
+            printf '%s\n' "no release asset files found" >&2
+            exit 1
+          fi
+          gh release upload "${GITHUB_REF_NAME}" "${release_asset_files[@]}" --clobber
 
       - name: Upload release evidence
         uses: actions/upload-artifact@v4
