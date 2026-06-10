@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -90,6 +91,46 @@ func TestProviderBaseURLValidation(t *testing.T) {
 	}
 }
 
+func TestGitHubEvidenceHelpersPreservePayloadAndDropSensitiveHeaders(t *testing.T) {
+	detail := map[string]any{
+		"request": map[string]any{
+			"payload": map[string]any{
+				"action": "opened",
+				"number": 42,
+			},
+			"headers": map[string]any{
+				"X-GitHub-Event":        "pull_request",
+				"Authorization":         "Bearer secret-token",
+				"X-Hub-Signature":       "sha1=secret",
+				"X-Hub-Signature-256":   "sha256=secret",
+				"X-GitHub-Delivery":     "delivery-1",
+				"X-GitHub-Hook-ID":      123,
+				"X-GitHub-Hook-Install": "install-1",
+			},
+		},
+	}
+
+	payload := string(githubPayloadBytes(detail))
+	if !strings.Contains(payload, `"action":"opened"`) || !strings.Contains(payload, `"number":42`) {
+		t.Fatalf("payload evidence lost GitHub request payload: %s", payload)
+	}
+	headers := githubHeaders(detail)
+	for _, sensitive := range []string{"Authorization", "X-Hub-Signature", "X-Hub-Signature-256"} {
+		if _, ok := headers[sensitive]; ok {
+			t.Fatalf("sensitive GitHub header %q was preserved: %+v", sensitive, headers)
+		}
+	}
+	if headers["X-GitHub-Event"] != "pull_request" || headers["X-GitHub-Hook-ID"] != "123" {
+		t.Fatalf("safe GitHub headers were not preserved and stringified: %+v", headers)
+	}
+	if got := githubPayloadBytes(map[string]any{"request": map[string]any{}}); got != nil {
+		t.Fatalf("missing GitHub payload should return nil, got %s", got)
+	}
+	if got := githubPayloadBytes(map[string]any{"request": map[string]any{"payload": func() {}}}); got != nil {
+		t.Fatalf("unmarshalable GitHub payload should return nil, got %s", got)
+	}
+}
+
 func TestBuiltInAdaptersExposeCapabilitiesAndUnsupportedBehavior(t *testing.T) {
 	registry := BuiltInRegistry(nil)
 	stripe, ok := registry.Adapter(" STRIPE ")
@@ -152,6 +193,50 @@ func TestStripeScanParsesEventsAndSendsBearer(t *testing.T) {
 	}
 	if len(res.Objects) != 1 || res.Objects[0].ID != "evt_1" || !res.Objects[0].Recoverable {
 		t.Fatalf("unexpected objects: %+v", res.Objects)
+	}
+}
+
+func TestStripeValidateConnectionAndPaginationEvidence(t *testing.T) {
+	var validatePath string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		validatePath = r.URL.Path + "?" + r.URL.RawQuery
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data":     []map[string]any{{"id": "evt_cursor", "type": "invoice.created", "created": time.Now().Unix()}},
+			"has_more": true,
+		})
+	}))
+	defer server.Close()
+
+	conn := Connection{Credential: "sk_test_secret", Config: map[string]string{"base_url": server.URL, "allow_test_base_url": "true"}}
+	adapter := StripeAdapter{Client: server.Client()}
+	if err := adapter.ValidateConnection(context.Background(), conn); err != nil {
+		t.Fatal(err)
+	}
+	if validatePath != "/v1/events?limit=1" {
+		t.Fatalf("validate connection should request one event, got %s", validatePath)
+	}
+	res, err := adapter.Scan(context.Background(), ScanRequest{Connection: conn, Cursor: "evt_prev"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.NextCursor != "evt_cursor" || len(res.Objects) != 1 {
+		t.Fatalf("expected cursor evidence from paginated scan, got %+v", res)
+	}
+}
+
+func TestStripeScanAndLookupReportDecodeFailures(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{`))
+	}))
+	defer server.Close()
+
+	adapter := StripeAdapter{Client: server.Client()}
+	conn := Connection{Credential: "sk_test_secret", Config: map[string]string{"base_url": server.URL, "allow_test_base_url": "true"}}
+	if _, err := adapter.Scan(context.Background(), ScanRequest{Connection: conn}); !isProviderClass(err, ErrorRetryable) {
+		t.Fatalf("expected retryable decode failure from scan, got %v", err)
+	}
+	if _, _, err := adapter.Lookup(context.Background(), conn, "evt_bad"); !isProviderClass(err, ErrorRetryable) {
+		t.Fatalf("expected retryable decode failure from lookup, got %v", err)
 	}
 }
 
@@ -264,6 +349,72 @@ func TestGitHubRequiresRepositoryWebhookConfig(t *testing.T) {
 	}
 }
 
+func TestGitHubValidateConnectionAndDecodeFailures(t *testing.T) {
+	var validatePath string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		validatePath = r.URL.Path + "?" + r.URL.RawQuery
+		if strings.Contains(r.URL.Path, "/deliveries/") {
+			_, _ = w.Write([]byte(`{`))
+			return
+		}
+		_, _ = w.Write([]byte(`{`))
+	}))
+	defer server.Close()
+
+	conn := Connection{Credential: "ghp_secret", Config: map[string]string{"base_url": server.URL, "allow_test_base_url": "true", "owner": "o", "repo": "r", "hook_id": "42"}}
+	adapter := GitHubAdapter{Client: server.Client()}
+	if err := adapter.ValidateConnection(context.Background(), conn); err != nil {
+		t.Fatalf("validate connection should require a reachable provider endpoint, got %v", err)
+	}
+	if validatePath != "/repos/o/r/hooks/42/deliveries?per_page=1" {
+		t.Fatalf("validate connection should use repository webhook deliveries endpoint, got %s", validatePath)
+	}
+	if _, err := adapter.Scan(context.Background(), ScanRequest{Connection: conn}); !isProviderClass(err, ErrorRetryable) {
+		t.Fatalf("expected retryable GitHub scan decode failure, got %v", err)
+	}
+	if _, _, err := adapter.Lookup(context.Background(), conn, "100"); !isProviderClass(err, ErrorRetryable) {
+		t.Fatalf("expected retryable GitHub lookup decode failure, got %v", err)
+	}
+}
+
+func TestDoProviderRequestRecordsSafeEvidenceForNetworkHTTPAndReadFailures(t *testing.T) {
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, "https://api.stripe.com/v1/events", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	evidence, err := doProviderRequest(context.Background(), &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return nil, errors.New("dial failed with sk_live_secret")
+	})}, req, "Bearer sk_live_secret")
+	if !isProviderClass(err, ErrorRetryable) || evidence.Error != "provider request failed" || strings.Contains(err.Error(), "sk_live_secret") {
+		t.Fatalf("network failure should be retryable and redacted, evidence=%+v err=%v", evidence, err)
+	}
+
+	req, err = http.NewRequestWithContext(context.Background(), http.MethodGet, "https://api.stripe.com/v1/events", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	evidence, err = doProviderRequest(context.Background(), &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		if got := r.Header.Get("Authorization"); got != "Bearer token" {
+			t.Fatalf("authorization header=%q", got)
+		}
+		return &http.Response{StatusCode: http.StatusForbidden, Body: io.NopCloser(strings.NewReader("github_pat_secret"))}, nil
+	})}, req, "Bearer token")
+	if !isProviderClass(err, ErrorForbidden) || strings.Contains(err.Error(), "github_pat_secret") || evidence.StatusCode != http.StatusForbidden {
+		t.Fatalf("HTTP provider failure should preserve status and redact body, evidence=%+v err=%v", evidence, err)
+	}
+
+	req, err = http.NewRequestWithContext(context.Background(), http.MethodGet, "https://api.stripe.com/v1/events", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	evidence, err = doProviderRequest(context.Background(), &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: http.StatusOK, Body: errReadCloser{}}, nil
+	})}, req, "")
+	if !isProviderClass(err, ErrorRetryable) || evidence.Error != "provider response read failed" {
+		t.Fatalf("read failure should be retryable with evidence, evidence=%+v err=%v", evidence, err)
+	}
+}
+
 func TestProviderValueHelpersHandleCommonTypes(t *testing.T) {
 	if bearerHeader(Connection{}) != "" || bearerHeader(Connection{Credential: " token "}) != "Bearer token" {
 		t.Fatal("unexpected bearer header behavior")
@@ -285,6 +436,27 @@ func TestProviderValueHelpersHandleCommonTypes(t *testing.T) {
 	if intFromAny(json.Number("42")) != 42 || intFromAny(float64(42)) != 42 || intFromAny(42) != 42 || intFromAny("42") != 42 || intFromAny("bad") != 0 {
 		t.Fatal("intFromAny failed supported inputs")
 	}
+}
+
+func isProviderClass(err error, class string) bool {
+	var providerErr ProviderError
+	return errors.As(err, &providerErr) && providerErr.Class == class
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return f(req)
+}
+
+type errReadCloser struct{}
+
+func (errReadCloser) Read([]byte) (int, error) {
+	return 0, errors.New("read failed with sk_live_secret")
+}
+
+func (errReadCloser) Close() error {
+	return nil
 }
 
 func TestUnsupportedProvidersReportLimitations(t *testing.T) {

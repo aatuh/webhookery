@@ -253,6 +253,90 @@ func TestVerifyTarGzipBundleRejectsMissingManifestHash(t *testing.T) {
 	}
 }
 
+func TestVerifyTarGzipBundleRejectsMissingFilesSizeAndManifestHashMismatch(t *testing.T) {
+	bundle, err := BuildTarGzipBundle(Manifest{ExportID: "exp_1", TenantID: "ten_1", CreatedAt: time.Unix(123, 0).UTC()}, map[string][]byte{
+		"audit_events.jsonl": []byte("{\"id\":\"aud_1\"}\n"),
+		"timelines.jsonl":    []byte("{\"kind\":\"delivery\"}\n"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	files, err := readTarGzipFiles(bundle.Bytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var manifest Manifest
+	if err := json.Unmarshal(files["manifest.json"], &manifest); err != nil {
+		t.Fatal(err)
+	}
+	delete(files, "timelines.jsonl")
+	manifest.Hashes["audit_events.jsonl"] = "sha256:wrong-manifest-hash"
+	for i := range manifest.Files {
+		if manifest.Files[i].Name == "audit_events.jsonl" {
+			manifest.Files[i].SizeBytes++
+		}
+	}
+	files["manifest.json"], err = json.MarshalIndent(manifest, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	files["manifest.json"] = append(files["manifest.json"], '\n')
+
+	result, err := VerifyTarGzipBundle(tarGzipTestFiles(t, files))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"missing file: timelines.jsonl", "size mismatch: audit_events.jsonl", "manifest hash mismatch: audit_events.jsonl"} {
+		if !hasFailure(result.Failures, want) {
+			t.Fatalf("expected verification failure %q, got %+v", want, result.Failures)
+		}
+	}
+}
+
+func TestVerifyTarGzipBundleRejectsMalformedBundleManifestAndChainProof(t *testing.T) {
+	if _, err := VerifyTarGzipBundle([]byte("not-gzip")); err == nil {
+		t.Fatal("malformed gzip bundle should fail")
+	}
+
+	bundle, err := BuildTarGzipBundle(Manifest{ExportID: "exp_1", TenantID: "ten_1", CreatedAt: time.Unix(123, 0).UTC()}, map[string][]byte{
+		"audit_events.jsonl": []byte("{\"id\":\"aud_1\"}\n"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	files, err := readTarGzipFiles(bundle.Bytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	files["manifest.json"] = []byte("{")
+	if _, err := VerifyTarGzipBundle(tarGzipTestFiles(t, files)); err == nil {
+		t.Fatal("malformed manifest JSON should fail verification")
+	}
+
+	files, err = readTarGzipFiles(bundle.Bytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	files["audit_chain_proof.jsonl"] = []byte(`{"sequence":1,"previous_chain_hash":"bad","event_hash":"sha256:event","chain_hash":"sha256:wrong"}` + "\n")
+	result, err := VerifyTarGzipBundle(tarGzipTestFiles(t, files))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Valid || result.CheckedChainEntries != 1 {
+		t.Fatalf("invalid chain proof should be checked and fail, got %+v", result)
+	}
+	for _, want := range []string{"chain proof previous hash mismatch", "chain proof hash mismatch"} {
+		if !hasFailure(result.Failures, want) {
+			t.Fatalf("expected chain proof failure %q, got %+v", want, result.Failures)
+		}
+	}
+
+	files["audit_chain_proof.jsonl"] = []byte("{")
+	if _, err := VerifyTarGzipBundle(tarGzipTestFiles(t, files)); err == nil {
+		t.Fatal("malformed audit-chain proof JSON should fail verification")
+	}
+}
+
 func TestVerifyTarGzipBundleToleratesUnknownOptionalManifestField(t *testing.T) {
 	bundle, err := BuildTarGzipBundle(Manifest{ExportID: "exp_1", TenantID: "ten_1", CreatedAt: time.Unix(123, 0).UTC()}, map[string][]byte{
 		"audit_events.jsonl": []byte("{\"id\":\"aud_1\"}\n"),
@@ -435,6 +519,36 @@ func TestReadTarGzipFilesRejectsUnsafeEntryNames(t *testing.T) {
 	}
 	if _, err := readTarGzipFiles(out.Bytes()); err == nil || !strings.Contains(err.Error(), "unsafe tar entry name") {
 		t.Fatalf("expected unsafe tar entry rejection, got %v", err)
+	}
+}
+
+func TestReadTarGzipFilesSkipsDirectoriesAndWriteTarFileRequiresName(t *testing.T) {
+	var out bytes.Buffer
+	gz := gzip.NewWriter(&out)
+	tw := tar.NewWriter(gz)
+	if err := tw.WriteHeader(&tar.Header{Name: "nested", Typeflag: tar.TypeDir}); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeTarFile(tw, "nested/file.txt", []byte("ok")); err != nil {
+		t.Fatal(err)
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := gz.Close(); err != nil {
+		t.Fatal(err)
+	}
+	files, err := readTarGzipFiles(out.Bytes())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(files) != 1 || string(files["nested/file.txt"]) != "ok" {
+		t.Fatalf("expected directory entries to be skipped, got %+v", files)
+	}
+
+	var empty bytes.Buffer
+	if err := writeTarFile(tar.NewWriter(&empty), "", []byte("bad")); err == nil {
+		t.Fatal("empty tar entry name should be rejected")
 	}
 }
 

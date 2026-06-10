@@ -19,3 +19,18 @@ func TestExportKeySanitizesSegments(t *testing.T) {
 		t.Fatalf("key=%q want %q", key, want)
 	}
 }
+
+func TestAuditAnchorKeySanitizesSegments(t *testing.T) {
+	key := AuditAnchorKey(" ten//a ", "../anchor/1")
+
+	want := "audit-chain-anchors/ten_a/anchor_1.json"
+	if key != want {
+		t.Fatalf("key=%q want %q", key, want)
+	}
+}
+
+func TestSafeSegmentDefaultsEmptyUnsafeValues(t *testing.T) {
+	if got := safeSegment(" ../.. "); got != "unknown" {
+		t.Fatalf("empty unsafe segment should default to unknown, got %q", got)
+	}
+}

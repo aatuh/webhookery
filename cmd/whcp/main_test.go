@@ -25,6 +25,7 @@ import (
 	"testing"
 	"time"
 
+	pgadapter "webhookery/internal/adapters/postgres"
 	apppkg "webhookery/internal/app"
 	"webhookery/internal/authz"
 	"webhookery/internal/config"
@@ -100,6 +101,33 @@ func TestRunDispatchesSubcommandUsage(t *testing.T) {
 				t.Fatalf("expected %s usage, got %v", command, err)
 			}
 		})
+	}
+}
+
+func TestRunAdminHashKeyPrintsTokenHash(t *testing.T) {
+	oldStdout := os.Stdout
+	reader, writer, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Stdout = writer
+	defer func() { os.Stdout = oldStdout }()
+
+	if err := runAdmin([]string{"hash-key", "whkey_test"}); err != nil {
+		t.Fatal(err)
+	}
+	_ = writer.Close()
+	body, err := io.ReadAll(reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := strings.TrimSpace(string(body))
+	want := apppkg.HashToken("whkey_test")
+	if got != want {
+		t.Fatalf("hash output=%q want %q", got, want)
+	}
+	if strings.Contains(got, "whkey_test") {
+		t.Fatalf("hash output leaked raw API key: %q", got)
 	}
 }
 
@@ -336,6 +364,16 @@ func TestRunEvidenceViewReadsExplicitBundleFile(t *testing.T) {
 	}
 	if view.Manifest.ExportID != "exp_1" || view.Manifest.TenantIDHash == "" || !view.Verification.Valid {
 		t.Fatalf("unexpected evidence view: %+v", view)
+	}
+}
+
+func TestRunEvidenceRejectsUnknownSubcommandBeforeReadingFiles(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "bundle.tar.gz")
+	if err := runEvidence([]string{"verify", "--file", path}); err == nil || !strings.Contains(err.Error(), "usage: whcp evidence <view>") {
+		t.Fatalf("expected evidence usage error, got %v", err)
+	}
+	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("unknown evidence subcommand should not create or read files, stat err=%v", err)
 	}
 }
 
@@ -690,6 +728,110 @@ func TestGetJSONDecodeProblemErrorRedactsBodyDetails(t *testing.T) {
 		if strings.Contains(got, forbidden) {
 			t.Fatalf("error %q leaked %q", got, forbidden)
 		}
+	}
+}
+
+func TestExportRawPayloadValidatesRequestsAndWritesPrivateFile(t *testing.T) {
+	if err := exportRawPayload("https://api.example", "whkey", "", "support", "out.bin"); err == nil || !strings.Contains(err.Error(), "event-id is required") {
+		t.Fatalf("expected missing event validation, got %v", err)
+	}
+	if err := exportRawPayload("https://api.example", "whkey", "evt_1", " ", "out.bin"); err == nil || !strings.Contains(err.Error(), "reason is required") {
+		t.Fatalf("expected missing reason validation, got %v", err)
+	}
+
+	var gotAuth, gotReason string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/v1/events/evt_1/raw" {
+			t.Fatalf("unexpected raw payload request %s %s", r.Method, r.URL.Path)
+		}
+		gotAuth = r.Header.Get("Authorization")
+		gotReason = r.URL.Query().Get("reason")
+		_ = json.NewEncoder(w).Encode(map[string]string{"body_base64": base64.StdEncoding.EncodeToString([]byte("raw-payload"))})
+	}))
+	defer server.Close()
+
+	output := filepath.Join(t.TempDir(), "raw.bin")
+	if err := exportRawPayload(server.URL, "whkey_raw", "evt_1", "customer support", output); err != nil {
+		t.Fatal(err)
+	}
+	if gotAuth != "Bearer whkey_raw" || gotReason != "customer support" {
+		t.Fatalf("raw payload request lost auth or reason: auth=%q reason=%q", gotAuth, gotReason)
+	}
+	body, err := os.ReadFile(output)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(body) != "raw-payload" {
+		t.Fatalf("unexpected raw payload file body %q", body)
+	}
+	info, err := os.Stat(output)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := info.Mode().Perm(); got != 0o600 {
+		t.Fatalf("raw payload export permissions=%o want 0600", got)
+	}
+}
+
+func TestExportRawPayloadHandlesHTTPAndDecodeFailures(t *testing.T) {
+	invalidBase64 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]string{"body_base64": "not base64"})
+	}))
+	defer invalidBase64.Close()
+	if err := exportRawPayload(invalidBase64.URL, "whkey", "evt_1", "support", filepath.Join(t.TempDir(), "raw.bin")); err == nil {
+		t.Fatal("expected invalid base64 response to fail")
+	}
+
+	forbidden := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+		_ = json.NewEncoder(w).Encode(map[string]string{"body_base64": ""})
+	}))
+	defer forbidden.Close()
+	if err := exportRawPayload(forbidden.URL, "whkey", "evt_1", "support", filepath.Join(t.TempDir(), "raw.bin")); err == nil || !strings.Contains(err.Error(), "status 403") {
+		t.Fatalf("expected non-2xx raw export failure, got %v", err)
+	}
+
+	malformed := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("{"))
+	}))
+	defer malformed.Close()
+	if err := exportRawPayload(malformed.URL, "whkey", "evt_1", "support", filepath.Join(t.TempDir(), "raw.bin")); err == nil {
+		t.Fatal("expected malformed JSON response to fail")
+	}
+}
+
+func TestDownloadIncidentReportValidatesFormatAndWritesOutputFile(t *testing.T) {
+	if err := downloadIncidentReport("https://api.example", "whkey", "", "markdown", "report.md"); err == nil || !strings.Contains(err.Error(), "incident-id is required") {
+		t.Fatalf("expected missing incident validation, got %v", err)
+	}
+	if err := downloadIncidentReport("https://api.example", "whkey", "inc_1", "pdf", "report.pdf"); err == nil || !strings.Contains(err.Error(), "format must be markdown or json") {
+		t.Fatalf("expected format validation, got %v", err)
+	}
+
+	var gotAuth, gotFormat string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/v1/incidents/inc_1/report" {
+			t.Fatalf("unexpected incident report request %s %s", r.Method, r.URL.Path)
+		}
+		gotAuth = r.Header.Get("Authorization")
+		gotFormat = r.URL.Query().Get("format")
+		_, _ = w.Write([]byte("# Incident\n"))
+	}))
+	defer server.Close()
+
+	output := filepath.Join(t.TempDir(), "incident.md")
+	if err := downloadIncidentReport(server.URL, "whkey_incident", "inc_1", "", output); err != nil {
+		t.Fatal(err)
+	}
+	if gotAuth != "Bearer whkey_incident" || gotFormat != "markdown" {
+		t.Fatalf("incident report request lost auth or default format: auth=%q format=%q", gotAuth, gotFormat)
+	}
+	body, err := os.ReadFile(output)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(body) != "# Incident\n" {
+		t.Fatalf("unexpected incident report body %q", body)
 	}
 }
 
@@ -1988,6 +2130,16 @@ func TestDownloadIncidentReportCanWriteToStdout(t *testing.T) {
 	}
 }
 
+func TestWriteHTTPResponsePropagatesReadError(t *testing.T) {
+	err := writeHTTPResponse(&http.Response{
+		StatusCode: http.StatusOK,
+		Body:       failingReadCloser{},
+	})
+	if err == nil || !strings.Contains(err.Error(), "forced read failure") {
+		t.Fatalf("expected response body read failure, got %v", err)
+	}
+}
+
 func TestDownloadAuditExportWritesPrivateFile(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/v1/audit-exports/exp_1:download" {
@@ -2237,6 +2389,60 @@ func TestExportRawPayloadRequiresReasonBeforeRequest(t *testing.T) {
 	}
 	if _, statErr := os.Stat(output); !errors.Is(statErr, os.ErrNotExist) {
 		t.Fatalf("raw output should not be created without a reason, stat err=%v", statErr)
+	}
+}
+
+func TestRunTransformationsDryRunWritesTransformedPayload(t *testing.T) {
+	dir := t.TempDir()
+	operationsPath := filepath.Join(dir, "ops.json")
+	payloadPath := filepath.Join(dir, "payload.json")
+	if err := os.WriteFile(operationsPath, []byte(`[{"op":"redact","path":"/data/email"},{"op":"drop","path":"/metadata/debug"}]`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(payloadPath, []byte(`{"data":{"email":"buyer@example.com","amount":4200},"metadata":{"debug":"secret","source":"stripe"}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	oldStdout := os.Stdout
+	reader, writer, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Stdout = writer
+	defer func() { os.Stdout = oldStdout }()
+
+	err = runTransformations([]string{"dry-run", "--operations-file", operationsPath, "--payload-file", payloadPath})
+	_ = writer.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := io.ReadAll(reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := strings.TrimSpace(string(body))
+	want := `{"data":{"amount":4200,"email":"[REDACTED]"},"metadata":{"source":"stripe"}}`
+	if got != want {
+		t.Fatalf("dry-run output=%s want %s", got, want)
+	}
+	if strings.Contains(got, "buyer@example.com") || strings.Contains(got, "secret") {
+		t.Fatalf("dry-run output leaked data that should have been transformed: %s", got)
+	}
+}
+
+func TestRunTransformationsDryRunRejectsInvalidOperations(t *testing.T) {
+	dir := t.TempDir()
+	operationsPath := filepath.Join(dir, "ops.json")
+	payloadPath := filepath.Join(dir, "payload.json")
+	if err := os.WriteFile(operationsPath, []byte(`[{"op":"eval","path":"/data"}]`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(payloadPath, []byte(`{"data":{"ok":true}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := runTransformations([]string{"dry-run", "--operations-file", operationsPath, "--payload-file", payloadPath}); err == nil {
+		t.Fatal("expected invalid transformation operation to fail")
 	}
 }
 
@@ -3160,6 +3366,33 @@ func TestCheckPilotReceiverRejectsUnsafeURLBeforeNetwork(t *testing.T) {
 	}
 }
 
+func TestCheckPilotDatabaseReportsLiveMigrationAndQueueStatus(t *testing.T) {
+	databaseURL := os.Getenv("WEBHOOKERY_TEST_DATABASE_URL")
+	if strings.TrimSpace(databaseURL) == "" {
+		t.Skip("WEBHOOKERY_TEST_DATABASE_URL is not set")
+	}
+	t.Chdir("../..")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := pgadapter.MigrateUp(ctx, databaseURL, "migrations"); err != nil {
+		t.Fatal(err)
+	}
+	status, err := checkPilotDatabase(ctx, databaseURL, 5*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.ExpectedMigrations == 0 {
+		t.Fatal("expected migration files to be counted")
+	}
+	if status.AppliedMigrations < status.ExpectedMigrations {
+		t.Fatalf("applied migrations=%d expected at least %d", status.AppliedMigrations, status.ExpectedMigrations)
+	}
+	if status.PendingOutbox < 0 || status.InProgressOutbox < 0 || status.RetentionPolicies < 0 || status.AuditChainEntries < 0 {
+		t.Fatalf("database status contained impossible negative counts: %+v", status)
+	}
+}
+
 func TestRunPilotDoctorNoNetworkUsesEnvironmentAndRedactsStdout(t *testing.T) {
 	t.Setenv("WEBHOOKERY_ENVIRONMENT", "production")
 	t.Setenv("WEBHOOKERY_DATABASE_URL", "postgres://webhookery:secret-db-password@db.internal/webhookery?sslmode=require")
@@ -3209,4 +3442,14 @@ func requireDoctorFinding(t *testing.T, findings []doctorFinding, check string) 
 	}
 	t.Fatalf("missing doctor finding %q in %+v", check, findings)
 	return doctorFinding{}
+}
+
+type failingReadCloser struct{}
+
+func (failingReadCloser) Read([]byte) (int, error) {
+	return 0, errors.New("forced read failure")
+}
+
+func (failingReadCloser) Close() error {
+	return nil
 }

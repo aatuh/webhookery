@@ -7,7 +7,9 @@
 !.api.env.example
 !.test.env.example
 
-coverage.out
+coverage*.out
+*.cover
+*.coverprofile
 bin/
 dist/
 tmp/

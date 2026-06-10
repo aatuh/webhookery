@@ -4,11 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
 	"webhookery/internal/domain"
 	"webhookery/internal/reconcile"
+	"webhookery/internal/worker"
 )
 
 func TestNewReconciliationServiceDefaultsRegistry(t *testing.T) {
@@ -110,6 +112,58 @@ func TestReconciliationServiceUnsupportedScanRecordsUnrecoverableItem(t *testing
 	}
 }
 
+func TestReconciliationServiceFailsUnsupportedProviderWithoutStarting(t *testing.T) {
+	store := newFakeReconciliationStore()
+	store.work.Job = domain.ReconciliationJob{ID: "rec_unsupported", TenantID: "ten_1", ConnectionID: "pcn_1", Provider: "unknown", State: domain.ReconciliationJobStateScheduled}
+	store.work.Connection = domain.ProviderConnection{ID: "pcn_1", TenantID: "ten_1", Provider: "unknown", Config: map[string]string{}}
+	service := NewReconciliationService(store, fakeReconciliationRegistry{})
+
+	if err := service.RunReconciliationJob(context.Background(), "ten_1", "rec_unsupported"); err != nil {
+		t.Fatal(err)
+	}
+	if store.started {
+		t.Fatal("unsupported provider must fail before starting job work")
+	}
+	if store.failed != reconcile.ErrorUnsupported {
+		t.Fatalf("expected unsupported provider failure class, got %q", store.failed)
+	}
+}
+
+func TestReconciliationServiceDefersWhenJobLeaseIsUnavailable(t *testing.T) {
+	store := newFakeReconciliationStore()
+	store.startAcquired = false
+	store.work.Job = domain.ReconciliationJob{ID: "rec_deferred", TenantID: "ten_1", ConnectionID: "pcn_1", Provider: "stripe", State: domain.ReconciliationJobStateScheduled}
+	store.work.Connection = domain.ProviderConnection{ID: "pcn_1", TenantID: "ten_1", Provider: "stripe", Config: map[string]string{}}
+	adapter := &fakeReconciliationAdapter{capabilities: reconcile.Capabilities{Provider: "stripe", CanScanEvents: true}}
+	service := NewReconciliationService(store, fakeReconciliationRegistry{"stripe": adapter})
+
+	if err := service.RunReconciliationJob(context.Background(), "ten_1", "rec_deferred"); !errors.Is(err, worker.ErrDeferred) {
+		t.Fatalf("expected deferred work when reconciliation lease is unavailable, got %v", err)
+	}
+	if adapter.scanCalled || store.completed || store.failed != "" {
+		t.Fatalf("deferred job should not scan, complete, or fail: scan=%v completed=%v failed=%q", adapter.scanCalled, store.completed, store.failed)
+	}
+}
+
+func TestReconciliationServiceIgnoresTerminalJobs(t *testing.T) {
+	for _, state := range []string{domain.ReconciliationJobStateCanceled, domain.ReconciliationJobStateCompleted} {
+		t.Run(state, func(t *testing.T) {
+			store := newFakeReconciliationStore()
+			store.work.Job = domain.ReconciliationJob{ID: "rec_terminal", TenantID: "ten_1", ConnectionID: "pcn_1", Provider: "stripe", State: state}
+			store.work.Connection = domain.ProviderConnection{ID: "pcn_1", TenantID: "ten_1", Provider: "stripe", Config: map[string]string{}}
+			adapter := &fakeReconciliationAdapter{capabilities: reconcile.Capabilities{Provider: "stripe", CanScanEvents: true}}
+			service := NewReconciliationService(store, fakeReconciliationRegistry{"stripe": adapter})
+
+			if err := service.RunReconciliationJob(context.Background(), "ten_1", "rec_terminal"); err != nil {
+				t.Fatal(err)
+			}
+			if store.started || adapter.scanCalled {
+				t.Fatalf("terminal job should not start or scan: started=%v scan=%v", store.started, adapter.scanCalled)
+			}
+		})
+	}
+}
+
 func TestReconciliationServiceDryRunCountsProviderObjects(t *testing.T) {
 	store := newFakeReconciliationStore()
 	store.connection = domain.ProviderConnection{ID: "pcn_1", TenantID: "ten_1", Provider: "stripe", CredentialType: "api_key", Config: map[string]string{}}
@@ -130,6 +184,91 @@ func TestReconciliationServiceDryRunCountsProviderObjects(t *testing.T) {
 	}
 	if job.TotalItems != 2 || job.MatchedItems != 1 || job.MissingItems != 1 || job.RedeliveredItems != 1 {
 		t.Fatalf("unexpected dry-run counts: %+v", job)
+	}
+}
+
+func TestReconciliationServiceDryRunReportsUnsupportedAndProviderFailure(t *testing.T) {
+	unsupportedStore := newFakeReconciliationStore()
+	unsupportedStore.connection = domain.ProviderConnection{ID: "pcn_unsupported", TenantID: "ten_1", Provider: "slack", Config: map[string]string{}}
+	unsupportedAdapter := &fakeReconciliationAdapter{capabilities: reconcile.Capabilities{Provider: "slack", CanScanEvents: false, Limitations: []string{"provider API cannot replay webhooks"}}}
+	service := NewReconciliationService(unsupportedStore, fakeReconciliationRegistry{"slack": unsupportedAdapter})
+
+	job, err := service.DryRunReconciliation(context.Background(), "ten_1", ReconciliationJobRequest{ConnectionID: "pcn_unsupported"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if unsupportedAdapter.scanCalled || job.TotalItems != 1 || job.UnrecoverableItems != 1 || !strings.Contains(job.Error, "cannot replay") {
+		t.Fatalf("unsupported dry run should report limitation without scanning: job=%+v scan=%v", job, unsupportedAdapter.scanCalled)
+	}
+
+	failedStore := newFakeReconciliationStore()
+	failedStore.connection = domain.ProviderConnection{ID: "pcn_failed", TenantID: "ten_1", Provider: "stripe", Config: map[string]string{}}
+	failedAdapter := &fakeReconciliationAdapter{
+		capabilities: reconcile.Capabilities{Provider: "stripe", CanScanEvents: true},
+		scanErr:      reconcile.ProviderError{Class: reconcile.ErrorRateLimited, Message: "rate limited with sk_live_secret"},
+	}
+	service = NewReconciliationService(failedStore, fakeReconciliationRegistry{"stripe": failedAdapter})
+
+	job, err = service.DryRunReconciliation(context.Background(), "ten_1", ReconciliationJobRequest{ConnectionID: "pcn_failed"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if job.State != domain.ReconciliationJobStateFailed || job.Error != reconcile.ErrorRateLimited {
+		t.Fatalf("provider dry-run failure should persist class without secret detail: %+v", job)
+	}
+}
+
+func TestReconciliationServiceRecordsUnrecoverableMissingObject(t *testing.T) {
+	store := newFakeReconciliationStore()
+	store.work.Job = domain.ReconciliationJob{
+		ID: "rec_missing", TenantID: "ten_1", ConnectionID: "pcn_1", Provider: "stripe", State: domain.ReconciliationJobStateScheduled,
+		CaptureMissing: true,
+	}
+	store.work.Connection = domain.ProviderConnection{ID: "pcn_1", TenantID: "ten_1", Provider: "stripe", CredentialType: "api_key", Config: map[string]string{}}
+	adapter := &fakeReconciliationAdapter{
+		capabilities: reconcile.Capabilities{Provider: "stripe", CanScanEvents: true},
+		scanResult: reconcile.ScanResult{Objects: []reconcile.ProviderObject{{
+			ID: "evt_missing", ObjectType: "event", Recoverable: false,
+		}}},
+		lookupErr: reconcile.ErrUnsupported,
+	}
+	service := NewReconciliationService(store, fakeReconciliationRegistry{"stripe": adapter})
+
+	if err := service.RunReconciliationJob(context.Background(), "ten_1", "rec_missing"); err != nil {
+		t.Fatal(err)
+	}
+	if len(store.captures) != 0 {
+		t.Fatalf("unrecoverable provider object must not be captured: %+v", store.captures)
+	}
+	if len(store.items) != 1 || store.items[0].Outcome != domain.ReconciliationOutcomeUnrecoverable || !strings.Contains(store.items[0].Error, "does not expose") {
+		t.Fatalf("expected unrecoverable reconciliation item, got %+v", store.items)
+	}
+}
+
+func TestReconciliationServiceFailsItemWhenRedeliveryRequestFails(t *testing.T) {
+	store := newFakeReconciliationStore()
+	store.work.Job = domain.ReconciliationJob{
+		ID: "rec_redelivery", TenantID: "ten_1", ConnectionID: "pcn_1", Provider: "github", State: domain.ReconciliationJobStateScheduled,
+		RedeliverFailed: true,
+	}
+	store.work.Connection = domain.ProviderConnection{ID: "pcn_1", TenantID: "ten_1", Provider: "github", CredentialType: "api_key", Config: map[string]string{}}
+	store.localEvents["evt_provider"] = "evt_local"
+	adapter := &fakeReconciliationAdapter{
+		capabilities:       reconcile.Capabilities{Provider: "github", CanScanEvents: true},
+		scanResult:         reconcile.ScanResult{Objects: []reconcile.ProviderObject{{ID: "evt_provider", ObjectType: "delivery", Failed: true, Redeliverable: true}}},
+		redeliveryEvidence: []reconcile.Evidence{{Method: "POST", URL: "https://api.github.com/redeliver", StatusCode: 403}},
+		redeliveryErr:      reconcile.ProviderError{Class: reconcile.ErrorForbidden, Message: "forbidden github_pat_secret"},
+	}
+	service := NewReconciliationService(store, fakeReconciliationRegistry{"github": adapter})
+
+	if err := service.RunReconciliationJob(context.Background(), "ten_1", "rec_redelivery"); err != nil {
+		t.Fatal(err)
+	}
+	if len(store.items) != 1 || store.items[0].Outcome != domain.ReconciliationOutcomeFailed || store.items[0].Error != reconcile.ErrorForbidden {
+		t.Fatalf("expected failed redelivery item with redacted provider class, got %+v", store.items)
+	}
+	if len(store.evidence) != 1 || store.items[0].EvidenceID == "" {
+		t.Fatalf("redelivery failure evidence should stay linked to item: evidence=%+v item=%+v", store.evidence, store.items)
 	}
 }
 
@@ -187,21 +326,24 @@ func (f *fakeReconciliationAdapter) RequestRedelivery(_ context.Context, _ recon
 }
 
 type fakeReconciliationStore struct {
-	connection  domain.ProviderConnection
-	credential  string
-	work        ReconciliationWork
-	started     bool
-	completed   bool
-	failed      string
-	cursor      string
-	localEvents map[string]string
-	evidence    []ProviderAPIEvidenceRecord
-	captures    []RecoveredProviderEventCapture
-	items       []ReconciliationItemRecord
+	connection    domain.ProviderConnection
+	credential    string
+	work          ReconciliationWork
+	workErr       error
+	startErr      error
+	startAcquired bool
+	started       bool
+	completed     bool
+	failed        string
+	cursor        string
+	localEvents   map[string]string
+	evidence      []ProviderAPIEvidenceRecord
+	captures      []RecoveredProviderEventCapture
+	items         []ReconciliationItemRecord
 }
 
 func newFakeReconciliationStore() *fakeReconciliationStore {
-	return &fakeReconciliationStore{localEvents: map[string]string{}}
+	return &fakeReconciliationStore{startAcquired: true, localEvents: map[string]string{}}
 }
 
 func (f *fakeReconciliationStore) GetReconciliationConnection(context.Context, string, string) (domain.ProviderConnection, string, error) {
@@ -209,12 +351,12 @@ func (f *fakeReconciliationStore) GetReconciliationConnection(context.Context, s
 }
 
 func (f *fakeReconciliationStore) GetReconciliationWork(context.Context, string, string) (ReconciliationWork, error) {
-	return f.work, nil
+	return f.work, f.workErr
 }
 
 func (f *fakeReconciliationStore) StartReconciliationJob(context.Context, string, string) (bool, error) {
 	f.started = true
-	return true, nil
+	return f.startAcquired, f.startErr
 }
 
 func (f *fakeReconciliationStore) RecordProviderAPIEvidence(_ context.Context, record ProviderAPIEvidenceRecord) (string, error) {

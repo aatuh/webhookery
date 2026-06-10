@@ -2938,6 +2938,79 @@ func TestPostgresAuditChainAndRetentionEvidenceLifecycle(t *testing.T) {
 	assertPostgresAuditEvent(t, ctx, store, actor.TenantID, "retention_policy.updated", "retention_policy", policy.ID)
 }
 
+func TestPostgresAuditChainVerificationDetectsTampering(t *testing.T) {
+	ctx, store, actor := openPostgresIntegrationStore(t)
+	defer store.Close()
+
+	suffix := strings.ReplaceAll(time.Now().UTC().Format("150405.000000000"), ".", "_")
+	if _, err := store.CreateAuditChainAnchor(ctx, "ten_it_empty_audit_"+suffix, actor.ID, app.AuditChainAnchorRequest{Reason: "empty tenant checkpoint"}); !errors.Is(err, app.ErrInvalidInput) {
+		t.Fatalf("empty tenant audit anchor must be rejected as unverifiable, got %v", err)
+	}
+
+	_, err := store.CreateAPIKey(ctx, app.APIKeyCreateInput{
+		Key: domain.APIKey{
+			TenantID: actor.TenantID,
+			UserID:   actor.ID,
+			Name:     "audit tamper probe",
+			Prefix:   "it-audit",
+			Last4:    "tamr",
+			Hash:     app.HashToken("audit-tamper-" + suffix),
+			Scopes:   []string{"events:read"},
+			State:    domain.StateActive,
+		},
+		Role:    authz.RoleOperator,
+		ActorID: actor.ID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	head, err := store.GetAuditChainHead(ctx, actor.TenantID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if head.Sequence < 2 {
+		t.Fatalf("expected at least two audit-chain entries after setup, got %+v", head)
+	}
+	tail, err := store.VerifyAuditChain(ctx, actor.TenantID, app.AuditChainVerifyRequest{FromSequence: head.Sequence, ToSequence: head.Sequence})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !tail.Valid || tail.CheckedEntries != 1 || tail.StartChainHash == "" {
+		t.Fatalf("expected valid tail verification with previous hash evidence, got %+v", tail)
+	}
+
+	var auditEventID string
+	if err := store.pool.QueryRow(ctx, `
+		SELECT audit_event_id
+		FROM audit_chain_entries
+		WHERE tenant_id=$1 AND sequence=$2`, actor.TenantID, head.Sequence).Scan(&auditEventID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.pool.Exec(ctx, `
+		UPDATE audit_chain_entries
+		SET canonicalization_version='audit-chain-v0',
+		    event_hash='sha256:tampered-event',
+		    previous_chain_hash='sha256:wrong-previous',
+		    chain_hash='sha256:wrong-chain'
+		WHERE tenant_id=$1 AND sequence=$2`, actor.TenantID, head.Sequence); err != nil {
+		t.Fatal(err)
+	}
+
+	verification, err := store.VerifyAuditChain(ctx, actor.TenantID, app.AuditChainVerifyRequest{FromSequence: head.Sequence, ToSequence: head.Sequence})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if verification.Valid || verification.CheckedEntries != 1 {
+		t.Fatalf("tampered audit-chain entry should fail verification, got %+v", verification)
+	}
+	for _, kind := range []string{"unsupported_canonicalization_version", "previous_hash_mismatch", "event_hash_mismatch", "chain_hash_mismatch"} {
+		if !containsPostgresAuditChainFailureKind(verification.Failures, kind, auditEventID) {
+			t.Fatalf("tampered verification missing %s for audit event %s: %+v", kind, auditEventID, verification.Failures)
+		}
+	}
+}
+
 func TestPostgresProviderAdapterRegistryLifecycle(t *testing.T) {
 	ctx, store, actor := openPostgresIntegrationStore(t)
 	defer store.Close()
@@ -4568,6 +4641,15 @@ func containsPostgresAuditAction(events []domain.AuditEvent, action string) bool
 func containsPostgresAuditChainAnchor(anchors []domain.AuditChainAnchor, id string, toSequence int64) bool {
 	for _, anchor := range anchors {
 		if anchor.ID == id && anchor.ToSequence == toSequence {
+			return true
+		}
+	}
+	return false
+}
+
+func containsPostgresAuditChainFailureKind(failures []domain.AuditChainFailure, kind, auditEventID string) bool {
+	for _, failure := range failures {
+		if failure.Kind == kind && (auditEventID == "" || failure.AuditEventID == auditEventID) {
 			return true
 		}
 	}
